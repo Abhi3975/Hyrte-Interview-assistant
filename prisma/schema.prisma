@@ -1,0 +1,696 @@
+// InterviewAI — Prisma schema
+// Modeled as a modular monolith with clean service boundaries so each
+// domain (auth, questions, interviews, evaluation, billing, proctoring)
+// can be extracted into its own service + database later without rewrites.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions", "fullTextSearchPostgres"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pgcrypto, pg_trgm]
+}
+
+// ─────────────────────────────────────────────────────────────
+// Identity & Access (Auth Service)
+// ─────────────────────────────────────────────────────────────
+
+enum Role {
+  CANDIDATE
+  RECRUITER
+  ORG_ADMIN
+  SUPER_ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
+  DELETED
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  plan      Plan     @default(FREE)
+  // Org-scoped feature flags & limits, stored as JSON for flexibility.
+  settings  Json     @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users              User[]
+  memberships        Membership[]
+  interviews         Interview[]
+  questions          Question[]
+  questionSets       QuestionSet[]
+  subscriptions      Subscription[]
+  auditLogs          AuditLog[]
+
+  @@index([slug])
+}
+
+model User {
+  id             String     @id @default(cuid())
+  email          String     @unique
+  passwordHash   String?
+  fullName       String
+  avatarUrl      String?
+  role           Role       @default(CANDIDATE)
+  status         UserStatus @default(ACTIVE)
+  emailVerified  Boolean    @default(false)
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  lastLoginAt    DateTime?
+
+  memberships       Membership[]
+  candidateProfile  CandidateProfile?
+  refreshTokens     RefreshToken[]
+  createdInterviews Interview[]        @relation("InterviewCreatedBy")
+  sessions          InterviewSession[]
+  submittedQuestions Question[]        @relation("QuestionSubmittedBy")
+  auditLogs         AuditLog[]
+
+  @@index([organizationId])
+  @@index([role])
+}
+
+// Many-to-many so a user can belong to multiple orgs with distinct roles.
+model Membership {
+  id             String   @id @default(cuid())
+  userId         String
+  organizationId String
+  role           Role     @default(RECRUITER)
+  createdAt      DateTime @default(now())
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  userAgent String?
+  ip        String?
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Candidate domain
+// ─────────────────────────────────────────────────────────────
+
+model CandidateProfile {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  headline      String?
+  resumeUrl     String?
+  resumeText    String?  // extracted text for AI context & search
+  skills        String[] // selected + parsed skills
+  yearsOfExp    Int?
+  location      String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ─────────────────────────────────────────────────────────────
+// Question domain (Question Service + Aggregator)
+// ─────────────────────────────────────────────────────────────
+
+enum Category {
+  DSA
+  FRONTEND
+  BACKEND
+  FULLSTACK
+  SQL
+  DATABASE
+  DEVOPS
+  AI_ML
+  DATA_ANALYTICS
+  PRODUCT_MANAGEMENT
+  MBA
+  HR
+  FINANCE
+  SYSTEM_DESIGN
+}
+
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+  EXPERT
+}
+
+enum QuestionType {
+  CODING       // DSA / algorithmic with test cases
+  MCQ
+  SHORT_ANSWER
+  LONG_ANSWER
+  SYSTEM_DESIGN
+  BEHAVIORAL
+  CASE_STUDY   // MBA / PM
+}
+
+// Source provenance — critical for the "legally compliant sources" policy.
+enum QuestionSource {
+  INTERNAL          // proprietary, org-created
+  USER_SUBMITTED    // submitted by a user, subject to moderation
+  AI_GENERATED      // dynamically generated
+  HUGGINGFACE
+  KAGGLE
+  GITHUB_PERMISSIVE
+  PUBLIC_DOMAIN
+}
+
+// Only permissive / open licenses are accepted by the aggregator.
+enum LicenseType {
+  MIT
+  APACHE_2_0
+  BSD_2_CLAUSE
+  BSD_3_CLAUSE
+  CC_BY_4_0
+  CC0_PUBLIC_DOMAIN
+  PROPRIETARY_OWNED   // org owns it
+  USER_GRANTED        // submitter granted us a license
+  AI_GENERATED        // no third-party rights
+}
+
+enum ModerationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  AUTO_APPROVED
+}
+
+model Question {
+  id             String         @id @default(cuid())
+  // Stable public identifier, e.g. "DSA-TREES-000123"
+  publicId       String         @unique
+  title          String
+  prompt         String
+  category       Category
+  topic          String
+  difficulty     Difficulty
+  type           QuestionType
+  tags           String[]
+  companyTags    String[]       // e.g. ["fintech","faang-style"] — descriptive, not scraped
+  // Expected answer / reference solution (never shown to candidates).
+  expectedAnswer String?
+  // Structured rubric used by the Evaluation Engine.
+  rubric         Json           @default("[]")
+  // Structured, ordered follow-up questions the interviewer may ask.
+  followUps      String[]
+  // Coding questions: hidden + sample test cases live in TestCase[].
+  metadata       Json           @default("{}")
+
+  // ── Provenance & licensing ──
+  source         QuestionSource
+  license        License?       @relation(fields: [licenseId], references: [id])
+  licenseId      String?
+  // Deduplication fingerprint (normalized prompt hash).
+  contentHash    String
+  moderation     ModerationStatus @default(PENDING)
+
+  // Ownership
+  organizationId String?
+  organization   Organization?  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  submittedById  String?
+  submittedBy    User?          @relation("QuestionSubmittedBy", fields: [submittedById], references: [id], onDelete: SetNull)
+  // If this row is an AI-generated variation of another question.
+  parentId       String?
+  parent         Question?      @relation("QuestionVariations", fields: [parentId], references: [id], onDelete: SetNull)
+  variations     Question[]     @relation("QuestionVariations")
+
+  isActive       Boolean        @default(true)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  testCases         TestCase[]
+  questionSets      QuestionSetItem[]
+  interviewItems    InterviewQuestion[]
+  codingSubmissions CodingSubmission[]
+
+  @@index([category, difficulty])
+  @@index([topic])
+  @@index([contentHash])
+  @@index([organizationId])
+  @@index([source, moderation])
+}
+
+// Normalized license record with attribution for CC-BY compliance.
+model License {
+  id           String      @id @default(cuid())
+  type         LicenseType
+  sourceName   String      // e.g. "HuggingFace: openai/humaneval"
+  sourceUrl    String?
+  attribution  String?     // required text for CC-BY
+  requiresAttribution Boolean @default(false)
+  createdAt    DateTime    @default(now())
+
+  questions Question[]
+
+  @@index([type])
+}
+
+model TestCase {
+  id         String  @id @default(cuid())
+  questionId String
+  input      String
+  output     String
+  isHidden   Boolean @default(true)
+  weight     Int     @default(1)
+  ordinal    Int     @default(0)
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@index([questionId])
+}
+
+// A curated bank (internal, company-specific, or role-specific).
+model QuestionSet {
+  id             String   @id @default(cuid())
+  name           String
+  description    String?
+  category       Category
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  isPublic       Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  items      QuestionSetItem[]
+  interviews Interview[]
+
+  @@index([organizationId])
+  @@index([category])
+}
+
+model QuestionSetItem {
+  id            String @id @default(cuid())
+  questionSetId String
+  questionId    String
+  ordinal       Int    @default(0)
+
+  questionSet QuestionSet @relation(fields: [questionSetId], references: [id], onDelete: Cascade)
+  question    Question    @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([questionSetId, questionId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Interview domain (Interview Service)
+// ─────────────────────────────────────────────────────────────
+
+enum InterviewMode {
+  VOICE
+  VIDEO
+  CODING
+  TEXT
+  MIXED
+}
+
+enum InterviewStatus {
+  DRAFT
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  EXPIRED
+}
+
+model Interview {
+  id             String        @id @default(cuid())
+  organizationId String
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  title          String
+  jobRole        String
+  category       Category
+  difficulty     Difficulty    @default(MEDIUM)
+  mode           InterviewMode @default(MIXED)
+  status         InterviewStatus @default(DRAFT)
+  durationMins   Int           @default(45)
+  questionSetId  String?
+  questionSet    QuestionSet?  @relation(fields: [questionSetId], references: [id], onDelete: SetNull)
+  // Config: number of questions, proctoring on/off, allowed tab switches, etc.
+  config         Json          @default("{}")
+  createdById    String
+  createdBy      User          @relation("InterviewCreatedBy", fields: [createdById], references: [id])
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  questions InterviewQuestion[]
+  sessions  InterviewSession[]
+
+  @@index([organizationId, status])
+  @@index([category])
+}
+
+model InterviewQuestion {
+  id          String @id @default(cuid())
+  interviewId String
+  questionId  String
+  ordinal     Int    @default(0)
+
+  interview Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  question  Question  @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  answers Answer[]
+
+  @@unique([interviewId, questionId])
+}
+
+// Exam lifecycle — admin-gated start + auto-termination (Exam Security Policy).
+enum ExamState {
+  SCHEDULED
+  WAITING_APPROVAL   // candidate cannot self-start; admin must unlock
+  ACTIVE
+  WARNING_ISSUED
+  SUSPENDED
+  TERMINATED
+  COMPLETED
+}
+
+// A single candidate's attempt at an interview.
+model InterviewSession {
+  id            String          @id @default(cuid())
+  interviewId   String
+  interview     Interview       @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  candidateId   String
+  candidate     User            @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  status        InterviewStatus @default(SCHEDULED)
+
+  // ── Exam security & lifecycle ──
+  examState        ExamState @default(SCHEDULED)
+  // One-time secure session: only the SHA-256 hash of the admin-issued token
+  // is stored. The token is single-use and time-boxed.
+  sessionTokenHash String?   @unique
+  tokenExpiresAt   DateTime?
+  approvedById     String?   // admin/recruiter who unlocked the assessment
+  approvedAt       DateTime?
+  identityVerified Boolean   @default(false)
+  warningCount     Int       @default(0)
+  disqualified     Boolean   @default(false)
+  terminatedReason String?
+  lockedAt         DateTime? // once locked the candidate cannot rejoin
+
+  startedAt     DateTime?
+  completedAt   DateTime?
+  recordingUrl  String?     // S3 key for full session replay
+  transcript    Json?
+  // Live risk snapshot maintained by the risk engine (0-100 + probability).
+  riskScore     Float       @default(0)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  answers           Answer[]
+  evaluation        Evaluation?
+  proctorEvents     ProctorEvent[]
+  warnings          Warning[]
+  riskAssessment    RiskAssessment?
+  codingSubmissions CodingSubmission[]
+
+  @@index([interviewId])
+  @@index([candidateId, status])
+  @@index([examState])
+}
+
+// Immutable warning/violation record. MAX_WARNINGS = 3 → auto-termination.
+// Rows are never updated or deleted (append-only) to preserve the audit trail.
+model Warning {
+  id            String           @id @default(cuid())
+  sessionId     String
+  session       InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  level         Int              // 1, 2, or 3
+  triggerType   ProctorEventType
+  // Evidence pointers (S3 keys) — screenshot + webcam snapshot.
+  screenshotUrl String?
+  webcamUrl     String?
+  riskScoreAt   Float            @default(0)
+  metadata      Json             @default("{}")
+  createdAt     DateTime         @default(now())
+
+  @@index([sessionId, level])
+}
+
+// Rolling AI + heuristic risk assessment for a session (evidence, not verdict).
+model RiskAssessment {
+  id                 String   @id @default(cuid())
+  sessionId          String   @unique
+  session            InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  riskScore          Float    @default(0)  // 0-100
+  cheatingProbability Float   @default(0)  // 0-1
+  confidenceScore    Float    @default(0)  // 0-1 model confidence in the assessment
+  // Weighted contribution per signal category, for explainability.
+  breakdown          Json     @default("{}")
+  topSignals         String[]
+  updatedAt          DateTime @updatedAt
+  createdAt          DateTime @default(now())
+}
+
+model Answer {
+  id                 String   @id @default(cuid())
+  sessionId          String
+  session            InterviewSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  interviewQuestionId String
+  interviewQuestion  InterviewQuestion @relation(fields: [interviewQuestionId], references: [id], onDelete: Cascade)
+  // Free-text / transcribed answer, or code for coding rounds.
+  responseText       String?
+  code               String?
+  language           String?
+  // Code execution result for coding rounds.
+  execResult         Json?
+  // Per-answer AI score (0-100) + rationale.
+  score              Float?
+  aiFeedback         Json?
+  timeSpentSec       Int?
+  createdAt          DateTime @default(now())
+
+  @@index([sessionId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Coding domain (DSA Assessment / Execution Engine)
+// ─────────────────────────────────────────────────────────────
+
+enum SubmissionStatus {
+  QUEUED
+  RUNNING
+  ACCEPTED
+  WRONG_ANSWER
+  COMPILE_ERROR
+  RUNTIME_ERROR
+  TIME_LIMIT_EXCEEDED
+  ERROR
+}
+
+model CodingSubmission {
+  id           String   @id @default(cuid())
+  sessionId    String
+  session      InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  questionId   String
+  question     Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  language     String
+  code         String
+  status       SubmissionStatus @default(QUEUED)
+  // Per-test-case results from the execution engine.
+  results      Json     @default("[]")
+  passed       Int      @default(0)
+  total        Int      @default(0)
+  runtimeMs    Int?
+  memoryKb     Int?
+  // Similarity fingerprint (token-shingle hash set) for plagiarism checks.
+  fingerprint  String?
+  // Highest similarity found against other submissions (0-1), if flagged.
+  similarity   Float?
+  createdAt    DateTime @default(now())
+
+  @@index([sessionId])
+  @@index([questionId])
+  @@index([fingerprint])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Evaluation domain (Evaluation Service / AI Engine)
+// ─────────────────────────────────────────────────────────────
+
+enum Recommendation {
+  STRONG_HIRE
+  HIRE
+  LEAN_HIRE
+  NO_HIRE
+  STRONG_NO_HIRE
+}
+
+model Evaluation {
+  id             String   @id @default(cuid())
+  sessionId      String   @unique
+  session        InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  overallScore   Float    // 0-100 aggregate
+  // Competency breakdown: communication, technical, confidence, problemSolving,
+  // leadership, behavioral — stored as a flexible scored map.
+  competencies   Json     @default("{}")
+  strengths      String[]
+  weaknesses     String[]
+  summary        String
+  recommendation Recommendation
+  // Which model(s) produced this, for auditability & A/B.
+  modelMeta      Json     @default("{}")
+  createdAt      DateTime @default(now())
+
+  @@index([recommendation])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Proctoring / Anti-cheat (integratable by an external proctor app)
+// ─────────────────────────────────────────────────────────────
+
+enum ProctorEventType {
+  // ── Identity ──
+  IDENTITY_VERIFIED
+  IDENTITY_MISMATCH
+  LIVENESS_FAIL
+  SPOOF_SUSPECTED
+  DEEPFAKE_SUSPECTED
+  // ── Vision / face ──
+  FACE_NOT_DETECTED
+  MULTIPLE_FACES
+  FACE_COVERED
+  LOOKING_AWAY
+  LOOKING_DOWN
+  LOOKING_SIDEWAYS
+  GAZE_OFF_SCREEN
+  SUSPICIOUS_BEHAVIOR
+  // ── Object detection ──
+  OBJECT_PHONE
+  OBJECT_SECONDARY_LAPTOP
+  OBJECT_BOOK_NOTES
+  OBJECT_HEADPHONES
+  OBJECT_ADDITIONAL_MONITOR
+  // ── Audio ──
+  AUDIO_ADDITIONAL_VOICE
+  AUDIO_WHISPERING
+  AUDIO_EXTERNAL_CONVERSATION
+  AUDIO_AI_ASSISTANCE
+  AUDIO_ANOMALY
+  // ── Screen / focus ──
+  TAB_SWITCH
+  WINDOW_BLUR
+  WINDOW_CHANGE
+  FOCUS_LOSS
+  FULLSCREEN_EXIT
+  SCREEN_SHARING
+  SCREEN_RECORDING_TOOL
+  // ── Desktop agent (Electron) ──
+  SUSPICIOUS_PROCESS
+  SUSPICIOUS_EXTENSION
+  OVERLAY_APP
+  REMOTE_ACCESS_TOOL
+  CLIPBOARD_USAGE
+  SCREEN_CAPTURE_ATTEMPT
+  DEVICE_CHANGE
+  // ── AI cheating heuristics ──
+  RAPID_ANSWER
+  AI_LIKE_RESPONSE
+  COPY_PASTE
+  UNNATURAL_TYPING
+  EXTERNAL_ASSISTANCE
+  PLAGIARISM_FLAG
+}
+
+enum ProctorSeverity {
+  INFO
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+model ProctorEvent {
+  id         String   @id @default(cuid())
+  sessionId  String
+  session    InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  type       ProctorEventType
+  severity   ProctorSeverity  @default(LOW)
+  // Raw payload from the client SDK or external proctor provider.
+  payload    Json     @default("{}")
+  // Optional evidence pointer (S3 key: snapshot/clip).
+  evidenceUrl String?
+  // Which system produced it: "internal" | "<external-proctor-name>".
+  provider   String   @default("internal")
+  occurredAt DateTime @default(now())
+
+  @@index([sessionId, type])
+  @@index([severity])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Billing (Billing Service)
+// ─────────────────────────────────────────────────────────────
+
+enum Plan {
+  FREE
+  STARTUP
+  GROWTH
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+}
+
+model Subscription {
+  id                 String   @id @default(cuid())
+  organizationId     String
+  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan               Plan
+  status             SubscriptionStatus @default(TRIALING)
+  stripeCustomerId   String?
+  stripeSubId        String?
+  seats              Int      @default(1)
+  currentPeriodEnd   DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([organizationId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Audit logs (Security / compliance)
+// ─────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id             String   @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  actorId        String?
+  actor          User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  action         String   // e.g. "interview.create", "question.approve"
+  targetType     String?
+  targetId       String?
+  ip             String?
+  userAgent      String?
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([action])
+}
