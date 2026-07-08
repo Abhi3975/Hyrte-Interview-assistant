@@ -1,0 +1,11 @@
+# Local override: remap host ports so InterviewAI doesn't collide with other
+# stacks already running on the default 5432/6379/9000 ports. The `!override`
+# tag REPLACES the base port list (otherwise Compose appends and re-binds the
+# conflicting default). Container-internal ports are unchanged.
+services:
+  postgres:
+    ports: !override ['5433:5432']
+  redis:
+    ports: !override ['6380:6379']
+  minio:
+    ports: !override ['9002:9000', '9003:9001']
