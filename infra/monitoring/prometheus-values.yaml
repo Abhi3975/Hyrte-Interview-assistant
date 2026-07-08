@@ -1,0 +1,43 @@
+# kube-prometheus-stack Helm values (Prometheus + Grafana + Alertmanager).
+# Install: helm install monitoring prometheus-community/kube-prometheus-stack \
+#            -n monitoring --create-namespace -f prometheus-values.yaml
+grafana:
+  adminPassword: REPLACE_ME
+  defaultDashboardsEnabled: true
+
+prometheus:
+  prometheusSpec:
+    retention: 15d
+    serviceMonitorSelectorNilUsesHelmValues: false
+    # Scrape the API's /metrics endpoint (expose via @nestjs/prometheus).
+    additionalScrapeConfigs:
+      - job_name: interviewai-api
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces: { names: [interviewai] }
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            action: keep
+            regex: api
+
+# Alerting rules for the SLOs that matter at scale.
+additionalPrometheusRulesMap:
+  interviewai-slos:
+    groups:
+      - name: interviewai
+        rules:
+          - alert: HighApiErrorRate
+            expr: sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m])) > 0.02
+            for: 5m
+            labels: { severity: page }
+            annotations: { summary: 'API 5xx error rate > 2%' }
+          - alert: ApiLatencyP95High
+            expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 1.5
+            for: 10m
+            labels: { severity: warning }
+            annotations: { summary: 'API p95 latency > 1.5s' }
+          - alert: ProctorIngestBacklog
+            expr: kafka_consumergroup_lag{group="proctoring"} > 10000
+            for: 5m
+            labels: { severity: warning }
+            annotations: { summary: 'Proctoring event backlog growing' }

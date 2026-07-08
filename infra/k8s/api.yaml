@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: interviewai
+  labels: { app: api }
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: api }
+  template:
+    metadata:
+      labels: { app: api }
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/interviewai/api:latest
+          ports: [{ containerPort: 4000 }]
+          envFrom:
+            - configMapRef: { name: interviewai-config }
+            - secretRef: { name: interviewai-secrets }
+          resources:
+            requests: { cpu: '250m', memory: '384Mi' }
+            limits: { cpu: '1', memory: '768Mi' }
+          readinessProbe:
+            httpGet: { path: /ready, port: 4000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 4000 }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+      # Spread pods across AZs for HA.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app: api }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: interviewai
+spec:
+  selector: { app: api }
+  ports: [{ port: 80, targetPort: 4000 }]
+---
+# Horizontal Pod Autoscaler — scales on CPU toward the 100k-user target.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api
+  namespace: interviewai
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api
+  minReplicas: 3
+  maxReplicas: 60
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 65 }
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 300
+---
+# Ensure availability during voluntary disruptions (node drains, deploys).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api
+  namespace: interviewai
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: { app: api }

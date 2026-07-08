@@ -1,0 +1,26 @@
+# ALB ingress (AWS Load Balancer Controller). CloudFront sits in front for the
+# CDN/edge caching layer; TLS terminates at ACM on the ALB.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: interviewai
+  namespace: interviewai
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/certificate-arn: 'arn:aws:acm:REGION:ACCOUNT:certificate/REPLACE'
+    # Sticky sessions help WebSocket voice/proctoring connections.
+    alb.ingress.kubernetes.io/target-group-attributes: stickiness.enabled=true,stickiness.lb_cookie.duration_seconds=3600
+spec:
+  rules:
+    - host: app.interviewai.example.com
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend: { service: { name: api, port: { number: 80 } } }
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: web, port: { number: 80 } } }
