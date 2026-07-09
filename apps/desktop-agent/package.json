@@ -1,0 +1,30 @@
+{
+  "name": "@interviewai/desktop-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "InterviewAI Zero-Trust desktop proctoring agent (Electron)",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json && electron dist/main.js",
+    "start": "electron dist/main.js",
+    "dist": "npm run build && electron-builder"
+  },
+  "dependencies": {
+    "electron-store": "^10.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.7.2"
+  },
+  "build": {
+    "appId": "co.interviewai.agent",
+    "productName": "InterviewAI Agent",
+    "files": ["dist/**/*", "renderer/**/*"],
+    "mac": { "category": "public.app-category.education" },
+    "win": { "target": "nsis" },
+    "linux": { "target": "AppImage" }
+  }
+}
