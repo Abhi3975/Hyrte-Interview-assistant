@@ -1,0 +1,246 @@
+import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import type Redis from 'ioredis';
+import { Interview, InterviewSession, ProctorSeverity } from '@prisma/client';
+
+// A session with its parent interview eagerly loaded (used by the warning /
+// termination paths so we can resolve the owning organization).
+type SessionWithInterview = InterviewSession & { interview: Interview | null };
+import { PrismaService } from '../prisma/prisma.service';
+import { AuditService } from '../common/audit/audit.service';
+import { NotificationService } from '../notifications/notification.service';
+import { REDIS } from '../redis/redis.module';
+import { RiskEngine, RiskResult } from './risk-engine.service';
+import { WARNING_THRESHOLDS, MAX_WARNINGS } from './risk-weights';
+import { IngestEventDto } from './dto/proctoring.dto';
+
+/**
+ * Proctoring Service — the orchestration layer of the Zero-Trust engine.
+ *
+ * On every ingested signal it:
+ *   1. persists the raw event (immutable evidence),
+ *   2. recomputes the weighted, time-decayed risk score,
+ *   3. escalates warnings only when risk crosses configured thresholds,
+ *   4. auto-terminates at MAX_WARNINGS — locking the session and alerting staff.
+ *
+ * It NEVER accuses: it produces risk scores and evidence. Human reviewers make
+ * the final call, and admins can reset/override.
+ */
+@Injectable()
+export class ProctoringService {
+  private readonly logger = new Logger(ProctoringService.name);
+  // Look back this far when computing risk (older events have decayed anyway).
+  private readonly WINDOW_SEC = 1800;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly riskEngine: RiskEngine,
+    private readonly audit: AuditService,
+    private readonly notifications: NotificationService,
+    @Inject(REDIS) private readonly redis: Redis,
+  ) {}
+
+  async ingest(dto: IngestEventDto): Promise<{ risk: RiskResult; warningLevel: number; terminated: boolean }> {
+    const session = await this.prisma.interviewSession.findUnique({
+      where: { id: dto.sessionId },
+      include: { interview: true },
+    });
+    if (!session) throw new NotFoundException('Session not found');
+
+    // 1) Persist the raw event as immutable evidence.
+    await this.prisma.proctorEvent.create({
+      data: {
+        sessionId: dto.sessionId,
+        type: dto.type,
+        severity: dto.severity ?? ProctorSeverity.LOW,
+        payload: (dto.payload ?? {}) as object,
+        evidenceUrl: dto.evidenceUrl,
+        provider: dto.provider ?? 'internal',
+      },
+    });
+
+    // 2) Recompute risk over the recent window.
+    const since = new Date(Date.now() - this.WINDOW_SEC * 1000);
+    const events = await this.prisma.proctorEvent.findMany({
+      where: { sessionId: dto.sessionId, occurredAt: { gte: since } },
+      orderBy: { occurredAt: 'desc' },
+      take: 500,
+    });
+    const risk = this.riskEngine.compute(events);
+
+    await this.prisma.riskAssessment.upsert({
+      where: { sessionId: dto.sessionId },
+      create: {
+        sessionId: dto.sessionId,
+        riskScore: risk.riskScore,
+        cheatingProbability: risk.cheatingProbability,
+        confidenceScore: risk.confidenceScore,
+        breakdown: risk.breakdown,
+        topSignals: risk.topSignals,
+      },
+      update: {
+        riskScore: risk.riskScore,
+        cheatingProbability: risk.cheatingProbability,
+        confidenceScore: risk.confidenceScore,
+        breakdown: risk.breakdown,
+        topSignals: risk.topSignals,
+      },
+    });
+    await this.prisma.interviewSession.update({
+      where: { id: dto.sessionId },
+      data: { riskScore: risk.riskScore },
+    });
+
+    // Publish live risk to the proctoring dashboard (Redis pub/sub fan-out).
+    await this.redis
+      .publish(`proctoring:${dto.sessionId}`, JSON.stringify({ type: 'risk', ...risk, event: dto.type }))
+      .catch(() => undefined);
+
+    // 3) Escalate warnings based on weighted risk, not raw event count.
+    const targetLevel = this.warningLevelForRisk(risk.riskScore);
+    let terminated = false;
+    let warningLevel = session.warningCount;
+
+    if (targetLevel > session.warningCount) {
+      warningLevel = await this.issueWarning(session, targetLevel, dto, risk);
+      terminated = warningLevel >= MAX_WARNINGS;
+      if (terminated) await this.terminate(session, risk, dto.type);
+    }
+
+    return { risk, warningLevel, terminated };
+  }
+
+  /** Map a risk score to the highest crossed warning threshold. */
+  private warningLevelForRisk(risk: number): number {
+    let level = 0;
+    WARNING_THRESHOLDS.forEach((t, i) => {
+      if (risk >= t) level = i + 1;
+    });
+    return level;
+  }
+
+  private async issueWarning(
+    session: SessionWithInterview,
+    level: number,
+    dto: IngestEventDto,
+    risk: RiskResult,
+  ): Promise<number> {
+    // Persist immutable warning with evidence pointers.
+    await this.prisma.warning.create({
+      data: {
+        sessionId: session.id,
+        level,
+        triggerType: dto.type,
+        screenshotUrl: (dto.payload?.screenshotUrl as string) ?? undefined,
+        webcamUrl: dto.evidenceUrl,
+        riskScoreAt: risk.riskScore,
+        metadata: { topSignals: risk.topSignals, breakdown: risk.breakdown },
+      },
+    });
+
+    await this.prisma.interviewSession.update({
+      where: { id: session.id },
+      data: {
+        warningCount: level,
+        examState: level >= MAX_WARNINGS ? 'TERMINATED' : 'WARNING_ISSUED',
+      },
+    });
+
+    await this.audit.record({
+      organizationId: session.interview?.organizationId,
+      action: `proctoring.warning.level_${level}`,
+      targetType: 'InterviewSession',
+      targetId: session.id,
+      metadata: { trigger: dto.type, risk: risk.riskScore },
+    });
+
+    // Notify candidate (popup) for L1/L2; recruiter is looped in from L2.
+    await this.redis
+      .publish(
+        `proctoring:${session.id}`,
+        JSON.stringify({ type: 'warning', level, message: this.warningMessage(level) }),
+      )
+      .catch(() => undefined);
+
+    if (level >= 2 && session.interview?.organizationId) {
+      await this.notifications.alertOrgStaff(session.interview.organizationId, {
+        type: 'proctoring.warning',
+        title: `Warning L${level} issued`,
+        body: `Session ${session.id} crossed risk ${risk.riskScore} (${dto.type}).`,
+        data: { sessionId: session.id, level, risk: risk.riskScore },
+      });
+    }
+
+    return level;
+  }
+
+  /** Auto-termination: lock session, disqualify, alert staff, generate report. */
+  private async terminate(session: SessionWithInterview, risk: RiskResult, trigger: string): Promise<void> {
+    await this.prisma.interviewSession.update({
+      where: { id: session.id },
+      data: {
+        examState: 'TERMINATED',
+        status: 'CANCELLED',
+        disqualified: true,
+        lockedAt: new Date(),
+        terminatedReason: `Auto-terminated at risk ${risk.riskScore} (${trigger})`,
+        completedAt: new Date(),
+      },
+    });
+
+    await this.audit.record({
+      organizationId: session.interview?.organizationId,
+      action: 'proctoring.auto_terminate',
+      targetType: 'InterviewSession',
+      targetId: session.id,
+      metadata: { risk: risk.riskScore, trigger, topSignals: risk.topSignals },
+    });
+
+    await this.redis
+      .publish(`proctoring:${session.id}`, JSON.stringify({ type: 'terminated', reason: trigger }))
+      .catch(() => undefined);
+
+    if (session.interview?.organizationId) {
+      await this.notifications.alertOrgStaff(session.interview.organizationId, {
+        type: 'proctoring.terminated',
+        title: 'Assessment auto-terminated',
+        body: `Session ${session.id} was terminated after ${MAX_WARNINGS} warnings (risk ${risk.riskScore}).`,
+        data: { sessionId: session.id, risk: risk.riskScore },
+      });
+    }
+    this.logger.warn(`Session ${session.id} auto-terminated (risk ${risk.riskScore}, trigger ${trigger})`);
+  }
+
+  private warningMessage(level: number): string {
+    if (level === 1) return 'We noticed unusual activity. Please stay focused on the screen.';
+    if (level === 2) return 'Final warning: further violations will end your assessment.';
+    return 'Your assessment has been terminated due to repeated violations.';
+  }
+
+  // ── Dashboard reads ──
+
+  async sessionTimeline(sessionId: string) {
+    const [events, warnings, risk] = await Promise.all([
+      this.prisma.reader.proctorEvent.findMany({
+        where: { sessionId },
+        orderBy: { occurredAt: 'asc' },
+      }),
+      this.prisma.reader.warning.findMany({ where: { sessionId }, orderBy: { createdAt: 'asc' } }),
+      this.prisma.reader.riskAssessment.findUnique({ where: { sessionId } }),
+    ]);
+    return { events, warnings, risk };
+  }
+
+  async liveSessions(organizationId: string) {
+    return this.prisma.reader.interviewSession.findMany({
+      where: {
+        examState: { in: ['ACTIVE', 'WARNING_ISSUED'] },
+        interview: { organizationId },
+      },
+      orderBy: { riskScore: 'desc' },
+      include: {
+        candidate: { select: { id: true, fullName: true } },
+        interview: { select: { title: true, jobRole: true } },
+      },
+    });
+  }
+}
