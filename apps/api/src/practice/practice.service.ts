@@ -6,6 +6,48 @@ import { EvaluationService } from '../evaluation/evaluation.service';
 import { AIService } from '../ai/ai.service';
 import { PistonClient } from './piston.client';
 
+/** Persona + protocol for the conversational AI interviewer. */
+const INTERVIEWER_SYSTEM = `# ROLE
+You are Interview Intelligence — an AI-native decision-intelligence system for technical interviews, not a chatbot. You behave like a Senior Staff Engineer interviewing candidates at Google, Microsoft, Amazon, Stripe, Uber and top startups. Personality: calm, friendly, curious, professional, human, honest, supportive, detail-oriented. Never sound robotic; always sound like an experienced interviewer.
+
+# CORE PHILOSOPHY
+Don't merely conduct interviews — build interview intelligence. Every answer is evidence, every mistake is insight, every improvement updates the candidate profile. Decisions are evidence-based: never judge on one answer, judge on accumulated signals across the whole conversation.
+
+# MEMORY (use the full transcript)
+Continuously track: candidate name, intro, experience, projects, strengths, weaknesses, communication, confidence, problem solving, optimization, coding style, debugging, conceptual knowledge, behavior, time management, topics already asked, topics they struggle with, topics mastered, current difficulty, hints given, repeated mistakes, and improvement after hints. Never forget previous answers; adapt later questions accordingly.
+
+# FLOW
+Begin naturally: greet by name, welcome them, explain you'll work through the configured number of questions together, that your goal is to understand how they think/solve/communicate/improve (not just test), that you'll ask one at a time, give hints only when needed, and end with a detailed report. Then ask how they're feeling and to briefly introduce themselves. WAIT for their reply.
+After their intro: acknowledge it warmly, then explain today's focus for this stream and list the key sub-topics you'll cover.
+
+# QUESTION ENGINE
+Ask ONE question at a time — never dump. Each question carries real-world context, the reasoning you expect, its difficulty, and the skills it evaluates. Ask them to explain their thinking before coding.
+
+# REASONING & LIVE CODE REVIEW
+Evaluate far more than code: understanding, communication, tradeoffs, optimization, confidence, edge cases, debugging, clean code, scalability, decision-making, pattern recognition. As they code, observe — don't interrupt immediately. When they finish, review line-by-line: good/bad practices, naming, structure, readability, logic, complexity, potential bugs, hidden edge cases, production & security concerns, scalability.
+
+# PROGRESSIVE HELP
+Never reveal the solution immediately. Help gradually: L1 small clue → L2 concept reminder → L3 approach → L4 pseudo code → L5 complete explanation. If they ask you to "explain the question", clarify in plain terms with a small example and an L1 clue — do NOT hand them the answer.
+
+# AFTER EVERY ANSWER
+Give: correctness, complexity, edge cases, alternative approaches, optimized version, industry best practices, interviewer's feedback, a score, and topics to revise. When you present any code, explain why this approach/algorithm/data-structure, why each loop/condition exists, time & space complexity, tradeoffs and improvements — as if mentoring a junior engineer.
+
+# FOLLOW-UPS & ADAPTIVE DIFFICULTY
+Ask real follow-ups ("Can this be optimized?", "Why a HashMap?", "What if input is 100M?", "What if the array is empty?", "Would this work in production?"). Start Medium; raise difficulty when they do well, reduce when they struggle — never randomly.
+
+# COMMUNICATION
+Natural conversation, never robotic. Encourage, challenge and teach. Keep spoken replies reasonably concise (they're read aloud). Your goal is not to finish the interview — it's to make the candidate meaningfully better by the end, while producing an accurate evidence-based evaluation.`;
+
+/** Interviewer personalities — each shifts tone, pressure and feedback style. */
+const PERSONALITIES: Record<string, string> = {
+  friendly: 'PERSONALITY: Warm, encouraging and patient. Use positive reinforcement and keep the candidate at ease.',
+  professional: 'PERSONALITY: Neutral, precise and corporate. Polite and structured, minimal small talk.',
+  strict: 'PERSONALITY: Rigorous and demanding. Push hard on rigor, edge cases and complexity; concise, high standards (never rude).',
+  faang: 'PERSONALITY: FAANG bar-raiser. Emphasise scalability, optimality and clean reasoning; expect strong fundamentals and probe tradeoffs.',
+  startup: 'PERSONALITY: Fast-moving startup engineer. Value pragmatism, shipping and real-world tradeoffs over textbook purity.',
+  pressure: 'PERSONALITY: High-pressure interviewer. Add time pressure and rapid-fire follow-ups while staying professional.',
+};
+
 /** Maps a browser proctoring flag to a stored ProctorEvent type + severity. */
 const FLAG_MAP: Record<string, { type: ProctorEventType; severity: ProctorSeverity }> = {
   tabSwitch: { type: ProctorEventType.TAB_SWITCH, severity: ProctorSeverity.MEDIUM },
@@ -46,6 +88,62 @@ export class PracticeService {
    * samples and hidden cases; the whole set is returned so the stateless
    * `runCoding` can grade without a DB round-trip.
    */
+  /**
+   * Drives the conversational AI interviewer. Given the running transcript, it
+   * returns the interviewer's next spoken message — greeting + intro, one
+   * question at a time with context, progressive hints, code review, and a
+   * final report when ending.
+   */
+  async interviewTurn(input: {
+    jobRole: string;
+    category: string;
+    difficulty: string;
+    topic?: string;
+    count?: number;
+    candidateName?: string;
+    personality?: string;
+    behaviorSummary?: string;
+    transcript: { role: 'interviewer' | 'candidate'; content: string }[];
+    end?: boolean;
+  }): Promise<{ text: string }> {
+    const persona = PERSONALITIES[input.personality ?? 'professional'] ?? PERSONALITIES.professional;
+    const ctx =
+      `INTERVIEW CONFIG\n` +
+      `- Candidate: ${input.candidateName || 'the candidate'}\n` +
+      `- Stream/role: ${input.jobRole} (${input.category})\n` +
+      `- Topic focus: ${input.topic ?? input.category}\n` +
+      `- Difficulty: ${input.difficulty}\n` +
+      `- Total questions: ${input.count ?? 5}`;
+    const directive = input.end
+      ? [
+          'The interview is now ENDING. Using ALL accumulated evidence from the transcript, produce the COMPLETE final interview report with clear headings:',
+          'Overall Score; Technical Score; sub-scores for Communication, Coding, Optimization, Debugging, Problem Solving, Domain Knowledge (JS/DSA/System Design as relevant), Confidence; Interview Readiness;',
+          'Strongest Areas; Weakest Areas; Repeated Mistakes; Conceptual Gaps; Topics to Revise; Estimated Experience Level;',
+          'Hiring Recommendation (Hire / Lean Hire / No Hire) and EXPLAIN WHY with evidence from the interview.',
+          'Then a personalized Learning Roadmap: a 7-Day plan, a 30-Day plan, a 90-Day plan, plus recommended resources, practice questions, projects and interview tips.',
+        ].join(' ')
+      : 'Continue the interview naturally. Reply with ONLY your next spoken message as the interviewer — no stage directions. Keep it conversational and reasonably brief (it is read aloud by TTS), EXCEPT when giving structured code review/feedback which can be longer. Ask ONE thing at a time and wait.';
+
+    const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
+      { role: 'system', content: `${INTERVIEWER_SYSTEM}\n\n${persona}\n\n${ctx}\n\n${directive}` },
+    ];
+    if (input.transcript.length === 0) {
+      messages.push({ role: 'user', content: '(The candidate has just joined the interview. Greet them warmly, explain how it works, and ask them how they are and to briefly introduce themselves.)' });
+    } else {
+      for (const t of input.transcript) {
+        messages.push({ role: t.role === 'candidate' ? 'user' : 'assistant', content: t.content });
+      }
+      if (input.end) {
+        const behavior = input.behaviorSummary
+          ? ` Observed behavior signals (factor these into Communication, Confidence, Behavior Profile and the overall recommendation): ${input.behaviorSummary}`
+          : '';
+        messages.push({ role: 'user', content: `(Please end the interview and give my full report now.${behavior})` });
+      }
+    }
+    const res = await this.ai.complete(messages, { temperature: 0.6, maxTokens: input.end ? 2200 : 600 });
+    return { text: res.text.trim() };
+  }
+
   async generateCoding(topic: string, difficulty: Difficulty, kind: 'code' | 'sql' = 'code') {
     const system =
       kind === 'sql'
@@ -245,6 +343,7 @@ export class PracticeService {
       answers: { prompt: string; response: string }[];
       flags?: Record<string, number>;
       integrity?: number;
+      behavior?: Record<string, unknown>;
     },
   ) {
     const session = await this.prisma.interviewSession.findUnique({
@@ -282,7 +381,7 @@ export class PracticeService {
           examState: 'COMPLETED',
           completedAt: new Date(),
           riskScore: 100 - integrity,
-          transcript: { answers: input.answers, flags: input.flags ?? {}, integrity } as Prisma.InputJsonValue,
+          transcript: { answers: input.answers, flags: input.flags ?? {}, integrity, behavior: input.behavior ?? {} } as Prisma.InputJsonValue,
         },
       });
       await tx.evaluation.upsert({

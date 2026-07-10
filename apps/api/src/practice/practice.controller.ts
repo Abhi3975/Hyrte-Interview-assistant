@@ -40,12 +40,31 @@ class CompleteSessionDto {
   @IsArray() answers!: AnswerDto[];
   @IsOptional() @IsObject() flags?: Record<string, number>;
   @IsOptional() @IsNumber() integrity?: number;
+  @IsOptional() @IsObject() behavior?: Record<string, unknown>;
 }
 
 class GenerateCodingDto {
   @IsString() topic!: string;
   @IsEnum(Difficulty) difficulty!: Difficulty;
   @IsOptional() @IsIn(['code', 'sql']) kind?: 'code' | 'sql';
+}
+
+class TurnMsgDto {
+  @IsIn(['interviewer', 'candidate']) role!: 'interviewer' | 'candidate';
+  @IsString() content!: string;
+}
+
+class InterviewTurnDto {
+  @IsString() jobRole!: string;
+  @IsString() category!: string;
+  @IsString() difficulty!: string;
+  @IsOptional() @IsString() topic?: string;
+  @IsOptional() @IsInt() count?: number;
+  @IsOptional() @IsString() candidateName?: string;
+  @IsOptional() @IsString() personality?: string;
+  @IsOptional() @IsString() behaviorSummary?: string;
+  @IsArray() transcript!: TurnMsgDto[];
+  @IsOptional() end?: boolean;
 }
 
 class TestCaseDto {
@@ -96,6 +115,13 @@ export class PracticeController {
     @Body() dto: CompleteSessionDto,
   ) {
     return this.practice.completeSession(user.id, id, dto);
+  }
+
+  /** Conversational AI interviewer — returns the interviewer's next message. */
+  @Post('interview/turn')
+  @Roles('CANDIDATE', 'RECRUITER', 'ORG_ADMIN')
+  interviewTurn(@Body() dto: InterviewTurnDto) {
+    return this.practice.interviewTurn(dto);
   }
 
   /** Generate a real coding problem (stdin/stdout + test cases) via the LLM. */
