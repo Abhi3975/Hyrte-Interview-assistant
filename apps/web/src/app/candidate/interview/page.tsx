@@ -57,8 +57,8 @@ interface Evaluation {
   perQuestion?: { score: number; max: number; notes: string }[];
 }
 type Phase = 'setup' | 'lobby' | 'live' | 'evaluating' | 'result';
-interface Flags { tabSwitch: number; eyeShift: number; multiFace: number; aiAssist: number; secondVoice: number }
-const ZERO_FLAGS: Flags = { tabSwitch: 0, eyeShift: 0, multiFace: 0, aiAssist: 0, secondVoice: 0 };
+interface Flags { tabSwitch: number; eyeShift: number; multiFace: number; aiAssist: number; secondVoice: number; screen: number }
+const ZERO_FLAGS: Flags = { tabSwitch: 0, eyeShift: 0, multiFace: 0, aiAssist: 0, secondVoice: 0, screen: 0 };
 
 function useHydratedAuth() {
   const { user } = useAuthStore();
@@ -120,6 +120,8 @@ function InterviewRoomInner() {
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const displayStreamRef = useRef<MediaStream | null>(null);
+  const fsHandlerRef = useRef<(() => void) | null>(null);
   const recognitionRef = useRef<any>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const endedRef = useRef(false);
@@ -158,6 +160,10 @@ function InterviewRoomInner() {
     audioCtxRef.current?.close?.().catch(() => {});
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
+    displayStreamRef.current?.getTracks().forEach((t) => t.stop());
+    displayStreamRef.current = null;
+    if (fsHandlerRef.current) { document.removeEventListener('fullscreenchange', fsHandlerRef.current); fsHandlerRef.current = null; }
+    try { if (document.fullscreenElement) document.exitFullscreen?.(); } catch {}
   }, []);
   useEffect(() => () => teardown(), [teardown]);
 
@@ -178,28 +184,34 @@ function InterviewRoomInner() {
   }
 
   const speak = useCallback((text: string) => {
-    if (muted || typeof window === 'undefined' || !window.speechSynthesis) { setVoiceState('listening'); return; }
+    const synth = typeof window !== 'undefined' ? window.speechSynthesis : null;
+    if (muted || !synth) { setVoiceState('listening'); return; }
     setVoiceState('speaking');
     // strip emoji/markdown for cleaner TTS
     const clean = text.replace(/[#*`_>]/g, '').replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, '');
     const u = new SpeechSynthesisUtterance(clean);
-    // Ally has a female voice — pick the best available.
-    const voices = window.speechSynthesis.getVoices();
-    const prefer = ['samantha', 'ally', 'google uk english female', 'microsoft zira', 'microsoft aria', 'victoria', 'karen', 'moira', 'tessa', 'fiona', 'serena', 'female'];
-    const female = prefer.map((p) => voices.find((v) => v.name.toLowerCase().includes(p) && v.lang.startsWith('en'))).find(Boolean)
-      ?? voices.find((v) => v.lang.startsWith('en'));
-    if (female) u.voice = female;
-    u.rate = 1.02;
-    u.pitch = 1.15;
+    // Prefer a LOCAL female English voice — remote/network voices often play
+    // silently. Fall back to any local English voice, then the system default.
+    const voices = synth.getVoices();
+    const en = voices.filter((v) => v.lang?.toLowerCase().startsWith('en'));
+    const local = en.filter((v) => (v as any).localService !== false);
+    const femaleNames = ['samantha', 'karen', 'moira', 'tessa', 'fiona', 'victoria', 'serena', 'zira', 'aria', 'female'];
+    const pick = local.find((v) => femaleNames.some((n) => v.name.toLowerCase().includes(n)))
+      ?? local[0] ?? en[0];
+    if (pick) u.voice = pick;
+    u.rate = 1.0;
+    u.pitch = 1.2; // slightly higher = more feminine even on a default voice
     u.onend = () => setVoiceState('listening');
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(u);
+    u.onerror = () => setVoiceState('listening');
+    try { synth.resume(); } catch {}
+    synth.cancel();
+    // Small delay avoids the Chrome bug where speak() right after cancel() is dropped.
+    setTimeout(() => { try { synth.speak(u); } catch { setVoiceState('listening'); } }, 60);
   }, [muted]);
 
   const startListening = useCallback(() => {
     const Ctor = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
     if (!Ctor || !micOnRef.current) return;
-    if (recognitionRef.current) return; // already listening
     try { recognitionRef.current?.stop?.(); } catch {}
     const rec = new Ctor();
     rec.continuous = true; rec.interimResults = true; rec.lang = 'en-US';
@@ -212,40 +224,29 @@ function InterviewRoomInner() {
       }
       const text = (finalChunk + interim).trim();
       const words = text.split(/\s+/).filter(Boolean).length;
-      // Barge-in: if the candidate speaks while Ally is talking, stop her and listen.
-      if (voiceStateRef.current === 'speaking' && words >= 2) {
-        try { window.speechSynthesis?.cancel(); } catch {}
-        setVoiceState('listening');
-      }
       setInput(text);
-      // VAD: ~900ms of silence = end of turn → auto-send.
+      // VAD: ~1s of silence = end of turn → auto-send (hands-free).
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = setTimeout(() => {
-        if (text && words >= 1 && !sendingRef.current && voiceStateRef.current !== 'speaking') {
+        if (text && words >= 1 && !sendingRef.current && voiceStateRef.current === 'listening') {
           sendTurnRef.current?.(text);
           finalChunk = '';
         }
-      }, 900);
+      }, 1000);
     };
     rec.onerror = () => {};
-    // Keep listening continuously — restart if the engine ends on its own.
-    rec.onend = () => {
-      if (recognitionRef.current === rec && !endedRef.current && micOnRef.current) {
-        try { rec.start(); } catch {}
-      }
-    };
     recognitionRef.current = rec;
     try { rec.start(); } catch {}
   }, []);
 
-  // Mic stays hot the whole interview (both while Ally speaks — for barge-in —
-  // and while listening), so it feels like a real call, never press-to-send.
+  // Mic runs ONLY on the candidate's turn — never while Ally speaks (otherwise
+  // the mic hears her through the speakers and cuts her off / makes her silent).
   useEffect(() => {
     if (phase !== 'live') return;
-    if (micOn && tab === 'chat') startListening();
+    if (voiceState === 'listening' && micOn && tab === 'chat') startListening();
     else { const r = recognitionRef.current; recognitionRef.current = null; try { r?.stop?.(); } catch {} }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, micOn, tab, startListening]);
+  }, [voiceState, phase, micOn, tab, startListening]);
 
   // timer
   useEffect(() => {
@@ -291,7 +292,7 @@ function InterviewRoomInner() {
   }, [phase]);
 
   const integrity = useMemo(() => {
-    const p = flags.tabSwitch * 6 + flags.eyeShift * 3 + flags.multiFace * 12 + flags.aiAssist * 10 + flags.secondVoice * 8;
+    const p = flags.tabSwitch * 6 + flags.eyeShift * 3 + flags.multiFace * 12 + flags.aiAssist * 10 + flags.secondVoice * 8 + flags.screen * 10;
     return Math.max(0, 100 - p);
   }, [flags]);
 
@@ -353,6 +354,12 @@ function InterviewRoomInner() {
   }
 
   async function start() {
+    // Unlock speech synthesis inside the click gesture — otherwise the first
+    // spoken line (which fires after async awaits) is blocked and stays silent.
+    try {
+      const synth = window.speechSynthesis;
+      if (synth) { synth.cancel(); const warm = new SpeechSynthesisUtterance(' '); warm.volume = 0; synth.speak(warm); }
+    } catch {}
     setError(''); setLoading(true);
     setFlags(ZERO_FLAGS); setMessages([]); setInput(''); setReport('');
     endedRef.current = false;
@@ -360,6 +367,28 @@ function InterviewRoomInner() {
       if (!navigator.mediaDevices?.getUserMedia) {
         throw new Error(window.isSecureContext ? 'Camera/microphone are not available in this browser.' : 'Camera & mic need a secure (HTTPS) connection. Open this site over https:// and allow permissions.');
       }
+      // Require full-screen screen sharing — proctored exams monitor the whole
+      // screen. Do this first while we still have the click gesture.
+      if ((navigator.mediaDevices as any).getDisplayMedia) {
+        try {
+          const display = await (navigator.mediaDevices as any).getDisplayMedia({ video: { displaySurface: 'monitor' }, audio: false });
+          displayStreamRef.current = display;
+          const track = display.getVideoTracks()[0];
+          // Warn if they shared just a tab/window instead of the whole screen.
+          if (track && (track.getSettings?.().displaySurface && track.getSettings().displaySurface !== 'monitor')) {
+            bumpFlag('screen', 8000);
+          }
+          track?.addEventListener('ended', () => { if (!endedRef.current) bumpFlag('screen', 0); });
+        } catch {
+          throw new Error('Screen sharing is required for this proctored interview. Please click Start again and share your entire screen.');
+        }
+      }
+      // Go fullscreen and flag if they leave it.
+      try { await (document.documentElement as any).requestFullscreen?.(); } catch {}
+      const onFsChange = () => { if (!document.fullscreenElement && !endedRef.current) bumpFlag('screen', 1500); };
+      document.addEventListener('fullscreenchange', onFsChange);
+      fsHandlerRef.current = onFsChange;
+
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       streamRef.current = stream;
       try {
@@ -521,6 +550,14 @@ function InterviewRoomInner() {
           <div className="flex flex-col justify-center rounded-2xl bg-white/5 p-6">
             <div className="flex items-center gap-3"><AiAvatar size={56} speaking /><div><h1 className="text-xl font-bold">Ready to start?</h1><p className="text-sm text-white/60">Ally will interview you live.</p></div></div>
             <p className="mt-4 text-sm text-white/60">Ally greets you, takes your intro, then asks {numQuestions} questions one at a time{CODE_CATEGORIES.has(topic.category) ? ' plus a live coding challenge' : ''} — with hints and feedback. Answer by speaking or typing.</p>
+            <div className="mt-3 rounded-lg bg-amber-500/10 p-3 text-xs text-amber-300">
+              <div className="font-semibold">Before you start — this is a proctored exam:</div>
+              <ul className="mt-1 space-y-0.5">
+                <li>• You&apos;ll be asked to <b>share your entire screen</b> and the app goes <b>fullscreen</b>.</li>
+                <li>• <b>Close all other tabs and apps</b> — switching away is flagged.</li>
+                <li>• Camera, microphone, screen and focus are monitored throughout.</li>
+              </ul>
+            </div>
             {error && <p className="mt-3 rounded-lg bg-red-500/10 p-3 text-sm text-red-400">{error}</p>}
             <button onClick={start} disabled={loading} className="btn-primary mt-5 justify-center">{loading ? 'Requesting camera & mic…' : 'Start interview'}</button>
             <button onClick={() => setPhase('setup')} className="mt-2 text-center text-xs text-white/50">← Change role or difficulty</button>
@@ -596,7 +633,7 @@ function InterviewRoomInner() {
               <div className="mt-1 text-2xl font-bold">{integrity}<span className="text-sm font-normal text-black/50 dark:text-white/50">/100</span></div>
               <div className="mt-2 space-y-1 text-xs">
                 <FlagRow label="Tab switches" n={flags.tabSwitch} /><FlagRow label="Eye shift / away" n={flags.eyeShift} />
-                <FlagRow label="Multiple faces" n={flags.multiFace} /><FlagRow label="Paste / AI-assist" n={flags.aiAssist} /><FlagRow label="Second voice" n={flags.secondVoice} />
+                <FlagRow label="Multiple faces" n={flags.multiFace} /><FlagRow label="Paste / AI-assist" n={flags.aiAssist} /><FlagRow label="Second voice" n={flags.secondVoice} /><FlagRow label="Screen / fullscreen exits" n={flags.screen} />
               </div>
             </div>
           </div>
@@ -607,7 +644,7 @@ function InterviewRoomInner() {
 
   // ───────── LIVE ─────────
   return (
-    <div className="flex h-screen flex-col bg-neutral-950 text-white">
+    <div className="flex min-h-[100dvh] flex-col bg-neutral-950 text-white lg:h-screen">
       <div className="flex items-center justify-between border-b border-white/10 px-4 py-2.5">
         <div className="flex items-center gap-3">
           <span className="font-semibold">{topic.label} · Interview</span>
@@ -619,7 +656,7 @@ function InterviewRoomInner() {
         </div>
       </div>
 
-      <div className="grid flex-1 grid-cols-1 gap-3 overflow-hidden p-3 lg:grid-cols-[1fr_300px]">
+      <div className="grid flex-1 grid-cols-1 gap-3 p-3 lg:grid-cols-[1fr_300px] lg:overflow-hidden">
         {/* conversation / coding */}
         <div className="flex min-h-0 flex-col gap-3">
           <div className="flex gap-1 rounded-xl bg-white/5 p-1 text-sm">
@@ -711,7 +748,7 @@ function InterviewRoomInner() {
             <div className="flex items-center justify-between"><span className="text-xs font-semibold uppercase tracking-wide text-white/50">Live signals</span><span className={`text-xs font-semibold ${integrity >= 80 ? 'text-emerald-400' : integrity >= 55 ? 'text-amber-400' : 'text-red-400'}`}>{integrity}/100</span></div>
             <div className="mt-2 space-y-1.5">
               <Signal label="Eye Shift" n={flags.eyeShift} tone="red" /><Signal label="Switched Tabs" n={flags.tabSwitch} tone="amber" />
-              <Signal label="AI-Assist Detected" n={flags.aiAssist} tone="red" /><Signal label="Second Voice" n={flags.secondVoice} tone="amber" /><Signal label="Multiple Faces" n={flags.multiFace} tone="red" />
+              <Signal label="AI-Assist Detected" n={flags.aiAssist} tone="red" /><Signal label="Second Voice" n={flags.secondVoice} tone="amber" /><Signal label="Multiple Faces" n={flags.multiFace} tone="red" /><Signal label="Screen / Fullscreen" n={flags.screen} tone="red" />
             </div>
           </div>
         </div>

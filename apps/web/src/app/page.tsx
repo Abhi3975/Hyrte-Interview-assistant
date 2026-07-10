@@ -2,6 +2,7 @@ import Link from 'next/link';
 import type { ComponentType, SVGProps } from 'react';
 import { ThemeToggle } from '@/components/theme-toggle';
 import {
+  AlertIcon,
   BankIcon,
   CheckIcon,
   CodeIcon,
@@ -103,6 +104,53 @@ export default function LandingPage() {
               </Link>
             </div>
           ))}
+        </div>
+      </section>
+
+      {/* Product showcase — Koyo-style */}
+      <section className="relative z-10 mx-auto max-w-6xl px-6 py-16">
+        <h2 className="text-center text-2xl font-bold sm:text-3xl">Everything you need to run interviews, end-to-end</h2>
+        <div className="mt-8 grid gap-5 lg:grid-cols-2">
+          {/* Anti-cheating */}
+          <div className="card lift">
+            <h3 className="text-lg font-semibold">100% Anti-Cheating</h3>
+            <p className="mt-1 text-sm text-black/60 dark:text-white/60">Every suspicious signal is flagged live and recorded for review.</p>
+            <div className="mt-4 rounded-xl border border-black/5 bg-black/[0.03] p-3 dark:border-white/10 dark:bg-white/[0.03]">
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                {[['Eye Shift', 'text-red-500', true], ['AI-Assist Detected', 'text-red-500', true], ['Switched Tabs', 'text-amber-500', true], ['Second Voice', 'text-black/40 dark:text-white/40', false]].map(([label, color, on]) => (
+                  <div key={label as string} className={`flex items-center justify-between rounded-lg px-2.5 py-2 ${on ? 'bg-black/5 dark:bg-white/10' : 'bg-black/[0.02] dark:bg-white/[0.04]'}`}>
+                    <span className={`inline-flex items-center gap-1.5 ${color as string}`}>{on ? <AlertIcon className="h-3.5 w-3.5" /> : <CheckIcon className="h-3.5 w-3.5" />}{label as string}</span>
+                    {on ? <span className="text-xs font-semibold text-red-500">•</span> : null}
+                  </div>
+                ))}
+              </div>
+              <div className="mt-3 flex items-center gap-2">
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-500"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-500" /> REC</span>
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-500"><ShieldIcon className="h-3 w-3" /> Proctoring Enabled</span>
+              </div>
+            </div>
+          </div>
+          {/* 2-minute summary */}
+          <div className="card lift">
+            <h3 className="text-lg font-semibold">2-Minute Interview Summary</h3>
+            <p className="mt-1 text-sm text-black/60 dark:text-white/60">Key signals, scores and a hiring recommendation — decide fast.</p>
+            <div className="mt-4 flex items-center gap-4 rounded-xl border border-black/5 bg-black/[0.03] p-4 dark:border-white/10 dark:bg-white/[0.03]">
+              <svg viewBox="0 0 120 70" className="w-28 shrink-0">
+                <path d="M8 60 A52 52 0 0 1 112 60" fill="none" stroke="currentColor" strokeWidth="8" className="text-black/10 dark:text-white/10" strokeLinecap="round" />
+                <path d="M8 60 A52 52 0 0 1 96 34" fill="none" stroke="#10b981" strokeWidth="8" strokeLinecap="round" />
+                <text x="60" y="52" textAnchor="middle" className="fill-current text-[20px] font-bold">80</text>
+              </svg>
+              <div className="flex-1 space-y-1.5">
+                {[['Communication', 82], ['Problem solving', 78], ['Code quality', 74]].map(([k, v]) => (
+                  <div key={k as string}>
+                    <div className="flex justify-between text-xs"><span>{k as string}</span><span className="tabular-nums">{v as number}</span></div>
+                    <div className="mt-0.5 h-1.5 rounded-full bg-black/10 dark:bg-white/10"><div className="h-full rounded-full bg-brand-500" style={{ width: `${v as number}%` }} /></div>
+                  </div>
+                ))}
+                <span className="mt-1 inline-block rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-600">HIRE</span>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 

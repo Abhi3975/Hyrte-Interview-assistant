@@ -71,6 +71,7 @@ const FLAG_MAP: Record<string, { type: ProctorEventType; severity: ProctorSeveri
   multiFace: { type: ProctorEventType.MULTIPLE_FACES, severity: ProctorSeverity.HIGH },
   aiAssist: { type: ProctorEventType.COPY_PASTE, severity: ProctorSeverity.HIGH },
   secondVoice: { type: ProctorEventType.AUDIO_ADDITIONAL_VOICE, severity: ProctorSeverity.MEDIUM },
+  screen: { type: ProctorEventType.FULLSCREEN_EXIT, severity: ProctorSeverity.HIGH },
 };
 
 export interface PracticeQuestion {
