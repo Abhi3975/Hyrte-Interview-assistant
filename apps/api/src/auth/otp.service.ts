@@ -36,6 +36,42 @@ export class OtpService {
     return Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM);
   }
 
+  /** True when a real email provider (Resend) is configured via env. */
+  emailConfigured(): boolean {
+    return Boolean(process.env.RESEND_API_KEY);
+  }
+
+  /**
+   * Send the code by email via Resend's REST API (no SDK — Bearer fetch).
+   * No telecom/DLT restrictions; delivers to any inbox including Gmail.
+   */
+  async sendEmail(email: string, code: string): Promise<boolean> {
+    if (!this.emailConfigured()) return false;
+    const from = process.env.RESEND_FROM || 'InterviewAI <onboarding@resend.dev>';
+    try {
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          from,
+          to: [email],
+          subject: `Your InterviewAI code is ${code}`,
+          html: `<div style="font-family:system-ui,sans-serif;max-width:420px;margin:auto">
+            <h2 style="margin:0 0 8px">Verify your InterviewAI sign-in</h2>
+            <p style="color:#555;margin:0 0 16px">Enter this code to start your interview. It expires in 10 minutes.</p>
+            <div style="font-size:32px;font-weight:700;letter-spacing:6px;background:#f4f4f5;padding:16px;text-align:center;border-radius:10px">${code}</div>
+            <p style="color:#999;font-size:12px;margin-top:16px">If you didn't request this, you can ignore this email.</p>
+          </div>`,
+        }),
+      });
+      if (!res.ok) { this.logger.warn(`Resend email failed ${res.status}: ${(await res.text()).slice(0, 160)}`); return false; }
+      return true;
+    } catch (err) {
+      this.logger.warn(`Resend email error: ${err}`);
+      return false;
+    }
+  }
+
   /**
    * Send the code by SMS via Twilio's REST API (no SDK needed — Basic-auth
    * fetch). `phone` must be full E.164 incl. country code, e.g. +919905270822.

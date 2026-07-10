@@ -50,7 +50,12 @@ export class AuthController {
   @Post('request-otp')
   async requestOtp(@Body() dto: RequestOtpDto) {
     const code = this.otp.request(dto.fullName, dto.email, dto.phone);
-    // Send a real SMS when a provider is configured and a phone was given.
+    // Prefer real email (Resend — no telecom/DLT restrictions).
+    if (this.otp.emailConfigured()) {
+      const ok = await this.otp.sendEmail(dto.email, code);
+      if (ok) return { sent: true, channel: 'email' };
+    }
+    // Then real SMS when a provider is configured and a phone was given.
     if (dto.phone && this.otp.smsConfigured()) {
       const ok = await this.otp.sendSms(dto.phone, code);
       if (ok) return { sent: true, channel: 'sms' };
