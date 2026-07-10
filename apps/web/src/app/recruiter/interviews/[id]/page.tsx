@@ -5,11 +5,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { DashboardShell } from '@/components/dashboard-shell';
 import { api } from '@/lib/api';
 
+interface Resume { summary: string; skills: string[]; projects: string[]; experience?: string; education?: string; questions: { title: string; prompt: string }[] }
 interface Detail {
   interview: { id: string; title: string; jobRole: string; category: string; difficulty: string; durationMins: number; status: string };
   questions: { id: string; ordinal: number; question: { id: string; title: string; prompt: string; type: string; difficulty: string } }[];
   sessions: { id: string; status: string; examState: string; completedAt?: string; riskScore?: number; candidate: { fullName: string; email: string }; evaluation?: { overallScore: number; recommendation: string } }[];
   invites: { code: string; name: string; email?: string; expiresAt: string }[];
+  resume: Resume | null;
 }
 
 export default function AssessmentDetail({ params }: { params: Promise<{ id: string }> }) {
@@ -18,6 +20,9 @@ export default function AssessmentDetail({ params }: { params: Promise<{ id: str
   const { data, isLoading } = useQuery({ queryKey: ['assessment', id], queryFn: () => api.get<Detail>(`/interviews/${id}`) });
 
   const [count, setCount] = useState(5);
+  const [resumeText, setResumeText] = useState('');
+  const [asstMsg, setAsstMsg] = useState('');
+  const [asstLog, setAsstLog] = useState<{ role: 'you' | 'ai'; text: string }[]>([]);
   const [inviteName, setInviteName] = useState('');
   const [inviteEmail, setInviteEmail] = useState('');
   const [lastLink, setLastLink] = useState('');
@@ -30,6 +35,19 @@ export default function AssessmentDetail({ params }: { params: Promise<{ id: str
   const publish = useMutation({
     mutationFn: () => api.post(`/interviews/${id}/publish`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['assessment', id] }),
+  });
+  const assistant = useMutation({
+    mutationFn: (message: string) => api.post<{ reply: string }>(`/interviews/${id}/assistant`, { message }),
+    onSuccess: (res) => { setAsstLog((l) => [...l, { role: 'ai', text: res.reply }]); qc.invalidateQueries({ queryKey: ['assessment', id] }); },
+  });
+  function askAssistant() {
+    const m = asstMsg.trim(); if (!m) return;
+    setAsstLog((l) => [...l, { role: 'you', text: m }]); setAsstMsg('');
+    assistant.mutate(m);
+  }
+  const analyze = useMutation({
+    mutationFn: () => api.post(`/interviews/${id}/analyze-resume`, { resumeText }),
+    onSuccess: () => { setResumeText(''); qc.invalidateQueries({ queryKey: ['assessment', id] }); },
   });
   const invite = useMutation({
     mutationFn: () => api.post<{ path: string }>(`/interviews/${id}/invite-link`, { name: inviteName, email: inviteEmail || undefined }),
@@ -58,6 +76,31 @@ export default function AssessmentDetail({ params }: { params: Promise<{ id: str
               {iv.status !== 'SCHEDULED' && (
                 <button onClick={() => publish.mutate()} disabled={publish.isPending} className="btn-primary text-sm">{publish.isPending ? 'Publishing…' : 'Publish (go live)'}</button>
               )}
+            </div>
+          </div>
+
+          {/* AI recruiter assistant */}
+          <div className="card">
+            <h3 className="font-semibold">✨ AI Recruiter Assistant</h3>
+            <p className="mt-0.5 text-xs text-black/50 dark:text-white/50">Tell it what you want — it reshapes this assessment instantly.</p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {['Make it FAANG-level', 'Add 3 React questions', 'Reduce to 20 minutes', 'Focus more on system design', 'Make it harder'].map((s) => (
+                <button key={s} onClick={() => { setAsstMsg(''); setAsstLog((l) => [...l, { role: 'you', text: s }]); assistant.mutate(s); }} className="rounded-full border border-black/10 px-2.5 py-1 text-xs hover:border-brand-500 hover:text-brand-500 dark:border-white/15">{s}</button>
+              ))}
+            </div>
+            {asstLog.length > 0 && (
+              <div className="mt-3 max-h-40 space-y-1.5 overflow-y-auto text-sm">
+                {asstLog.map((m, i) => (
+                  <div key={i} className={m.role === 'you' ? 'text-right' : ''}>
+                    <span className={`inline-block rounded-lg px-2.5 py-1 text-xs ${m.role === 'you' ? 'bg-brand-500 text-white' : 'bg-black/5 dark:bg-white/10'}`}>{m.text}</span>
+                  </div>
+                ))}
+                {assistant.isPending && <div className="text-xs text-black/40">Assistant is working…</div>}
+              </div>
+            )}
+            <div className="mt-2 flex gap-2">
+              <input value={asstMsg} onChange={(e) => setAsstMsg(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') askAssistant(); }} placeholder="e.g. Add 5 harder DSA questions and cut time to 25 min" className="flex-1 rounded-lg border border-black/10 bg-transparent px-3 py-2 text-sm outline-none dark:border-white/15" />
+              <button onClick={askAssistant} disabled={assistant.isPending || !asstMsg.trim()} className="btn-primary text-sm disabled:opacity-50">Send</button>
             </div>
           </div>
 
@@ -113,6 +156,32 @@ export default function AssessmentDetail({ params }: { params: Promise<{ id: str
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+
+          {/* Resume analyzer */}
+          <div className="card">
+            <h3 className="font-semibold">Resume Analyzer</h3>
+            <p className="mt-0.5 text-xs text-black/50 dark:text-white/50">Paste a candidate&apos;s resume — the AI extracts their skills/projects and generates resume-grounded questions that the interviewer will actually ask.</p>
+            <div className="mt-3 grid gap-3 lg:grid-cols-2">
+              <div>
+                <textarea value={resumeText} onChange={(e) => setResumeText(e.target.value)} rows={8} placeholder="Paste resume text here…" className="w-full resize-none rounded-lg border border-black/10 bg-transparent p-3 text-sm outline-none dark:border-white/15" />
+                <button onClick={() => analyze.mutate()} disabled={analyze.isPending || resumeText.trim().length < 40} className="btn-primary mt-2 text-sm disabled:opacity-50">{analyze.isPending ? 'Analyzing…' : '✨ Analyze & generate questions'}</button>
+              </div>
+              <div>
+                {data.resume ? (
+                  <div className="space-y-2 text-sm">
+                    <p className="text-black/70 dark:text-white/70">{data.resume.summary}</p>
+                    <div className="flex flex-wrap gap-1">{data.resume.skills.map((s) => <span key={s} className="rounded-full bg-brand-500/10 px-2 py-0.5 text-xs text-brand-600">{s}</span>)}</div>
+                    <div className="text-xs font-semibold text-black/50 dark:text-white/50">Resume-based questions</div>
+                    <ul className="space-y-1 text-xs">
+                      {data.resume.questions.map((q, i) => <li key={i} className="rounded-lg border border-black/5 p-2 dark:border-white/10"><b>{q.title}</b> — {q.prompt}</li>)}
+                    </ul>
+                  </div>
+                ) : (
+                  <p className="text-sm text-black/50 dark:text-white/50">No resume analyzed yet.</p>
+                )}
+              </div>
             </div>
           </div>
 

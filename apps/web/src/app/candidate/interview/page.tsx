@@ -83,6 +83,12 @@ function InterviewRoomInner() {
   const assessmentId = params.get('assessment') || null;
   const aCat = params.get('cat'); const aRole = params.get('role'); const aDiff = params.get('diff'); const aDur = params.get('dur');
   const assessmentTopic = assessmentId && aCat ? { label: aRole || 'Interview', category: aCat, topic: aRole || aCat, blurb: '' } : null;
+  const resumeContextRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (assessmentId && typeof window !== 'undefined') {
+      resumeContextRef.current = sessionStorage.getItem(`resume:${assessmentId}`) ?? undefined;
+    }
+  }, [assessmentId]);
 
   const [phase, setPhase] = useState<Phase>(assessmentId || hasTopicParam ? 'lobby' : 'setup');
   const [topicIdx, setTopicIdx] = useState(hasTopicParam ? topicParam : 0);
@@ -306,7 +312,7 @@ function InterviewRoomInner() {
     try {
       const res = await api.post<{ text: string }>('/practice/interview/turn', {
         jobRole: topic.label, category: topic.category, difficulty, topic: topic.topic,
-        count: numQuestions, personality, candidateName: user?.fullName?.split(' ')[0],
+        count: numQuestions, personality, candidateName: user?.fullName?.split(' ')[0], resumeContext: resumeContextRef.current,
         transcript: base.map((m) => ({ role: m.role === 'ai' ? 'interviewer' : 'candidate', content: m.text })),
         end: opts?.end ?? false, behaviorSummary: opts?.behaviorSummary,
       });

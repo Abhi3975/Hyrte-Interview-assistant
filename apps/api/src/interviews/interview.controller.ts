@@ -6,6 +6,8 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 import { Public } from '../common/decorators/public.decorator';
 import {
+  AnalyzeResumeDto,
+  AssistantDto,
   CreateInterviewDto,
   CreateInviteDto,
   GenerateQuestionsDto,
@@ -52,6 +54,18 @@ export class InterviewController {
   @Roles('RECRUITER', 'ORG_ADMIN')
   generateQuestions(@Param('id') id: string, @Body() dto: GenerateQuestionsDto, @CurrentUser() user: AuthenticatedUser) {
     return this.interviews.generateQuestions(id, dto.count, user);
+  }
+
+  @Post(':id/analyze-resume')
+  @Roles('RECRUITER', 'ORG_ADMIN')
+  analyzeResume(@Param('id') id: string, @Body() dto: AnalyzeResumeDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.interviews.analyzeResume(id, dto.resumeText, user);
+  }
+
+  @Post(':id/assistant')
+  @Roles('RECRUITER', 'ORG_ADMIN')
+  assistant(@Param('id') id: string, @Body() dto: AssistantDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.interviews.assistant(id, dto.message, user);
   }
 
   @Post(':id/publish')

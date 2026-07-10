@@ -28,6 +28,14 @@ export class GenerateQuestionsDto {
   @IsInt() @Min(1) count!: number;
 }
 
+export class AnalyzeResumeDto {
+  @IsString() resumeText!: string;
+}
+
+export class AssistantDto {
+  @IsString() message!: string;
+}
+
 export class CreateInviteDto {
   @IsString() name!: string;
   @IsOptional() @IsString() email?: string;

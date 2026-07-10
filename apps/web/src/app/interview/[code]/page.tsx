@@ -9,7 +9,7 @@ import { ShieldIcon } from '@/components/icons';
 
 interface Config {
   interviewId: string; title: string; jobRole: string; category: string;
-  difficulty: string; durationMins: number; candidateName: string; candidateEmail?: string;
+  difficulty: string; durationMins: number; candidateName: string; candidateEmail?: string; resumeContext?: string;
 }
 
 export default function TakeByLink({ params }: { params: Promise<{ code: string }> }) {
@@ -32,6 +32,11 @@ export default function TakeByLink({ params }: { params: Promise<{ code: string 
 
   function begin() {
     if (!cfg) return;
+    // Resume context can be large — stash it in sessionStorage for the room.
+    try {
+      if (cfg.resumeContext) sessionStorage.setItem(`resume:${cfg.interviewId}`, cfg.resumeContext);
+      else sessionStorage.removeItem(`resume:${cfg.interviewId}`);
+    } catch {}
     const q = new URLSearchParams({
       assessment: cfg.interviewId, cat: cfg.category, role: cfg.jobRole,
       diff: cfg.difficulty, dur: String(cfg.durationMins),

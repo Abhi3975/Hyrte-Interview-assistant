@@ -64,6 +64,7 @@ class InterviewTurnDto {
   @IsOptional() @IsString() candidateName?: string;
   @IsOptional() @IsString() personality?: string;
   @IsOptional() @IsString() behaviorSummary?: string;
+  @IsOptional() @IsString() resumeContext?: string;
   @IsArray() transcript!: TurnMsgDto[];
   @IsOptional() end?: boolean;
 }

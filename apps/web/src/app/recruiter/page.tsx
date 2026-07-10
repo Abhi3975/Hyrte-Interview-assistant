@@ -17,10 +17,22 @@ interface Interview {
 const num = (data: Interview[] | undefined, pick: (i: Interview) => number) =>
   (data ?? []).reduce((a, i) => a + pick(i), 0);
 
+interface Overview {
+  interviews: number;
+  funnel: Record<string, number>;
+  recommendations: Record<string, number>;
+  avgScore: number;
+  flaggedForReview: number;
+}
+
 export default function RecruiterDashboard() {
   const { data, isLoading } = useQuery({
     queryKey: ['interviews'],
     queryFn: () => api.get<Interview[]>('/interviews'),
+  });
+  const { data: ov } = useQuery({
+    queryKey: ['analytics-overview'],
+    queryFn: () => api.get<Overview>('/analytics/overview'),
   });
 
   return (
@@ -34,6 +46,31 @@ export default function RecruiterDashboard() {
         </div>
         <Link href="/recruiter/interviews/new" className="btn-primary ml-5">+ New assessment</Link>
       </div>
+
+      {/* Analytics */}
+      <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <Stat label="Avg candidate score" value={ov ? `${ov.avgScore}/100` : '—'} />
+        <Stat label="Completed interviews" value={String(ov?.funnel?.COMPLETED ?? 0)} />
+        <Stat label="Hire recommendations" value={String((ov?.recommendations?.HIRE ?? 0) + (ov?.recommendations?.STRONG_HIRE ?? 0) + (ov?.recommendations?.LEAN_HIRE ?? 0))} />
+        <Stat label="Flagged for review" value={String(ov?.flaggedForReview ?? 0)} />
+      </div>
+      {ov && Object.keys(ov.recommendations).length > 0 && (
+        <div className="card mb-6">
+          <h3 className="mb-2 font-semibold">Hiring funnel</h3>
+          <div className="space-y-2">
+            {[['STRONG_HIRE', 'Strong hire', 'bg-emerald-600'], ['HIRE', 'Hire', 'bg-emerald-500'], ['LEAN_HIRE', 'Lean hire', 'bg-amber-500'], ['NO_HIRE', 'No hire', 'bg-red-500'], ['STRONG_NO_HIRE', 'Strong no hire', 'bg-red-700']].map(([k, label, color]) => {
+              const n = ov.recommendations[k] ?? 0;
+              const total = Object.values(ov.recommendations).reduce((a, b) => a + b, 0) || 1;
+              return (
+                <div key={k}>
+                  <div className="flex justify-between text-xs"><span>{label}</span><span className="tabular-nums">{n}</span></div>
+                  <div className="mt-0.5 h-2 rounded-full bg-black/10 dark:bg-white/10"><div className={`h-full rounded-full ${color}`} style={{ width: `${(n / total) * 100}%` }} /></div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <h3 className="mb-3 font-semibold">Your assessments</h3>
