@@ -33,9 +33,27 @@ const ROLES: { label: string; blurb: string; topic: number }[] = [
 
 export default function LandingPage() {
   return (
-    <main>
+    <main className="relative overflow-hidden">
+      {/* Animation system (no external deps) */}
+      <style>{`
+        @keyframes riseIn { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes glowPulse { 0%,100% { opacity: .5; transform: translate(-50%, -50%) scale(1); } 50% { opacity: .8; transform: translate(-50%, -50%) scale(1.12); } }
+        @keyframes hueShift { 0%,100% { filter: hue-rotate(0deg); } 50% { filter: hue-rotate(28deg); } }
+        .rise { opacity: 0; animation: riseIn .7s cubic-bezier(.22,.9,.32,1) forwards; }
+        .d1{animation-delay:.05s}.d2{animation-delay:.14s}.d3{animation-delay:.24s}.d4{animation-delay:.34s}.d5{animation-delay:.44s}
+        .hero-glow { position:absolute; left:50%; top:220px; width:820px; height:520px; border-radius:9999px;
+          background: radial-gradient(closest-side, rgba(59,130,246,.28), rgba(109,94,252,.12), transparent 70%);
+          filter: blur(20px); animation: glowPulse 7s ease-in-out infinite; pointer-events:none; z-index:0; }
+        .lift { transition: transform .25s cubic-bezier(.22,.9,.32,1), box-shadow .25s, border-color .25s; }
+        .lift:hover { transform: translateY(-6px); box-shadow: 0 18px 40px -18px rgba(59,130,246,.55); border-color: rgba(59,130,246,.45); }
+        .grad-text { background: linear-gradient(90deg,#6d5efc,#3b82f6,#22d3ee,#6d5efc); background-size:300% 100%;
+          -webkit-background-clip:text; background-clip:text; color:transparent; animation: hueShift 6s ease-in-out infinite; }
+        @media (prefers-reduced-motion: reduce){ .rise{animation:none;opacity:1} .hero-glow{animation:none} .grad-text{animation:none} }
+      `}</style>
+      <div className="hero-glow" aria-hidden />
+
       {/* Nav */}
-      <header className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
+      <header className="relative z-10 mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
         <div className="text-lg font-bold">
           Interview<span className="text-brand-500">AI</span>
         </div>
@@ -47,31 +65,31 @@ export default function LandingPage() {
       </header>
 
       {/* Hero */}
-      <section className="mx-auto max-w-4xl px-6 pb-14 pt-14 text-center">
-        <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-brand-500/30 bg-brand-500/10 px-3 py-1 text-xs font-medium text-brand-500">
-          ● Trained on 100,000+ interviews
+      <section className="relative z-10 mx-auto max-w-4xl px-6 pb-14 pt-14 text-center">
+        <div className="rise d1 mb-5 inline-flex items-center gap-2 rounded-full border border-brand-500/30 bg-brand-500/10 px-3 py-1 text-xs font-medium text-brand-500">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand-500" /> Trained on 100,000+ interviews
         </div>
-        <h1 className="text-balance text-4xl font-bold tracking-tight sm:text-6xl">
-          Never take an <span className="text-brand-500">interview</span> again.
+        <h1 className="rise d2 text-balance text-4xl font-bold tracking-tight sm:text-6xl">
+          Never take an <span className="grad-text">interview</span> again.
           <br />InterviewAI takes them for you.
         </h1>
-        <p className="mx-auto mt-6 max-w-2xl text-lg text-black/60 dark:text-white/60">
+        <p className="rise d3 mx-auto mt-6 max-w-2xl text-lg text-black/60 dark:text-white/60">
           Fully automated, human-like AI interviews — voice, video, live coding and
           enterprise-grade proctoring — ending in a scored, decision-ready report.
         </p>
-        <div className="mt-8 flex items-center justify-center gap-3">
-          <Link href="/signup" className="btn-primary px-6 py-3">Try AI Interview</Link>
+        <div className="rise d4 mt-8 flex items-center justify-center gap-3">
+          <Link href="/signup" className="btn-primary px-6 py-3 transition-transform hover:scale-105">Try AI Interview</Link>
           <Link href="/login" className="btn-ghost px-6 py-3">Book a demo</Link>
         </div>
       </section>
 
       {/* Role gallery — "Try Interview now" */}
-      <section className="mx-auto max-w-6xl px-6 pb-8">
+      <section className="relative z-10 mx-auto max-w-6xl px-6 pb-8">
         <div className="mb-2 text-center text-xs font-semibold uppercase tracking-widest text-brand-500">Try Interview</div>
         <h2 className="text-center text-2xl font-bold sm:text-3xl">AI Interview tailored for every role</h2>
         <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {ROLES.map((r) => (
-            <div key={r.label} className="card flex flex-col">
+          {ROLES.map((r, i) => (
+            <div key={r.label} className={`card lift rise d${(i % 5) + 1} flex flex-col`}>
               <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-brand-500/20 bg-brand-500/10 text-brand-500">
                 <CodeIcon className="h-5 w-5" />
               </div>
@@ -92,7 +110,7 @@ export default function LandingPage() {
       <section className="mx-auto max-w-6xl px-6 py-12">
         <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
           {FEATURES.map((f) => (
-            <div key={f.title} className="card">
+            <div key={f.title} className="card lift">
               <div className="flex h-11 w-11 items-center justify-center rounded-lg border border-brand-500/20 bg-brand-500/10 text-brand-500">
                 <f.Icon className="h-5 w-5" />
               </div>
@@ -111,7 +129,7 @@ export default function LandingPage() {
             { title: 'For Recruiters', points: ['Create assessments in minutes', 'Compare candidates', 'Live proctoring dashboard'] },
             { title: 'For Enterprises', points: ['Multi-tenant & RBAC', 'Audit logs & compliance', 'Auto-scaling on Kubernetes'] },
           ].map((p) => (
-            <div key={p.title} className="card">
+            <div key={p.title} className="card lift">
               <h3 className="font-semibold">{p.title}</h3>
               <ul className="mt-3 space-y-2 text-sm text-black/60 dark:text-white/60">
                 {p.points.map((pt) => (

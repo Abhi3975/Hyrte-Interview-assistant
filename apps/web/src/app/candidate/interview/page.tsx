@@ -120,10 +120,16 @@ function InterviewRoomInner() {
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const voiceStateRef = useRef(voiceState);
   const flagCooldown = useRef<Record<string, number>>({});
+  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sendTurnRef = useRef<((t?: string, o?: { end?: boolean; behaviorSummary?: string }) => void) | null>(null);
+  const sendingRef = useRef(false);
+  const micOnRef = useRef(micOn);
 
   const topic = TOPICS[topicIdx];
   useEffect(() => { messagesRef.current = messages; }, [messages]);
   useEffect(() => { voiceStateRef.current = voiceState; }, [voiceState]);
+  useEffect(() => { sendingRef.current = sending; }, [sending]);
+  useEffect(() => { micOnRef.current = micOn; }, [micOn]);
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, sending]);
 
   useEffect(() => {
@@ -134,13 +140,24 @@ function InterviewRoomInner() {
   }, [hydrated, user, router, hasTopicParam, topicParam]);
 
   const teardown = useCallback(() => {
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
     try { recognitionRef.current?.stop?.(); } catch {}
+    recognitionRef.current = null;
     try { window.speechSynthesis?.cancel(); } catch {}
     audioCtxRef.current?.close?.().catch(() => {});
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
   }, []);
   useEffect(() => () => teardown(), [teardown]);
+
+  // Warm up the speech-synthesis voice list so Ally's voice is ready.
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+    window.speechSynthesis.getVoices();
+    const h = () => window.speechSynthesis.getVoices();
+    window.speechSynthesis.addEventListener?.('voiceschanged', h);
+    return () => window.speechSynthesis.removeEventListener?.('voiceschanged', h);
+  }, []);
 
   function bumpFlag(key: keyof Flags, cooldownMs = 1500) {
     const now = Date.now();
@@ -155,7 +172,14 @@ function InterviewRoomInner() {
     // strip emoji/markdown for cleaner TTS
     const clean = text.replace(/[#*`_>]/g, '').replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, '');
     const u = new SpeechSynthesisUtterance(clean);
+    // Ally has a female voice — pick the best available.
+    const voices = window.speechSynthesis.getVoices();
+    const prefer = ['samantha', 'ally', 'google uk english female', 'microsoft zira', 'microsoft aria', 'victoria', 'karen', 'moira', 'tessa', 'fiona', 'serena', 'female'];
+    const female = prefer.map((p) => voices.find((v) => v.name.toLowerCase().includes(p) && v.lang.startsWith('en'))).find(Boolean)
+      ?? voices.find((v) => v.lang.startsWith('en'));
+    if (female) u.voice = female;
     u.rate = 1.02;
+    u.pitch = 1.15;
     u.onend = () => setVoiceState('listening');
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(u);
@@ -163,7 +187,8 @@ function InterviewRoomInner() {
 
   const startListening = useCallback(() => {
     const Ctor = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
-    if (!Ctor || !micOn) return;
+    if (!Ctor || !micOnRef.current) return;
+    if (recognitionRef.current) return; // already listening
     try { recognitionRef.current?.stop?.(); } catch {}
     const rec = new Ctor();
     rec.continuous = true; rec.interimResults = true; rec.lang = 'en-US';
@@ -174,18 +199,42 @@ function InterviewRoomInner() {
         const r = e.results[i];
         if (r.isFinal) finalChunk += r[0].transcript + ' '; else interim += r[0].transcript;
       }
-      setInput((finalChunk + interim).trim());
+      const text = (finalChunk + interim).trim();
+      const words = text.split(/\s+/).filter(Boolean).length;
+      // Barge-in: if the candidate speaks while Ally is talking, stop her and listen.
+      if (voiceStateRef.current === 'speaking' && words >= 2) {
+        try { window.speechSynthesis?.cancel(); } catch {}
+        setVoiceState('listening');
+      }
+      setInput(text);
+      // VAD: ~900ms of silence = end of turn → auto-send.
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = setTimeout(() => {
+        if (text && words >= 1 && !sendingRef.current && voiceStateRef.current !== 'speaking') {
+          sendTurnRef.current?.(text);
+          finalChunk = '';
+        }
+      }, 900);
     };
     rec.onerror = () => {};
+    // Keep listening continuously — restart if the engine ends on its own.
+    rec.onend = () => {
+      if (recognitionRef.current === rec && !endedRef.current && micOnRef.current) {
+        try { rec.start(); } catch {}
+      }
+    };
     recognitionRef.current = rec;
     try { rec.start(); } catch {}
-  }, [micOn]);
+  }, []);
 
+  // Mic stays hot the whole interview (both while Ally speaks — for barge-in —
+  // and while listening), so it feels like a real call, never press-to-send.
   useEffect(() => {
     if (phase !== 'live') return;
-    if (voiceState === 'listening' && micOn && tab === 'chat') startListening();
-    else { try { recognitionRef.current?.stop?.(); } catch {} }
-  }, [voiceState, phase, micOn, tab, startListening]);
+    if (micOn && tab === 'chat') startListening();
+    else { const r = recognitionRef.current; recognitionRef.current = null; try { r?.stop?.(); } catch {} }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, micOn, tab, startListening]);
 
   // timer
   useEffect(() => {
@@ -269,6 +318,7 @@ function InterviewRoomInner() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [topic, difficulty, numQuestions, personality, user, speak]);
+  useEffect(() => { sendTurnRef.current = sendTurn; }, [sendTurn]);
 
   function onSend() {
     if (!input.trim() || sending) return;
@@ -441,7 +491,7 @@ function InterviewRoomInner() {
             <div className="mt-2 space-y-2">
               <div className="rounded-xl bg-white/5 p-3 flex items-center gap-3">
                 <AiAvatar size={40} />
-                <div><div className="font-semibold">Alex · AI Interviewer</div><div className="text-xs text-white/60">Senior Engineer</div></div>
+                <div><div className="font-semibold">Ally · AI Interviewer</div><div className="text-xs text-white/60">Senior Engineer</div></div>
               </div>
               <div className="rounded-xl bg-white/5 p-3">
                 <div className="flex items-center gap-3">
@@ -458,8 +508,8 @@ function InterviewRoomInner() {
             </div>
           </div>
           <div className="flex flex-col justify-center rounded-2xl bg-white/5 p-6">
-            <div className="flex items-center gap-3"><AiAvatar size={56} speaking /><div><h1 className="text-xl font-bold">Ready to start?</h1><p className="text-sm text-white/60">Alex will interview you live.</p></div></div>
-            <p className="mt-4 text-sm text-white/60">Alex greets you, takes your intro, then asks {numQuestions} questions one at a time{CODE_CATEGORIES.has(topic.category) ? ' plus a live coding challenge' : ''} — with hints and feedback. Answer by speaking or typing.</p>
+            <div className="flex items-center gap-3"><AiAvatar size={56} speaking /><div><h1 className="text-xl font-bold">Ready to start?</h1><p className="text-sm text-white/60">Ally will interview you live.</p></div></div>
+            <p className="mt-4 text-sm text-white/60">Ally greets you, takes your intro, then asks {numQuestions} questions one at a time{CODE_CATEGORIES.has(topic.category) ? ' plus a live coding challenge' : ''} — with hints and feedback. Answer by speaking or typing.</p>
             {error && <p className="mt-3 rounded-lg bg-red-500/10 p-3 text-sm text-red-400">{error}</p>}
             <button onClick={start} disabled={loading} className="btn-primary mt-5 justify-center">{loading ? 'Requesting camera & mic…' : 'Start interview'}</button>
             <button onClick={() => setPhase('setup')} className="mt-2 text-center text-xs text-white/50">← Change role or difficulty</button>
@@ -474,7 +524,7 @@ function InterviewRoomInner() {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-3 text-center">
         <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-500 border-t-transparent" />
-        <p className="text-sm text-black/60 dark:text-white/60">Alex is writing your interview report…</p>
+        <p className="text-sm text-black/60 dark:text-white/60">Ally is writing your interview report…</p>
       </div>
     );
   }
@@ -492,7 +542,7 @@ function InterviewRoomInner() {
           <div className="space-y-5">
             {report && (
               <div className="card">
-                <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-black/50 dark:text-white/50"><AiAvatar size={20} /> Alex&apos;s feedback</div>
+                <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-black/50 dark:text-white/50"><AiAvatar size={20} /> Ally&apos;s feedback</div>
                 <div className="whitespace-pre-wrap text-sm leading-relaxed">{report}</div>
               </div>
             )}
@@ -587,7 +637,7 @@ function InterviewRoomInner() {
                   </div>
                   <div className="flex gap-2">
                     <button onClick={runCode} disabled={codeRunning} className="rounded-lg bg-emerald-600 px-3 py-1 text-xs font-medium hover:bg-emerald-700 disabled:opacity-60">{codeRunning ? 'Running…' : '▶ Run'}</button>
-                    <button onClick={shareCode} className="rounded-lg bg-white/10 px-2.5 py-1 text-xs hover:bg-white/20">Ask Alex to review</button>
+                    <button onClick={shareCode} className="rounded-lg bg-white/10 px-2.5 py-1 text-xs hover:bg-white/20">Ask Ally to review</button>
                   </div>
                 </div>
                 <textarea value={codeSrc} onChange={(e) => setCodeSrc(e.target.value)} onPaste={() => bumpFlag('aiAssist', 800)} spellCheck={false} placeholder="Write your solution…" className="min-h-0 flex-1 resize-none bg-transparent p-3 font-mono text-sm outline-none placeholder:text-white/30" />
@@ -606,7 +656,7 @@ function InterviewRoomInner() {
           ) : (
             <>
               <div className="min-h-0 flex-1 overflow-y-auto rounded-xl bg-white/5 p-4">
-                {messages.length === 0 && !sending && <div className="flex h-full items-center justify-center text-sm text-white/40">Connecting you with Alex…</div>}
+                {messages.length === 0 && !sending && <div className="flex h-full items-center justify-center text-sm text-white/40">Connecting you with Ally…</div>}
                 <div className="space-y-3">
                   {messages.map((m, i) => (
                     <div key={i} className={`flex gap-2 ${m.role === 'you' ? 'justify-end' : 'justify-start'}`}>
@@ -614,13 +664,13 @@ function InterviewRoomInner() {
                       <div className={`max-w-[78%] whitespace-pre-wrap rounded-2xl px-4 py-2 text-sm leading-relaxed ${m.role === 'ai' ? 'bg-white/10' : 'bg-brand-500 text-white'}`}>{m.text}</div>
                     </div>
                   ))}
-                  {sending && <div className="flex gap-2"><AiAvatar size={28} /><div className="rounded-2xl bg-white/10 px-4 py-2 text-sm text-white/60">Alex is thinking…</div></div>}
+                  {sending && <div className="flex gap-2"><AiAvatar size={28} /><div className="rounded-2xl bg-white/10 px-4 py-2 text-sm text-white/60">Ally is thinking…</div></div>}
                   <div ref={chatEndRef} />
                 </div>
               </div>
               <div className="rounded-xl bg-white/5 p-2">
                 <div className="mb-1.5 flex items-center gap-2 px-1 text-xs text-white/50">
-                  {voiceState === 'speaking' ? <><SpeakerIcon width={14} height={14} className="text-brand-400" /> Alex is speaking…</> : voiceState === 'listening' ? <><MicIcon width={14} height={14} className="text-emerald-400" /> Listening — speak or type</> : 'Ready'}
+                  {voiceState === 'speaking' ? <><SpeakerIcon width={14} height={14} className="text-brand-400" /> Ally is speaking…</> : voiceState === 'listening' ? <><MicIcon width={14} height={14} className="text-emerald-400" /> Listening — speak or type</> : 'Ready'}
                   <button onClick={() => sendTurn('I\'m a bit stuck — can you explain the question and give me a hint?')} disabled={sending} className="ml-auto rounded-md bg-white/10 px-2 py-0.5 hover:bg-white/20">I&apos;m stuck — explain</button>
                 </div>
                 <div className="flex items-end gap-2">
@@ -640,7 +690,7 @@ function InterviewRoomInner() {
         <div className="flex flex-col gap-3 overflow-y-auto">
           <div className="flex items-center gap-3 rounded-xl bg-white/5 p-3">
             <AiAvatar size={44} speaking={voiceState === 'speaking'} />
-            <div><div className="text-sm font-semibold">Alex</div><div className="text-xs text-white/50">AI Interviewer · Senior Engineer</div></div>
+            <div><div className="text-sm font-semibold">Ally</div><div className="text-xs text-white/50">AI Interviewer · Senior Engineer</div></div>
           </div>
           <div className="relative aspect-video overflow-hidden rounded-xl bg-black">
             <video ref={videoRef} muted playsInline className="h-full w-full object-cover" />
