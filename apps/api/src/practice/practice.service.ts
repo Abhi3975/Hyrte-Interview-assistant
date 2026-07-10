@@ -304,8 +304,20 @@ export class PracticeService {
    */
   async startSession(
     candidateId: string,
-    input: { category: Category; difficulty: Difficulty; topic?: string; jobRole?: string },
+    input: { category: Category; difficulty: Difficulty; topic?: string; jobRole?: string; interviewId?: string },
   ): Promise<{ sessionId: string }> {
+    // Recruiter-assigned assessment: tie the session to that interview so the
+    // recruiter sees the candidate's result on their dashboard.
+    if (input.interviewId) {
+      const iv = await this.prisma.interview.findUnique({ where: { id: input.interviewId }, select: { id: true } });
+      if (iv) {
+        const s = await this.prisma.interviewSession.create({
+          data: { interviewId: iv.id, candidateId, status: 'IN_PROGRESS', examState: 'ACTIVE', startedAt: new Date() },
+          select: { id: true },
+        });
+        return { sessionId: s.id };
+      }
+    }
     const jobRole = input.jobRole ?? input.topic ?? `${input.category} candidate`;
     const title = `${jobRole} · ${input.difficulty} (AI room)`;
 

@@ -4,8 +4,11 @@ import { InterviewService } from './interview.service';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
+import { Public } from '../common/decorators/public.decorator';
 import {
   CreateInterviewDto,
+  CreateInviteDto,
+  GenerateQuestionsDto,
   InviteCandidateDto,
   StartSessionDto,
   SubmitAnswerDto,
@@ -30,6 +33,37 @@ export class InterviewController {
   @Roles('RECRUITER', 'ORG_ADMIN')
   list(@CurrentUser() user: AuthenticatedUser) {
     return this.interviews.listForOrg(user.organizationId!);
+  }
+
+  /** Candidate: resolve an invite code to the assessment config (pre-login OK). */
+  @Public()
+  @Get('invite/:code')
+  resolveInvite(@Param('code') code: string) {
+    return this.interviews.resolveInvite(code);
+  }
+
+  @Get(':id')
+  @Roles('RECRUITER', 'ORG_ADMIN')
+  detail(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.interviews.getDetail(id, user);
+  }
+
+  @Post(':id/generate-questions')
+  @Roles('RECRUITER', 'ORG_ADMIN')
+  generateQuestions(@Param('id') id: string, @Body() dto: GenerateQuestionsDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.interviews.generateQuestions(id, dto.count, user);
+  }
+
+  @Post(':id/publish')
+  @Roles('RECRUITER', 'ORG_ADMIN')
+  publish(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.interviews.publish(id, user);
+  }
+
+  @Post(':id/invite-link')
+  @Roles('RECRUITER', 'ORG_ADMIN')
+  inviteLink(@Param('id') id: string, @Body() dto: CreateInviteDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.interviews.createInvite(id, dto, user);
   }
 
   @Post(':id/invite')

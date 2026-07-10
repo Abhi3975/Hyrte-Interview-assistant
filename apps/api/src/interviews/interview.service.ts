@@ -5,18 +5,115 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
-import { ExamState, InterviewStatus } from '@prisma/client';
+import { Category, Difficulty, ExamState, InterviewStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit/audit.service';
+import { QuestionService } from '../questions/question.service';
 import { CreateInterviewDto, SubmitAnswerDto } from './dto/interview.dto';
 import type { AuthenticatedUser } from '../common/decorators/current-user.decorator';
+
+export interface Invite { code: string; name: string; email?: string; expiresAt: string }
 
 @Injectable()
 export class InterviewService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly questions: QuestionService,
   ) {}
+
+  /** Recruiter: full assessment view — questions + candidate sessions/results. */
+  async getDetail(interviewId: string, user: AuthenticatedUser) {
+    const interview = await this.assertOwnedInterview(interviewId, user);
+    const [questions, sessions] = await Promise.all([
+      this.prisma.interviewQuestion.findMany({
+        where: { interviewId },
+        orderBy: { ordinal: 'asc' },
+        include: { question: { select: { id: true, title: true, prompt: true, type: true, difficulty: true } } },
+      }),
+      this.prisma.interviewSession.findMany({
+        where: { interviewId },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true, status: true, examState: true, startedAt: true, completedAt: true, riskScore: true,
+          candidate: { select: { fullName: true, email: true } },
+          evaluation: { select: { overallScore: true, recommendation: true } },
+        },
+      }),
+    ]);
+    const invites = ((interview.config as any)?.invites ?? []) as Invite[];
+    return { interview, questions, sessions, invites };
+  }
+
+  /** Recruiter: AI-generate questions and attach them to the assessment. */
+  async generateQuestions(interviewId: string, count: number, user: AuthenticatedUser) {
+    const interview = await this.assertOwnedInterview(interviewId, user);
+    const topic = (interview.config as any)?.topic ?? interview.jobRole;
+    const generated = await this.questions.generate(
+      { category: interview.category as Category, topic, difficulty: interview.difficulty as Difficulty, count },
+      interview.organizationId,
+    );
+    const existing = await this.prisma.interviewQuestion.count({ where: { interviewId } });
+    await this.prisma.interviewQuestion.createMany({
+      data: generated.map((q, i) => ({ interviewId, questionId: q.id, ordinal: existing + i })),
+      skipDuplicates: true,
+    });
+    return { added: generated.length, total: existing + generated.length };
+  }
+
+  /** Recruiter: publish (make it live for candidates). */
+  async publish(interviewId: string, user: AuthenticatedUser) {
+    await this.assertOwnedInterview(interviewId, user);
+    const interview = await this.prisma.interview.update({
+      where: { id: interviewId },
+      data: { status: InterviewStatus.SCHEDULED },
+    });
+    return { status: interview.status };
+  }
+
+  /** Recruiter: create a secure invite link for a candidate. */
+  async createInvite(
+    interviewId: string,
+    dto: { name: string; email?: string; expiryHours?: number },
+    user: AuthenticatedUser,
+  ) {
+    const interview = await this.assertOwnedInterview(interviewId, user);
+    const code = randomBytes(6).toString('base64url');
+    const invite: Invite = {
+      code,
+      name: dto.name,
+      email: dto.email,
+      expiresAt: new Date(Date.now() + (dto.expiryHours ?? 168) * 3600_000).toISOString(),
+    };
+    const config = (interview.config as any) ?? {};
+    config.invites = [...(config.invites ?? []), invite];
+    await this.prisma.interview.update({
+      where: { id: interviewId },
+      data: { config: config as Prisma.InputJsonValue, status: InterviewStatus.SCHEDULED },
+    });
+    return { code, path: `/interview/${code}`, expiresAt: invite.expiresAt };
+  }
+
+  /** Candidate: resolve an invite code to the assessment config for the room. */
+  async resolveInvite(code: string) {
+    const candidates = await this.prisma.interview.findMany({
+      where: { status: InterviewStatus.SCHEDULED },
+      select: { id: true, title: true, jobRole: true, category: true, difficulty: true, durationMins: true, config: true },
+    });
+    for (const iv of candidates) {
+      const invite = ((iv.config as any)?.invites ?? []).find((i: Invite) => i.code === code);
+      if (invite) {
+        if (new Date(invite.expiresAt) < new Date()) throw new BadRequestException('This interview link has expired');
+        return {
+          interviewId: iv.id, title: iv.title, jobRole: iv.jobRole, category: iv.category,
+          difficulty: iv.difficulty, durationMins: iv.durationMins,
+          topic: (iv.config as any)?.topic ?? iv.jobRole,
+          candidateName: invite.name, candidateEmail: invite.email,
+        };
+      }
+    }
+    throw new NotFoundException('Invalid or expired interview link');
+  }
 
   // ── Recruiter: authoring ──
 

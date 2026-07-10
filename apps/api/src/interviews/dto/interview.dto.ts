@@ -24,6 +24,16 @@ export class InviteCandidateDto {
   @IsString() candidateId!: string;
 }
 
+export class GenerateQuestionsDto {
+  @IsInt() @Min(1) count!: number;
+}
+
+export class CreateInviteDto {
+  @IsString() name!: string;
+  @IsOptional() @IsString() email?: string;
+  @IsOptional() @IsInt() @Min(1) expiryHours?: number;
+}
+
 export class SubmitAnswerDto {
   @IsString() interviewQuestionId!: string;
   @IsOptional() @IsString() responseText?: string;

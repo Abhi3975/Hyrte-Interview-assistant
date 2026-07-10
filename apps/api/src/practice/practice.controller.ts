@@ -31,6 +31,7 @@ class StartSessionDto {
   @IsEnum(Difficulty) difficulty!: Difficulty;
   @IsOptional() @IsString() topic?: string;
   @IsOptional() @IsString() jobRole?: string;
+  @IsOptional() @IsString() interviewId?: string;
 }
 
 class CompleteSessionDto {

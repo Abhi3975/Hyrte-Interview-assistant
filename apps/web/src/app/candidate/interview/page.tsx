@@ -79,10 +79,15 @@ function InterviewRoomInner() {
   const topicParam = Number(params.get('topic'));
   const hasTopicParam = Number.isInteger(topicParam) && topicParam >= 0 && topicParam < TOPICS.length;
 
-  const [phase, setPhase] = useState<Phase>(hasTopicParam ? 'lobby' : 'setup');
+  // Recruiter-assigned assessment: launched from /interview/<code> with config.
+  const assessmentId = params.get('assessment') || null;
+  const aCat = params.get('cat'); const aRole = params.get('role'); const aDiff = params.get('diff'); const aDur = params.get('dur');
+  const assessmentTopic = assessmentId && aCat ? { label: aRole || 'Interview', category: aCat, topic: aRole || aCat, blurb: '' } : null;
+
+  const [phase, setPhase] = useState<Phase>(assessmentId || hasTopicParam ? 'lobby' : 'setup');
   const [topicIdx, setTopicIdx] = useState(hasTopicParam ? topicParam : 0);
-  const [difficulty, setDifficulty] = useState<(typeof DIFFICULTIES)[number]>('MEDIUM');
-  const [durationMin, setDurationMin] = useState(20);
+  const [difficulty, setDifficulty] = useState<(typeof DIFFICULTIES)[number]>((aDiff as any) || 'MEDIUM');
+  const [durationMin, setDurationMin] = useState(aDur ? Number(aDur) : 20);
   const [numQuestions, setNumQuestions] = useState(5);
   const [personality, setPersonality] = useState('professional');
 
@@ -125,7 +130,7 @@ function InterviewRoomInner() {
   const sendingRef = useRef(false);
   const micOnRef = useRef(micOn);
 
-  const topic = TOPICS[topicIdx];
+  const topic = assessmentTopic ?? TOPICS[topicIdx];
   useEffect(() => { messagesRef.current = messages; }, [messages]);
   useEffect(() => { voiceStateRef.current = voiceState; }, [voiceState]);
   useEffect(() => { sendingRef.current = sending; }, [sending]);
@@ -369,7 +374,7 @@ function InterviewRoomInner() {
       } catch {}
 
       try {
-        const s = await api.post<{ sessionId: string }>('/practice/session', { category: topic.category, difficulty, topic: topic.topic, jobRole: topic.label });
+        const s = await api.post<{ sessionId: string }>('/practice/session', { category: topic.category, difficulty, topic: topic.topic, jobRole: topic.label, interviewId: assessmentId ?? undefined });
         sessionIdRef.current = s.sessionId;
       } catch { sessionIdRef.current = null; }
 
