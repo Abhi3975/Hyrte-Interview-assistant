@@ -48,12 +48,16 @@ export class AuthController {
   /** Request a one-time code for the "Sign Up to Start" interview lobby. */
   @Public()
   @Post('request-otp')
-  requestOtp(@Body() dto: RequestOtpDto) {
+  async requestOtp(@Body() dto: RequestOtpDto) {
     const code = this.otp.request(dto.fullName, dto.email, dto.phone);
-    // No SMS/email provider is wired, so return the code in demo mode. Wire a
-    // provider send here and drop `devCode` for production.
+    // Send a real SMS when a provider is configured and a phone was given.
+    if (dto.phone && this.otp.smsConfigured()) {
+      const ok = await this.otp.sendSms(dto.phone, code);
+      if (ok) return { sent: true, channel: 'sms' };
+    }
+    // Fallback: demo mode returns the code so the UI can show it.
     const demoMode = process.env.OTP_DEMO_MODE !== 'false';
-    return { sent: true, ...(demoMode ? { devCode: code } : {}) };
+    return { sent: true, channel: 'demo', ...(demoMode ? { devCode: code } : {}) };
   }
 
   /** Verify the code and start a passwordless candidate session. */

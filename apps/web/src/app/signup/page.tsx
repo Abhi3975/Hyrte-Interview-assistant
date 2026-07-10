@@ -9,6 +9,17 @@ import { ShieldIcon, MicIcon, CheckIcon } from '@/components/icons';
 
 interface AuthResponse { user: AuthUser; accessToken: string; refreshToken: string }
 
+// Common country dialing codes (flag emoji + code).
+const COUNTRIES: { c: string; d: string; f: string }[] = [
+  { c: 'IN', d: '+91', f: '🇮🇳' }, { c: 'US', d: '+1', f: '🇺🇸' }, { c: 'GB', d: '+44', f: '🇬🇧' },
+  { c: 'CA', d: '+1', f: '🇨🇦' }, { c: 'AU', d: '+61', f: '🇦🇺' }, { c: 'AE', d: '+971', f: '🇦🇪' },
+  { c: 'SG', d: '+65', f: '🇸🇬' }, { c: 'DE', d: '+49', f: '🇩🇪' }, { c: 'FR', d: '+33', f: '🇫🇷' },
+  { c: 'NL', d: '+31', f: '🇳🇱' }, { c: 'IE', d: '+353', f: '🇮🇪' }, { c: 'NZ', d: '+64', f: '🇳🇿' },
+  { c: 'ZA', d: '+27', f: '🇿🇦' }, { c: 'PK', d: '+92', f: '🇵🇰' }, { c: 'BD', d: '+880', f: '🇧🇩' },
+  { c: 'LK', d: '+94', f: '🇱🇰' }, { c: 'NP', d: '+977', f: '🇳🇵' }, { c: 'JP', d: '+81', f: '🇯🇵' },
+  { c: 'BR', d: '+55', f: '🇧🇷' }, { c: 'NG', d: '+234', f: '🇳🇬' },
+];
+
 function SignupInner() {
   const router = useRouter();
   const params = useSearchParams();
@@ -19,9 +30,11 @@ function SignupInner() {
   const [mode, setMode] = useState<'otp' | 'recruiter'>('otp');
   // OTP state
   const [form, setForm] = useState({ fullName: '', email: '', phone: '' });
+  const [dial, setDial] = useState('+91');
   const [step, setStep] = useState<'details' | 'code'>('details');
   const [code, setCode] = useState('');
   const [devCode, setDevCode] = useState('');
+  const [sentToPhone, setSentToPhone] = useState(false);
   // recruiter state
   const [rec, setRec] = useState({ fullName: '', email: '', password: '', organizationName: '' });
 
@@ -36,7 +49,10 @@ function SignupInner() {
   async function sendOtp(e: React.FormEvent) {
     e.preventDefault(); setError(''); setLoading(true);
     try {
-      const res = await api.post<{ sent: boolean; devCode?: string }>('/auth/request-otp', form);
+      // Combine dialing code + number into E.164 (e.g. +919905270822).
+      const phone = form.phone.trim() ? `${dial}${form.phone.replace(/[^0-9]/g, '')}` : undefined;
+      const res = await api.post<{ sent: boolean; channel?: string; devCode?: string }>('/auth/request-otp', { ...form, phone });
+      setSentToPhone(res.channel === 'sms');
       if (res.devCode) setDevCode(res.devCode);
       setStep('code');
     } catch (err) {
@@ -117,7 +133,20 @@ function SignupInner() {
               <form onSubmit={sendOtp} className="mt-6 space-y-4">
                 <LField label="Full Name" required value={form.fullName} placeholder="What should we call you?" onChange={(v) => setForm({ ...form, fullName: v })} />
                 <LField label="Email" required type="email" value={form.email} placeholder="name@example.com" onChange={(v) => setForm({ ...form, email: v })} />
-                <LField label="Phone Number" value={form.phone} placeholder="+91 Enter your phone number" onChange={(v) => setForm({ ...form, phone: v })} />
+                <label className="block">
+                  <span className="text-sm font-medium text-neutral-700">Phone Number</span>
+                  <div className="mt-1 flex gap-2">
+                    <div className="relative">
+                      <select value={dial} onChange={(e) => setDial(e.target.value)}
+                        className="h-full appearance-none rounded-xl border border-neutral-300 bg-white py-2.5 pl-3 pr-7 text-sm text-neutral-900 outline-none focus:border-blue-500">
+                        {COUNTRIES.map((c) => <option key={c.c} value={c.d}>{c.f} {c.d}</option>)}
+                      </select>
+                      <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-neutral-400">▾</span>
+                    </div>
+                    <input type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="Enter your phone number"
+                      className="flex-1 rounded-xl border border-neutral-300 bg-white px-3 py-2.5 text-sm text-neutral-900 outline-none focus:border-blue-500" />
+                  </div>
+                </label>
                 {error && <p className="text-sm text-red-600">{error}</p>}
                 <button className="w-full rounded-xl bg-blue-600 py-3 font-semibold text-white hover:bg-blue-700" disabled={loading}>
                   {loading ? 'Sending…' : 'Send OTP'}
@@ -126,7 +155,7 @@ function SignupInner() {
               </form>
             ) : (
               <form onSubmit={verifyOtp} className="mt-6 space-y-4">
-                <p className="text-sm text-neutral-600">Enter the 6-digit code we sent to <b>{form.email}</b>.</p>
+                <p className="text-sm text-neutral-600">Enter the 6-digit code we sent to <b>{sentToPhone ? `${dial} ${form.phone}` : form.email}</b>.</p>
                 {devCode && (
                   <div className="flex items-center justify-between rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
                     <span>Demo code: <b className="tabular-nums">{devCode}</b></span>

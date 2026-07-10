@@ -82,6 +82,39 @@ export default function LandingPage() {
           <Link href="/signup" className="btn-primary px-6 py-3 transition-transform hover:scale-105">Try AI Interview</Link>
           <Link href="/login" className="btn-ghost px-6 py-3">Book a demo</Link>
         </div>
+        <div className="rise d5 mt-6 flex flex-wrap items-center justify-center gap-x-8 gap-y-3 text-xs text-black/45 dark:text-white/45">
+          <span className="inline-flex items-center gap-1.5"><span className="text-base font-bold text-black/70 dark:text-white/70">120k+</span> interviews conducted</span>
+          <span className="inline-flex items-center gap-1.5"><span className="text-base font-bold text-black/70 dark:text-white/70">40+</span> roles covered</span>
+          <span className="inline-flex items-center gap-1.5"><span className="text-base font-bold text-black/70 dark:text-white/70">90%</span> less recruiter time</span>
+        </div>
+      </section>
+
+      {/* Hero preview — a student mid-interview */}
+      <section className="rise d5 relative z-10 mx-auto max-w-5xl px-6">
+        <div className="overflow-hidden rounded-2xl border border-black/10 bg-neutral-950 shadow-2xl shadow-brand-500/10 dark:border-white/10">
+          <div className="flex items-center justify-between border-b border-white/10 px-4 py-2.5 text-white">
+            <div className="flex items-center gap-2 text-sm"><span className="font-semibold">Software Engineer · Interview</span><span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-400"><ShieldIcon className="h-3 w-3" /> Proctoring Enabled</span></div>
+            <span className="rounded-lg bg-white/10 px-2.5 py-1 text-xs tabular-nums text-white">24:18</span>
+          </div>
+          <div className="grid gap-3 bg-neutral-950 p-3 text-white sm:grid-cols-[1fr_240px]">
+            <div className="space-y-3">
+              <div className="flex gap-2"><AiAvatarLg /><div className="max-w-[85%] rounded-2xl bg-white/10 px-4 py-2 text-sm">Alright — walk me through how you'd find the two numbers in an array that sum to a target. Explain your thinking first.</div></div>
+              <div className="flex justify-end"><div className="max-w-[85%] rounded-2xl bg-brand-500 px-4 py-2 text-sm text-white">I'd use a hash map to store seen values, so it's one pass, O(n)…</div></div>
+              <div className="rounded-xl bg-white/5 p-3 font-mono text-xs text-white/80"><span className="text-brand-400">def</span> two_sum(nums, target):<br/>&nbsp;&nbsp;seen = {'{}'}<br/>&nbsp;&nbsp;<span className="text-brand-400">for</span> i, n <span className="text-brand-400">in</span> enumerate(nums):</div>
+            </div>
+            <div className="space-y-3">
+              <div className="relative aspect-video overflow-hidden rounded-xl bg-neutral-800"><StudentPhoto /><span className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-black/60 px-2 py-0.5 text-[9px]"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-500" /> REC</span></div>
+              <div className="rounded-xl bg-white/5 p-2.5">
+                <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-white/50">Live signals <span className="text-emerald-400">96/100</span></div>
+                <div className="mt-1.5 space-y-1 text-[11px]">
+                  {[['Eye Shift', true], ['Switched Tabs', true], ['Second Voice', true]].map(([l]) => (
+                    <div key={l as string} className="flex items-center gap-1.5 text-white/50"><CheckIcon className="h-3 w-3 text-emerald-400" />{l as string}</div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
 
       {/* Role gallery — "Try Interview now" */}
@@ -192,9 +225,78 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* Testimonials */}
+      <section className="relative z-10 mx-auto max-w-6xl px-6 py-14">
+        <h2 className="text-center text-2xl font-bold sm:text-3xl">Loved by candidates &amp; hiring teams</h2>
+        <div className="mt-8 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          {[
+            { n: 'Priya Menon', r: 'SDE-1 · fintech', q: 'The AI actually pushed back on my answers and gave hints like a real interviewer. The final report told me exactly what to fix.', v: 0 },
+            { n: 'Arjun Rao', r: 'Backend Engineer', q: 'It asked about my actual projects from my resume — Redis, Kafka. Felt like a real onsite, not a quiz.', v: 1 },
+            { n: 'Sara Khan', r: 'Talent Lead · SaaS', q: 'We create an assessment, send a link, and get scored, proctored reports back. Cut our screening time by weeks.', v: 2 },
+          ].map((t) => (
+            <div key={t.n} className="card lift">
+              <div className="flex items-center gap-3">
+                <PersonAvatar variant={t.v} />
+                <div><div className="font-semibold">{t.n}</div><div className="text-xs text-black/50 dark:text-white/50">{t.r}</div></div>
+              </div>
+              <p className="mt-3 text-sm text-black/70 dark:text-white/70">“{t.q}”</p>
+              <div className="mt-3 text-brand-500">★★★★★</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
       <footer className="mx-auto max-w-6xl px-6 py-10 text-sm text-black/40 dark:text-white/40">
         © {new Date().getFullYear()} InterviewAI. Only license-compliant question sources.
       </footer>
     </main>
+  );
+}
+
+// Illustrated, diverse people (CSP-safe inline SVG) for testimonials & preview.
+const SKIN = ['#f1c9a5', '#e0ac7e', '#c68642', '#8d5524'];
+const HAIR = ['#2b2b2b', '#3a2f2a', '#1a1a1a', '#4a3728'];
+const SHIRT = ['#3b82f6', '#6d5efc', '#10b981', '#ef4444', '#f59e0b'];
+
+function PersonAvatar({ variant = 0 }: { variant?: number }) {
+  const skin = SKIN[variant % SKIN.length];
+  const hair = HAIR[variant % HAIR.length];
+  const shirt = SHIRT[variant % SHIRT.length];
+  return (
+    <svg viewBox="0 0 64 64" className="h-11 w-11 shrink-0 rounded-full">
+      <rect width="64" height="64" rx="32" className="fill-black/5 dark:fill-white/10" />
+      <circle cx="32" cy="26" r="11" fill={skin} />
+      <path d="M20 24a12 12 0 0 1 24 0c0-3-3-10-12-10s-12 7-12 10Z" fill={hair} />
+      <path d="M15 56c1.5-9 8.5-14 17-14s15.5 5 17 14a32 32 0 0 1-34 0Z" fill={shirt} />
+    </svg>
+  );
+}
+
+function StudentPhoto() {
+  return (
+    <svg viewBox="0 0 240 135" className="h-full w-full" preserveAspectRatio="xMidYMid slice">
+      <defs><linearGradient id="room" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#3a4a63" /><stop offset="1" stopColor="#1f2937" /></linearGradient></defs>
+      <rect width="240" height="135" fill="url(#room)" />
+      <rect x="150" y="12" width="78" height="52" rx="4" className="fill-white/5" />
+      <circle cx="120" cy="66" r="26" fill="#e0ac7e" />
+      <path d="M92 60a28 28 0 0 1 56 0c0-7-7-22-28-22s-28 15-28 22Z" fill="#2b2b2b" />
+      <path d="M74 135c4-24 20-36 46-36s42 12 46 36Z" fill="#334155" />
+      <circle cx="112" cy="64" r="2.4" fill="#1a1a1a" /><circle cx="128" cy="64" r="2.4" fill="#1a1a1a" />
+      <path d="M114 74q6 4 12 0" stroke="#1a1a1a" strokeWidth="1.5" fill="none" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function AiAvatarLg() {
+  return (
+    <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full ring-2 ring-emerald-400/60">
+      <svg viewBox="0 0 64 64" width={28} height={28} className="rounded-full">
+        <defs><linearGradient id="allyg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#6d5efc" /><stop offset="1" stopColor="#3b82f6" /></linearGradient></defs>
+        <rect width="64" height="64" rx="32" fill="url(#allyg)" />
+        <circle cx="32" cy="26" r="11" fill="#f2d9c2" />
+        <path d="M21 24a11 11 0 0 1 22 0c0-2-2-9-11-9s-11 7-11 9Z" fill="#3a2f2a" />
+        <path d="M16 54c1-9 8-14 16-14s15 5 16 14a32 32 0 0 1-32 0Z" fill="#e2e8f0" />
+      </svg>
+    </span>
   );
 }
