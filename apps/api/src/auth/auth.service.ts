@@ -109,6 +109,21 @@ export class AuthService {
     return this.issueTokens(stored.user, ctx);
   }
 
+  /** True if a user with this email exists (for password reset). */
+  async userExists(email: string): Promise<boolean> {
+    return Boolean(await this.prisma.user.findUnique({ where: { email }, select: { id: true } }));
+  }
+
+  /** Set a new password for a user by email (used by password reset). */
+  async setPasswordByEmail(email: string, newPassword: string): Promise<void> {
+    const user = await this.prisma.user.findUnique({ where: { email }, select: { id: true } });
+    if (!user) throw new BadRequestException('No account for that email');
+    const passwordHash = await argon2.hash(newPassword);
+    await this.prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
+    // Invalidate existing refresh tokens after a password change.
+    await this.prisma.refreshToken.updateMany({ where: { userId: user.id, revokedAt: null }, data: { revokedAt: new Date() } });
+  }
+
   async logout(refreshToken: string): Promise<void> {
     const tokenHash = this.hash(refreshToken);
     await this.prisma.refreshToken

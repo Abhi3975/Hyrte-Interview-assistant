@@ -46,6 +46,9 @@ export default function LoginPage() {
       <form onSubmit={onSubmit} className="mt-6 space-y-4">
         <Field label="Email" type="email" value={email} onChange={setEmail} />
         <Field label="Password" type="password" value={password} onChange={setPassword} />
+        <div className="text-right -mt-1">
+          <Link href="/forgot-password" className="text-xs text-brand-500">Forgot password?</Link>
+        </div>
         {error && <p className="text-sm text-red-500">{error}</p>}
         <button className="btn-primary w-full py-2.5" disabled={loading}>
           {loading ? 'Signing in…' : 'Log in'}

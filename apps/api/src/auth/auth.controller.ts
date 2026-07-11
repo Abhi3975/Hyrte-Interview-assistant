@@ -2,7 +2,7 @@ import { Body, Controller, Post, Req, UnauthorizedException } from '@nestjs/comm
 import { ApiTags } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { OtpService } from './otp.service';
-import { LoginDto, RefreshDto, RegisterDto, RequestOtpDto, VerifyOtpDto } from './dto/auth.dto';
+import { ForgotPasswordDto, LoginDto, RefreshDto, RegisterDto, RequestOtpDto, ResetPasswordDto, VerifyOtpDto } from './dto/auth.dto';
 import { Public } from '../common/decorators/public.decorator';
 import { AuditService } from '../common/audit/audit.service';
 
@@ -50,9 +50,9 @@ export class AuthController {
   @Post('request-otp')
   async requestOtp(@Body() dto: RequestOtpDto) {
     const code = this.otp.request(dto.fullName, dto.email, dto.phone);
-    // Prefer real email (Resend — no telecom/DLT restrictions).
+    // Prefer real email (no telecom/DLT restrictions): SendGrid then Resend.
     if (this.otp.emailConfigured()) {
-      const ok = await this.otp.sendEmail(dto.email, code);
+      const ok = (await this.otp.sendViaSendGrid(dto.email, code)) || (await this.otp.sendEmail(dto.email, code));
       if (ok) return { sent: true, channel: 'email' };
     }
     // Then real SMS when a provider is configured and a phone was given.
@@ -81,6 +81,31 @@ export class AuthController {
       userAgent: ctx.ua,
     });
     return result;
+  }
+
+  /** Send a password-reset code to the account email. */
+  @Public()
+  @Post('forgot-password')
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    const exists = await this.auth.userExists(dto.email);
+    // Always respond the same way so we don't reveal which emails are registered.
+    if (!exists) return { sent: true };
+    const code = this.otp.requestReset(dto.email);
+    if (this.otp.emailConfigured()) {
+      const ok = (await this.otp.sendViaSendGrid(dto.email, code)) || (await this.otp.sendEmail(dto.email, code));
+      if (ok) return { sent: true, channel: 'email' };
+    }
+    const demoMode = process.env.OTP_DEMO_MODE !== 'false';
+    return { sent: true, channel: 'demo', ...(demoMode ? { devCode: code } : {}) };
+  }
+
+  /** Verify the reset code and set a new password. */
+  @Public()
+  @Post('reset-password')
+  async resetPassword(@Body() dto: ResetPasswordDto) {
+    if (!this.otp.verifyReset(dto.email, dto.code)) throw new UnauthorizedException('Invalid or expired code');
+    await this.auth.setPasswordByEmail(dto.email, dto.newPassword);
+    return { success: true };
   }
 
   @Public()

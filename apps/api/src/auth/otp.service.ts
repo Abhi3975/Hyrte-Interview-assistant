@@ -21,7 +21,26 @@ interface OtpEntry {
 export class OtpService {
   private readonly logger = new Logger(OtpService.name);
   private readonly store = new Map<string, OtpEntry>();
+  private readonly resetStore = new Map<string, { code: string; expiresAt: number; attempts: number }>();
   private readonly TTL_MS = 10 * 60 * 1000;
+
+  /** Generate + store a password-reset code for an email. */
+  requestReset(email: string): string {
+    const code = randomInt(0, 1_000_000).toString().padStart(6, '0');
+    this.resetStore.set(email.toLowerCase(), { code, expiresAt: Date.now() + this.TTL_MS, attempts: 0 });
+    return code;
+  }
+
+  /** Verify a password-reset code. */
+  verifyReset(email: string, code: string): boolean {
+    const key = email.toLowerCase();
+    const e = this.resetStore.get(key);
+    if (!e || Date.now() > e.expiresAt || e.attempts >= 5) { this.resetStore.delete(key); return false; }
+    e.attempts++;
+    if (e.code !== code.trim()) return false;
+    this.resetStore.delete(key);
+    return true;
+  }
 
   request(fullName: string, email: string, phone?: string): string {
     const key = email.toLowerCase();
@@ -36,9 +55,43 @@ export class OtpService {
     return Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM);
   }
 
-  /** True when a real email provider (Resend) is configured via env. */
+  /** True when a real email provider (Resend or SendGrid) is configured. */
   emailConfigured(): boolean {
-    return Boolean(process.env.RESEND_API_KEY);
+    return Boolean(process.env.RESEND_API_KEY || process.env.SENDGRID_API_KEY);
+  }
+
+  private otpHtml(code: string): string {
+    return `<div style="font-family:system-ui,sans-serif;max-width:420px;margin:auto">
+      <h2 style="margin:0 0 8px">Verify your InterviewAI sign-in</h2>
+      <p style="color:#555;margin:0 0 16px">Enter this code to start your interview. It expires in 10 minutes.</p>
+      <div style="font-size:32px;font-weight:700;letter-spacing:6px;background:#f4f4f5;padding:16px;text-align:center;border-radius:10px">${code}</div>
+      <p style="color:#999;font-size:12px;margin-top:16px">If you didn't request this, you can ignore this email.</p>
+    </div>`;
+  }
+
+  /** Send via SendGrid (single-sender — no domain needed). Delivers to anyone. */
+  async sendViaSendGrid(email: string, code: string): Promise<boolean> {
+    const key = process.env.SENDGRID_API_KEY;
+    const from = process.env.SENDGRID_FROM;
+    if (!key || !from) return false;
+    try {
+      const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          personalizations: [{ to: [{ email }] }],
+          from: { email: from, name: 'InterviewAI' },
+          subject: `Your InterviewAI code is ${code}`,
+          content: [{ type: 'text/html', value: this.otpHtml(code) }],
+        }),
+      });
+      if (res.status >= 200 && res.status < 300) return true;
+      this.logger.warn(`SendGrid failed ${res.status}: ${(await res.text()).slice(0, 160)}`);
+      return false;
+    } catch (err) {
+      this.logger.warn(`SendGrid error: ${err}`);
+      return false;
+    }
   }
 
   /**
