@@ -66,6 +66,10 @@ class InterviewTurnDto {
   @IsOptional() @IsString() behaviorSummary?: string;
   @IsOptional() @IsString() resumeContext?: string;
   @IsOptional() @IsIn(['mixed', 'theory', 'coding']) mode?: 'mixed' | 'theory' | 'coding';
+  @IsOptional() @IsString() experience?: string;
+  @IsOptional() @IsString() company?: string;
+  @IsOptional() @IsString() language?: string;
+  @IsOptional() @IsString() style?: string;
   @IsArray() transcript!: TurnMsgDto[];
   @IsOptional() end?: boolean;
 }

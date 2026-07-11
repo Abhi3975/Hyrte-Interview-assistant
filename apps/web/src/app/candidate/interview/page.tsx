@@ -39,6 +39,63 @@ const INTERVIEW_TYPES: { id: 'mixed' | 'theory' | 'coding'; label: string }[] = 
   { id: 'theory', label: 'Theory only' },
   { id: 'coding', label: 'Coding only' },
 ];
+
+// ── Guided setup wizard data ──
+const SWE_T = ['JavaScript', 'TypeScript', 'React', 'Next.js', 'Node.js', 'Express', 'NestJS', 'Python', 'Java', 'Spring Boot', 'Go', 'REST APIs', 'GraphQL', 'Microservices', 'OOP', 'Design Patterns', 'System Design'];
+const AI_T = ['Machine Learning', 'Deep Learning', 'NLP', 'Computer Vision', 'LLM', 'Prompt Engineering', 'OpenAI API', 'LangChain', 'RAG', 'Vector Databases'];
+const DA_T = ['SQL', 'Excel', 'Power BI', 'Tableau', 'Python', 'Pandas', 'NumPy', 'Statistics', 'Data Visualization', 'ETL', 'Data Cleaning'];
+const FIN_T = ['Financial Accounting', 'Corporate Finance', 'Investment Banking', 'Equity Research', 'Financial Modeling', 'Valuation', 'Risk Management', 'Taxation', 'Banking'];
+
+interface CatDef { label: string; cat: string; topics: string[] }
+const CATEGORIES: CatDef[] = [
+  { label: 'Software Engineering', cat: 'DSA', topics: SWE_T },
+  { label: 'Frontend Development', cat: 'FRONTEND', topics: ['JavaScript', 'TypeScript', 'React', 'Next.js', 'Angular', 'Vue', 'HTML/CSS', 'Redux', 'Web Performance', 'Accessibility'] },
+  { label: 'Backend Development', cat: 'BACKEND', topics: ['Node.js', 'Express', 'NestJS', 'Python', 'Django', 'Java', 'Spring Boot', 'Go', 'REST APIs', 'GraphQL', 'Microservices', 'Authentication'] },
+  { label: 'Full Stack Development', cat: 'FULLSTACK', topics: SWE_T },
+  { label: 'Mobile Development', cat: 'FRONTEND', topics: ['React Native', 'Flutter', 'Swift', 'Kotlin', 'Android', 'iOS'] },
+  { label: 'DevOps', cat: 'DEVOPS', topics: ['Docker', 'Kubernetes', 'CI/CD', 'Terraform', 'AWS', 'Linux', 'Monitoring'] },
+  { label: 'Cloud Computing', cat: 'DEVOPS', topics: ['AWS', 'Azure', 'GCP', 'Serverless', 'Networking', 'IAM'] },
+  { label: 'Data Structures & Algorithms', cat: 'DSA', topics: ['Arrays', 'Strings', 'Hash Maps', 'Two Pointers', 'Sliding Window', 'Binary Search', 'Trees', 'Graphs', 'Dynamic Programming', 'Backtracking', 'Greedy'] },
+  { label: 'System Design', cat: 'SYSTEM_DESIGN', topics: ['Scalability', 'Load Balancing', 'Caching', 'Databases', 'Message Queues', 'Microservices', 'Rate Limiting', 'CAP Theorem'] },
+  { label: 'Machine Learning', cat: 'AI_ML', topics: AI_T },
+  { label: 'Artificial Intelligence', cat: 'AI_ML', topics: AI_T },
+  { label: 'Data Science', cat: 'AI_ML', topics: ['Python', 'Statistics', 'Machine Learning', 'Pandas', 'Feature Engineering', 'Model Evaluation'] },
+  { label: 'Data Analytics', cat: 'DATA_ANALYTICS', topics: DA_T },
+  { label: 'Business Intelligence', cat: 'DATA_ANALYTICS', topics: ['Power BI', 'Tableau', 'SQL', 'Data Warehousing', 'ETL', 'KPIs'] },
+  { label: 'Cyber Security', cat: 'BACKEND', topics: ['Network Security', 'Cryptography', 'OWASP', 'Penetration Testing', 'IAM', 'Incident Response'] },
+  { label: 'Database Engineering', cat: 'DATABASE', topics: ['SQL', 'PostgreSQL', 'MySQL', 'MongoDB', 'Redis', 'Indexing', 'Transactions', 'Normalization'] },
+  { label: 'UI/UX', cat: 'FRONTEND', topics: ['Design Principles', 'Figma', 'Usability', 'Wireframing', 'Design Systems', 'Accessibility'] },
+  { label: 'Product Management', cat: 'PRODUCT_MANAGEMENT', topics: ['Product Sense', 'Metrics', 'Prioritization', 'Roadmapping', 'A/B Testing', 'Stakeholders'] },
+  { label: 'Project Management', cat: 'PRODUCT_MANAGEMENT', topics: ['Agile', 'Scrum', 'Risk', 'Stakeholders', 'Planning', 'Delivery'] },
+  { label: 'QA Testing', cat: 'BACKEND', topics: ['Manual Testing', 'Automation', 'Selenium', 'Test Cases', 'API Testing', 'Performance'] },
+  { label: 'Finance', cat: 'FINANCE', topics: FIN_T },
+  { label: 'Accounting', cat: 'FINANCE', topics: ['Financial Accounting', 'Bookkeeping', 'Auditing', 'Taxation', 'Balance Sheets'] },
+  { label: 'Investment Banking', cat: 'FINANCE', topics: ['Valuation', 'M&A', 'Financial Modeling', 'DCF', 'LBO', 'Equity Research'] },
+  { label: 'Human Resources', cat: 'HR', topics: ['Recruitment', 'Employee Relations', 'Compensation', 'HR Policy', 'Performance'] },
+  { label: 'Marketing', cat: 'MBA', topics: ['Digital Marketing', 'SEO', 'Branding', 'Content', 'Analytics', 'Growth'] },
+  { label: 'Sales', cat: 'MBA', topics: ['B2B Sales', 'Negotiation', 'CRM', 'Pipeline', 'Objection Handling'] },
+  { label: 'Operations', cat: 'MBA', topics: ['Supply Chain', 'Process Optimization', 'Logistics', 'Lean', 'Quality'] },
+  { label: 'Consulting', cat: 'MBA', topics: ['Case Study', 'Guesstimates', 'Market Sizing', 'Frameworks', 'Problem Solving'] },
+  { label: 'Customer Support', cat: 'HR', topics: ['Communication', 'Conflict Resolution', 'Product Knowledge', 'Empathy'] },
+  { label: 'Healthcare', cat: 'MBA', topics: ['Clinical Knowledge', 'Patient Care', 'Ethics', 'Healthcare Systems'] },
+  { label: 'Mechanical Engineering', cat: 'MBA', topics: ['Thermodynamics', 'Mechanics', 'Manufacturing', 'CAD', 'Materials'] },
+  { label: 'Civil Engineering', cat: 'MBA', topics: ['Structures', 'Geotechnical', 'Construction', 'Surveying', 'Materials'] },
+  { label: 'Electrical Engineering', cat: 'MBA', topics: ['Circuits', 'Power Systems', 'Electronics', 'Control Systems', 'Signals'] },
+  { label: 'Chemical Engineering', cat: 'MBA', topics: ['Process Design', 'Thermodynamics', 'Reactions', 'Fluid Mechanics'] },
+  { label: 'General Aptitude', cat: 'MBA', topics: ['Quantitative', 'Logical Reasoning', 'Verbal', 'Data Interpretation'] },
+  { label: 'Behavioral Interview', cat: 'HR', topics: ['STAR Method', 'Teamwork', 'Conflict', 'Leadership', 'Failure', 'Strengths'] },
+  { label: 'Leadership', cat: 'HR', topics: ['Team Management', 'Decision Making', 'Vision', 'Conflict', 'Delegation'] },
+  { label: 'MBA', cat: 'MBA', topics: ['Strategy', 'Marketing', 'Finance', 'Operations', 'Case Study', 'Guesstimates'] },
+  { label: 'Any Other', cat: 'MBA', topics: [] },
+];
+const W_TYPES = ['Coding Interview', 'Theoretical Interview', 'Mixed Interview', 'Case Study', 'Practical Scenario', 'Behavioral Interview'];
+const typeToMode = (t: string): 'mixed' | 'theory' | 'coding' => (t === 'Coding Interview' ? 'coding' : t === 'Mixed Interview' ? 'mixed' : 'theory');
+const THEORY_STYLES = ['Rapid Fire', 'Detailed Discussion', 'Real Company Interview', 'Concept Revision', 'Scenario Based'];
+const EXPERIENCE = ['Fresher', '1-2 Years', '3-5 Years', '5-8 Years', 'Senior', 'Staff', 'Principal'];
+const COMPANIES = ['Google', 'Amazon', 'Microsoft', 'Meta', 'Apple', 'Netflix', 'Uber', 'Stripe', 'Airbnb', 'Oracle', 'Salesforce', 'Deloitte', 'EY', 'KPMG', 'JPMorgan', 'Goldman Sachs', 'Startup', 'FAANG Mixed', 'Random'];
+const DURATIONS = [10, 20, 30, 45, 60];
+const LANGUAGES = ['English', 'Hindi', 'Mixed'];
+const WIZARD_STEPS = ['Category', 'Topic', 'Type', 'Level', 'Company', 'Duration', 'Language', 'Review'];
 const PERSONALITIES: { id: string; label: string }[] = [
   { id: 'friendly', label: 'Friendly' },
   { id: 'professional', label: 'Professional' },
@@ -102,6 +159,17 @@ function InterviewRoomInner() {
   const [numQuestions, setNumQuestions] = useState(5);
   const [personality, setPersonality] = useState('professional');
   const [interviewType, setInterviewType] = useState<'mixed' | 'theory' | 'coding'>('mixed');
+  // Guided setup wizard
+  const [wStep, setWStep] = useState(0);
+  const [wCatIdx, setWCatIdx] = useState<number | null>(null);
+  const [wTopic, setWTopic] = useState('');
+  const [wType, setWType] = useState('Mixed Interview');
+  const [codingCount, setCodingCount] = useState(2);
+  const [theoryStyle, setTheoryStyle] = useState('Detailed Discussion');
+  const [experience, setExperience] = useState('Fresher');
+  const [company, setCompany] = useState('Random');
+  const [language, setLanguage] = useState('English');
+  const [wizardTopic, setWizardTopic] = useState<{ label: string; category: string; topic: string; blurb: string } | null>(null);
 
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
@@ -144,7 +212,7 @@ function InterviewRoomInner() {
   const sendingRef = useRef(false);
   const micOnRef = useRef(micOn);
 
-  const topic = assessmentTopic ?? TOPICS[topicIdx];
+  const topic = wizardTopic ?? assessmentTopic ?? TOPICS[topicIdx];
   useEffect(() => { messagesRef.current = messages; }, [messages]);
   useEffect(() => { voiceStateRef.current = voiceState; }, [voiceState]);
   useEffect(() => { sendingRef.current = sending; }, [sending]);
@@ -319,7 +387,8 @@ function InterviewRoomInner() {
     try {
       const res = await api.post<{ text: string }>('/practice/interview/turn', {
         jobRole: topic.label, category: topic.category, difficulty, topic: topic.topic,
-        count: numQuestions, personality, mode: interviewType, candidateName: user?.fullName?.split(' ')[0], resumeContext: resumeContextRef.current,
+        count: numQuestions, personality, mode: interviewType, experience, company, language, style: theoryStyle,
+        candidateName: user?.fullName?.split(' ')[0], resumeContext: resumeContextRef.current,
         transcript: base.map((m) => ({ role: m.role === 'ai' ? 'interviewer' : 'candidate', content: m.text })),
         end: opts?.end ?? false, behaviorSummary: opts?.behaviorSummary,
       });
@@ -335,7 +404,7 @@ function InterviewRoomInner() {
       setSending(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [topic, difficulty, numQuestions, personality, interviewType, user, speak]);
+  }, [topic, difficulty, numQuestions, personality, interviewType, experience, company, language, theoryStyle, user, speak]);
   useEffect(() => { sendTurnRef.current = sendTurn; }, [sendTurn]);
 
   function onSend() {
@@ -493,34 +562,94 @@ function InterviewRoomInner() {
 
   // ───────── SETUP ─────────
   if (phase === 'setup') {
+    const cat = wCatIdx != null ? CATEGORIES[wCatIdx] : null;
+    const canNext = wStep === 0 ? wCatIdx != null : wStep === 1 ? (wTopic.trim().length > 0 || (cat?.topics.length ?? 0) === 0) : true;
+    const Chip = ({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) => (
+      <button onClick={onClick} className={`rounded-full border px-3 py-1.5 text-sm transition ${active ? 'border-brand-500 bg-brand-500/10 text-brand-600' : 'border-black/10 hover:border-brand-500 dark:border-white/15'}`}>{children}</button>
+    );
+    function beginInterview() {
+      const c = CATEGORIES[wCatIdx!];
+      setWizardTopic({ label: c.label, category: c.cat, topic: wTopic.trim() || c.label, blurb: '' });
+      setInterviewType(typeToMode(wType));
+      setRemaining(durationMin * 60);
+      if (wType === 'Coding Interview') setNumQuestions(codingCount);
+      setPhase('lobby');
+    }
     return (
-      <div className="mx-auto max-w-5xl px-6 py-10">
-        <div className="mb-8 flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">Start an AI Interview</h1>
-            <p className="mt-1 text-sm text-black/60 dark:text-white/60">A real, conversational interviewer — greets you, asks one question at a time, hints when you&apos;re stuck, and reviews your code.</p>
-          </div>
+      <div className="mx-auto max-w-3xl px-6 py-8">
+        <div className="mb-6 flex items-center justify-between">
+          <div><h1 className="text-2xl font-bold">Welcome! 👋</h1><p className="mt-1 text-sm text-black/60 dark:text-white/60">Let&apos;s customize your interview.</p></div>
           <ThemeToggle />
         </div>
-        {error && <p className="mb-4 rounded-lg bg-red-500/10 p-3 text-sm text-red-500">{error}</p>}
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {TOPICS.map((t, i) => (
-            <button key={t.label} onClick={() => setTopicIdx(i)} className={`card text-left transition ${i === topicIdx ? 'ring-2 ring-brand-500' : 'hover:bg-black/[0.02] dark:hover:bg-white/[0.03]'}`}>
-              <div className="flex items-center gap-2 font-semibold"><CodeIcon width={18} height={18} className="text-brand-500" />{t.label}</div>
-              <p className="mt-1 text-xs text-black/55 dark:text-white/55">{t.blurb}</p>
-            </button>
+        {/* progress */}
+        <div className="mb-6 flex flex-wrap gap-1.5">
+          {WIZARD_STEPS.map((s, i) => (
+            <div key={s} className={`h-1.5 flex-1 rounded-full ${i <= wStep ? 'bg-brand-500' : 'bg-black/10 dark:bg-white/10'}`} />
           ))}
         </div>
-        <div className="mt-6 flex flex-wrap items-end gap-6">
-          <Picker label="Difficulty" options={DIFFICULTIES as unknown as string[]} value={difficulty} onChange={(v) => setDifficulty(v as any)} render={(d) => d[0] + d.slice(1).toLowerCase()} />
-          <Picker label="Duration" options={['10', '20', '30']} value={String(durationMin)} onChange={(v) => { setDurationMin(Number(v)); setRemaining(Number(v) * 60); }} render={(m) => `${m} min`} />
-          <Picker label="Questions" options={QUESTION_COUNTS.map(String)} value={String(numQuestions)} onChange={(v) => setNumQuestions(Number(v))} render={(c) => c} />
-          <Picker label="Interviewer" options={PERSONALITIES.map((p) => p.id)} value={personality} onChange={setPersonality} render={(id) => PERSONALITIES.find((p) => p.id === id)?.label ?? id} />
-          <Picker label="Interview type" options={INTERVIEW_TYPES.map((t) => t.id)} value={interviewType} onChange={(v) => setInterviewType(v as any)} render={(id) => INTERVIEW_TYPES.find((t) => t.id === id)?.label ?? id} />
+        {error && <p className="mb-4 rounded-lg bg-red-500/10 p-3 text-sm text-red-500">{error}</p>}
+
+        <div className="card min-h-[340px]">
+          {wStep === 0 && (<>
+            <h2 className="font-semibold">Select the interview category</h2>
+            <div className="mt-3 grid max-h-[360px] gap-2 overflow-y-auto sm:grid-cols-2 lg:grid-cols-3">
+              {CATEGORIES.map((c, i) => (
+                <button key={c.label} onClick={() => { setWCatIdx(i); setWTopic(''); }} className={`rounded-lg border px-3 py-2 text-left text-sm transition ${wCatIdx === i ? 'border-brand-500 bg-brand-500/10' : 'border-black/10 hover:border-brand-500 dark:border-white/15'}`}>{c.label}</button>
+              ))}
+            </div>
+          </>)}
+          {wStep === 1 && cat && (<>
+            <h2 className="font-semibold">Which topic in {cat.label}?</h2>
+            {cat.topics.length > 0 && <div className="mt-3 flex flex-wrap gap-2">{cat.topics.map((t) => <Chip key={t} active={wTopic === t} onClick={() => setWTopic(t)}>{t}</Chip>)}</div>}
+            <input value={wTopic} onChange={(e) => setWTopic(e.target.value)} placeholder="…or type any topic" className="mt-3 w-full rounded-lg border border-black/10 bg-transparent px-3 py-2 text-sm outline-none focus:border-brand-500 dark:border-white/15" />
+          </>)}
+          {wStep === 2 && (<>
+            <h2 className="font-semibold">What type of interview?</h2>
+            <div className="mt-3 flex flex-wrap gap-2">{W_TYPES.map((t) => <Chip key={t} active={wType === t} onClick={() => setWType(t)}>{t}</Chip>)}</div>
+            <div className="mt-4"><label className="text-xs font-medium text-black/60 dark:text-white/60">Difficulty</label>
+              <div className="mt-1 flex flex-wrap gap-2">{DIFFICULTIES.map((d) => <Chip key={d} active={difficulty === d} onClick={() => setDifficulty(d)}>{d[0] + d.slice(1).toLowerCase()}</Chip>)}</div>
+            </div>
+            {wType === 'Coding Interview' && <div className="mt-4"><label className="text-xs font-medium text-black/60 dark:text-white/60">Coding problems</label>
+              <div className="mt-1 flex gap-2">{[1, 2, 3, 5].map((n) => <Chip key={n} active={codingCount === n} onClick={() => setCodingCount(n)}>{n}</Chip>)}</div></div>}
+            {(wType === 'Theoretical Interview' || wType === 'Mixed Interview') && <div className="mt-4"><label className="text-xs font-medium text-black/60 dark:text-white/60">Question style</label>
+              <div className="mt-1 flex flex-wrap gap-2">{THEORY_STYLES.map((s) => <Chip key={s} active={theoryStyle === s} onClick={() => setTheoryStyle(s)}>{s}</Chip>)}</div></div>}
+          </>)}
+          {wStep === 3 && (<>
+            <h2 className="font-semibold">Experience level</h2>
+            <div className="mt-3 flex flex-wrap gap-2">{EXPERIENCE.map((e) => <Chip key={e} active={experience === e} onClick={() => setExperience(e)}>{e}</Chip>)}</div>
+          </>)}
+          {wStep === 4 && (<>
+            <h2 className="font-semibold">Interview style (company)</h2>
+            <div className="mt-3 flex flex-wrap gap-2">{COMPANIES.map((c) => <Chip key={c} active={company === c} onClick={() => setCompany(c)}>{c}</Chip>)}</div>
+          </>)}
+          {wStep === 5 && (<>
+            <h2 className="font-semibold">Interview length</h2>
+            <div className="mt-3 flex flex-wrap gap-2">{DURATIONS.map((m) => <Chip key={m} active={durationMin === m} onClick={() => { setDurationMin(m); setRemaining(m * 60); }}>{m} min</Chip>)}</div>
+          </>)}
+          {wStep === 6 && (<>
+            <h2 className="font-semibold">Preferred language</h2>
+            <div className="mt-3 flex flex-wrap gap-2">{LANGUAGES.map((l) => <Chip key={l} active={language === l} onClick={() => setLanguage(l)}>{l}</Chip>)}</div>
+          </>)}
+          {wStep === 7 && cat && (<>
+            <h2 className="font-semibold">Review &amp; start</h2>
+            <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+              <Review k="Category" v={cat.label} /><Review k="Topic" v={wTopic.trim() || cat.label} />
+              <Review k="Type" v={wType} /><Review k="Difficulty" v={difficulty[0] + difficulty.slice(1).toLowerCase()} />
+              {wType === 'Coding Interview' && <Review k="Coding problems" v={String(codingCount)} />}
+              <Review k="Experience" v={experience} /><Review k="Company" v={company} />
+              <Review k="Duration" v={`${durationMin} min`} /><Review k="Language" v={language} />
+            </div>
+            <div className="mt-3 flex items-center gap-1.5 text-xs text-black/50 dark:text-white/50"><ShieldIcon width={14} height={14} /> Camera, mic & screen focus are monitored. Fresh questions are generated by AI when you start.</div>
+          </>)}
         </div>
-        <div className="mt-6 flex items-center gap-3">
-          <button onClick={() => setPhase('lobby')} className="btn-primary">Continue to {topic.label} interview</button>
-          <span className="inline-flex items-center gap-1.5 text-xs text-black/50 dark:text-white/50"><ShieldIcon width={14} height={14} /> Camera, mic & screen focus are monitored.</span>
+
+        <div className="mt-5 flex items-center justify-between">
+          <button onClick={() => setWStep((s) => Math.max(0, s - 1))} disabled={wStep === 0} className="btn-ghost disabled:opacity-40">← Back</button>
+          {wStep < WIZARD_STEPS.length - 1 ? (
+            <button onClick={() => setWStep((s) => s + 1)} disabled={!canNext} className="btn-primary disabled:opacity-40">Next →</button>
+          ) : (
+            <button onClick={beginInterview} className="btn-primary">Start interview</button>
+          )}
         </div>
       </div>
     );
@@ -760,6 +889,15 @@ function InterviewRoomInner() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function Review({ k, v }: { k: string; v: string }) {
+  return (
+    <div className="rounded-lg border border-black/5 p-2.5 dark:border-white/10">
+      <div className="text-[10px] uppercase tracking-wide text-black/40 dark:text-white/40">{k}</div>
+      <div className="mt-0.5 font-medium">{v}</div>
     </div>
   );
 }

@@ -122,9 +122,21 @@ export class PracticeService {
     behaviorSummary?: string;
     resumeContext?: string;
     mode?: 'mixed' | 'theory' | 'coding';
+    experience?: string;
+    company?: string;
+    language?: string;
+    style?: string;
     transcript: { role: 'interviewer' | 'candidate'; content: string }[];
     end?: boolean;
   }): Promise<{ text: string }> {
+    const extra = [
+      input.experience ? `- Candidate experience level: ${input.experience} (calibrate depth/difficulty to this).` : '',
+      input.company ? `- Emulate the interview style of: ${input.company}.` : '',
+      input.style ? `- Question style: ${input.style}.` : '',
+      input.language && input.language !== 'English'
+        ? `- Conduct the interview in ${input.language} (${input.language === 'Mixed' ? 'natural Hindi-English mix / Hinglish' : input.language}).`
+        : '',
+    ].filter(Boolean).join('\n');
     const modeNote =
       input.mode === 'theory'
         ? '\n\nINTERVIEW TYPE: THEORY ONLY. Ask conceptual/verbal questions only. Do NOT set a coding problem.'
@@ -141,7 +153,8 @@ export class PracticeService {
       `- Stream/role: ${input.jobRole} (${input.category})\n` +
       `- Topic focus: ${input.topic ?? input.category}\n` +
       `- Difficulty: ${input.difficulty}\n` +
-      `- Total questions: ${input.count ?? 5}`;
+      `- Total questions: ${input.count ?? 5}` +
+      (extra ? `\n${extra}` : '');
     const directive = input.end
       ? [
           'The interview is now ENDING. Using ALL accumulated evidence from the transcript, produce the COMPLETE final interview report with clear headings:',
