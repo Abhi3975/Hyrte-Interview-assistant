@@ -121,9 +121,16 @@ export class PracticeService {
     personality?: string;
     behaviorSummary?: string;
     resumeContext?: string;
+    mode?: 'mixed' | 'theory' | 'coding';
     transcript: { role: 'interviewer' | 'candidate'; content: string }[];
     end?: boolean;
   }): Promise<{ text: string }> {
+    const modeNote =
+      input.mode === 'theory'
+        ? '\n\nINTERVIEW TYPE: THEORY ONLY. Ask conceptual/verbal questions only. Do NOT set a coding problem.'
+        : input.mode === 'coding'
+          ? '\n\nINTERVIEW TYPE: CODING FOCUSED. Center the interview on the live coding challenge and their code/approach; keep conceptual questions minimal.'
+          : '';
     const persona = PERSONALITIES[input.personality ?? 'professional'] ?? PERSONALITIES.professional;
     const resume = input.resumeContext
       ? `\n\nCANDIDATE RESUME CONTEXT (ask some questions grounded in their REAL projects/skills; verify their claims): ${input.resumeContext}`
@@ -146,7 +153,7 @@ export class PracticeService {
       : 'Continue the interview naturally. Reply with ONLY your next spoken message as the interviewer — no stage directions. Keep it conversational and reasonably brief (it is read aloud by TTS), EXCEPT when giving structured code review/feedback which can be longer. Ask ONE thing at a time and wait.';
 
     const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
-      { role: 'system', content: `${INTERVIEWER_SYSTEM}\n\n${persona}\n\n${ctx}${resume}\n\n${directive}` },
+      { role: 'system', content: `${INTERVIEWER_SYSTEM}\n\n${persona}\n\n${ctx}${resume}${modeNote}\n\n${directive}` },
     ];
     if (input.transcript.length === 0) {
       messages.push({ role: 'user', content: '(The candidate has just joined the interview. Greet them warmly, explain how it works, and ask them how they are and to briefly introduce themselves.)' });

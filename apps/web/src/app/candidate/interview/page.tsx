@@ -34,6 +34,11 @@ const TOPICS: { label: string; category: string; topic: string; blurb: string }[
 ];
 const DIFFICULTIES = ['EASY', 'MEDIUM', 'HARD', 'EXPERT'] as const;
 const QUESTION_COUNTS = [3, 5, 8, 10];
+const INTERVIEW_TYPES: { id: 'mixed' | 'theory' | 'coding'; label: string }[] = [
+  { id: 'mixed', label: 'Mixed' },
+  { id: 'theory', label: 'Theory only' },
+  { id: 'coding', label: 'Coding only' },
+];
 const PERSONALITIES: { id: string; label: string }[] = [
   { id: 'friendly', label: 'Friendly' },
   { id: 'professional', label: 'Professional' },
@@ -96,6 +101,7 @@ function InterviewRoomInner() {
   const [durationMin, setDurationMin] = useState(aDur ? Number(aDur) : 20);
   const [numQuestions, setNumQuestions] = useState(5);
   const [personality, setPersonality] = useState('professional');
+  const [interviewType, setInterviewType] = useState<'mixed' | 'theory' | 'coding'>('mixed');
 
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
@@ -313,7 +319,7 @@ function InterviewRoomInner() {
     try {
       const res = await api.post<{ text: string }>('/practice/interview/turn', {
         jobRole: topic.label, category: topic.category, difficulty, topic: topic.topic,
-        count: numQuestions, personality, candidateName: user?.fullName?.split(' ')[0], resumeContext: resumeContextRef.current,
+        count: numQuestions, personality, mode: interviewType, candidateName: user?.fullName?.split(' ')[0], resumeContext: resumeContextRef.current,
         transcript: base.map((m) => ({ role: m.role === 'ai' ? 'interviewer' : 'candidate', content: m.text })),
         end: opts?.end ?? false, behaviorSummary: opts?.behaviorSummary,
       });
@@ -329,7 +335,7 @@ function InterviewRoomInner() {
       setSending(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [topic, difficulty, numQuestions, personality, user, speak]);
+  }, [topic, difficulty, numQuestions, personality, interviewType, user, speak]);
   useEffect(() => { sendTurnRef.current = sendTurn; }, [sendTurn]);
 
   function onSend() {
@@ -413,7 +419,7 @@ function InterviewRoomInner() {
         sessionIdRef.current = s.sessionId;
       } catch { sessionIdRef.current = null; }
 
-      if (CODE_CATEGORIES.has(topic.category)) {
+      if (interviewType !== 'theory' && CODE_CATEGORIES.has(topic.category)) {
         const kind = SQL_CATEGORIES.has(topic.category) ? 'sql' : 'code';
         try {
           const prob = await api.post<CodingProblem>('/practice/coding/generate', { topic: topic.topic, difficulty, kind });
@@ -510,6 +516,7 @@ function InterviewRoomInner() {
           <Picker label="Duration" options={['10', '20', '30']} value={String(durationMin)} onChange={(v) => { setDurationMin(Number(v)); setRemaining(Number(v) * 60); }} render={(m) => `${m} min`} />
           <Picker label="Questions" options={QUESTION_COUNTS.map(String)} value={String(numQuestions)} onChange={(v) => setNumQuestions(Number(v))} render={(c) => c} />
           <Picker label="Interviewer" options={PERSONALITIES.map((p) => p.id)} value={personality} onChange={setPersonality} render={(id) => PERSONALITIES.find((p) => p.id === id)?.label ?? id} />
+          <Picker label="Interview type" options={INTERVIEW_TYPES.map((t) => t.id)} value={interviewType} onChange={(v) => setInterviewType(v as any)} render={(id) => INTERVIEW_TYPES.find((t) => t.id === id)?.label ?? id} />
         </div>
         <div className="mt-6 flex items-center gap-3">
           <button onClick={() => setPhase('lobby')} className="btn-primary">Continue to {topic.label} interview</button>
