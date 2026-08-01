@@ -32,49 +32,60 @@ enum UserStatus {
   DELETED
 }
 
-model Organization {
-  id        String   @id @default(cuid())
-  name      String
-  slug      String   @unique
-  plan      Plan     @default(FREE)
-  // Org-scoped feature flags & limits, stored as JSON for flexibility.
-  settings  Json     @default("{}")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+// HYRTE Section 0.1 — Institution/Career-Center is a distinct tenant kind
+// from a hiring Company, added now (Phase 1 schema work) even though no
+// institution-facing feature ships yet, to avoid a second migration later.
+enum OrganizationType {
+  COMPANY
+  INSTITUTION
+}
 
-  users              User[]
-  memberships        Membership[]
-  interviews         Interview[]
-  questions          Question[]
-  questionSets       QuestionSet[]
-  subscriptions      Subscription[]
-  auditLogs          AuditLog[]
+model Organization {
+  id        String           @id @default(cuid())
+  name      String
+  slug      String           @unique
+  type      OrganizationType @default(COMPANY)
+  plan      Plan             @default(FREE)
+  // Org-scoped feature flags & limits, stored as JSON for flexibility.
+  settings  Json             @default("{}")
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  users         User[]
+  memberships   Membership[]
+  interviews    Interview[]
+  questions     Question[]
+  questionSets  QuestionSet[]
+  subscriptions Subscription[]
+  auditLogs     AuditLog[]
 
   @@index([slug])
 }
 
 model User {
-  id             String     @id @default(cuid())
-  email          String     @unique
+  id             String        @id @default(cuid())
+  email          String        @unique
   passwordHash   String?
   fullName       String
   avatarUrl      String?
-  role           Role       @default(CANDIDATE)
-  status         UserStatus @default(ACTIVE)
-  emailVerified  Boolean    @default(false)
+  role           Role          @default(CANDIDATE)
+  status         UserStatus    @default(ACTIVE)
+  emailVerified  Boolean       @default(false)
   organizationId String?
   organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
   lastLoginAt    DateTime?
 
-  memberships       Membership[]
-  candidateProfile  CandidateProfile?
-  refreshTokens     RefreshToken[]
-  createdInterviews Interview[]        @relation("InterviewCreatedBy")
-  sessions          InterviewSession[]
-  submittedQuestions Question[]        @relation("QuestionSubmittedBy")
-  auditLogs         AuditLog[]
+  memberships        Membership[]
+  candidateProfile   CandidateProfile?
+  refreshTokens      RefreshToken[]
+  createdInterviews  Interview[]                @relation("InterviewCreatedBy")
+  sessions           InterviewSession[]
+  submittedQuestions Question[]                 @relation("QuestionSubmittedBy")
+  auditLogs          AuditLog[]
+  hyrteSessions      HyrteSession[]
+  intelligenceCard   CandidateIntelligenceCard?
 
   @@index([organizationId])
   @@index([role])
@@ -96,14 +107,14 @@ model Membership {
 }
 
 model RefreshToken {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
-  tokenHash String   @unique
+  tokenHash String    @unique
   userAgent String?
   ip        String?
   expiresAt DateTime
   revokedAt DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -115,16 +126,16 @@ model RefreshToken {
 // ─────────────────────────────────────────────────────────────
 
 model CandidateProfile {
-  id            String   @id @default(cuid())
-  userId        String   @unique
-  headline      String?
-  resumeUrl     String?
-  resumeText    String?  // extracted text for AI context & search
-  skills        String[] // selected + parsed skills
-  yearsOfExp    Int?
-  location      String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id         String   @id @default(cuid())
+  userId     String   @unique
+  headline   String?
+  resumeUrl  String?
+  resumeText String? // extracted text for AI context & search
+  skills     String[] // selected + parsed skills
+  yearsOfExp Int?
+  location   String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
@@ -158,20 +169,20 @@ enum Difficulty {
 }
 
 enum QuestionType {
-  CODING       // DSA / algorithmic with test cases
+  CODING // DSA / algorithmic with test cases
   MCQ
   SHORT_ANSWER
   LONG_ANSWER
   SYSTEM_DESIGN
   BEHAVIORAL
-  CASE_STUDY   // MBA / PM
+  CASE_STUDY // MBA / PM
 }
 
 // Source provenance — critical for the "legally compliant sources" policy.
 enum QuestionSource {
-  INTERNAL          // proprietary, org-created
-  USER_SUBMITTED    // submitted by a user, subject to moderation
-  AI_GENERATED      // dynamically generated
+  INTERNAL // proprietary, org-created
+  USER_SUBMITTED // submitted by a user, subject to moderation
+  AI_GENERATED // dynamically generated
   HUGGINGFACE
   KAGGLE
   GITHUB_PERMISSIVE
@@ -186,9 +197,9 @@ enum LicenseType {
   BSD_3_CLAUSE
   CC_BY_4_0
   CC0_PUBLIC_DOMAIN
-  PROPRIETARY_OWNED   // org owns it
-  USER_GRANTED        // submitter granted us a license
-  AI_GENERATED        // no third-party rights
+  PROPRIETARY_OWNED // org owns it
+  USER_GRANTED // submitter granted us a license
+  AI_GENERATED // no third-party rights
 }
 
 enum ModerationStatus {
@@ -199,9 +210,9 @@ enum ModerationStatus {
 }
 
 model Question {
-  id             String         @id @default(cuid())
+  id             String       @id @default(cuid())
   // Stable public identifier, e.g. "DSA-TREES-000123"
-  publicId       String         @unique
+  publicId       String       @unique
   title          String
   prompt         String
   category       Category
@@ -209,37 +220,37 @@ model Question {
   difficulty     Difficulty
   type           QuestionType
   tags           String[]
-  companyTags    String[]       // e.g. ["fintech","faang-style"] — descriptive, not scraped
+  companyTags    String[] // e.g. ["fintech","faang-style"] — descriptive, not scraped
   // Expected answer / reference solution (never shown to candidates).
   expectedAnswer String?
   // Structured rubric used by the Evaluation Engine.
-  rubric         Json           @default("[]")
+  rubric         Json         @default("[]")
   // Structured, ordered follow-up questions the interviewer may ask.
   followUps      String[]
   // Coding questions: hidden + sample test cases live in TestCase[].
-  metadata       Json           @default("{}")
+  metadata       Json         @default("{}")
 
   // ── Provenance & licensing ──
-  source         QuestionSource
-  license        License?       @relation(fields: [licenseId], references: [id])
-  licenseId      String?
+  source      QuestionSource
+  license     License?         @relation(fields: [licenseId], references: [id])
+  licenseId   String?
   // Deduplication fingerprint (normalized prompt hash).
-  contentHash    String
-  moderation     ModerationStatus @default(PENDING)
+  contentHash String
+  moderation  ModerationStatus @default(PENDING)
 
   // Ownership
   organizationId String?
-  organization   Organization?  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   submittedById  String?
-  submittedBy    User?          @relation("QuestionSubmittedBy", fields: [submittedById], references: [id], onDelete: SetNull)
+  submittedBy    User?         @relation("QuestionSubmittedBy", fields: [submittedById], references: [id], onDelete: SetNull)
   // If this row is an AI-generated variation of another question.
   parentId       String?
-  parent         Question?      @relation("QuestionVariations", fields: [parentId], references: [id], onDelete: SetNull)
-  variations     Question[]     @relation("QuestionVariations")
+  parent         Question?     @relation("QuestionVariations", fields: [parentId], references: [id], onDelete: SetNull)
+  variations     Question[]    @relation("QuestionVariations")
 
-  isActive       Boolean        @default(true)
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   testCases         TestCase[]
   questionSets      QuestionSetItem[]
@@ -255,13 +266,13 @@ model Question {
 
 // Normalized license record with attribution for CC-BY compliance.
 model License {
-  id           String      @id @default(cuid())
-  type         LicenseType
-  sourceName   String      // e.g. "HuggingFace: openai/humaneval"
-  sourceUrl    String?
-  attribution  String?     // required text for CC-BY
-  requiresAttribution Boolean @default(false)
-  createdAt    DateTime    @default(now())
+  id                  String      @id @default(cuid())
+  type                LicenseType
+  sourceName          String // e.g. "HuggingFace: openai/humaneval"
+  sourceUrl           String?
+  attribution         String? // required text for CC-BY
+  requiresAttribution Boolean     @default(false)
+  createdAt           DateTime    @default(now())
 
   questions Question[]
 
@@ -284,15 +295,15 @@ model TestCase {
 
 // A curated bank (internal, company-specific, or role-specific).
 model QuestionSet {
-  id             String   @id @default(cuid())
+  id             String        @id @default(cuid())
   name           String
   description    String?
   category       Category
   organizationId String?
   organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  isPublic       Boolean  @default(false)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  isPublic       Boolean       @default(false)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
 
   items      QuestionSetItem[]
   interviews Interview[]
@@ -335,24 +346,24 @@ enum InterviewStatus {
 }
 
 model Interview {
-  id             String        @id @default(cuid())
+  id             String          @id @default(cuid())
   organizationId String
-  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   title          String
   jobRole        String
   category       Category
-  difficulty     Difficulty    @default(MEDIUM)
-  mode           InterviewMode @default(MIXED)
+  difficulty     Difficulty      @default(MEDIUM)
+  mode           InterviewMode   @default(MIXED)
   status         InterviewStatus @default(DRAFT)
-  durationMins   Int           @default(45)
+  durationMins   Int             @default(45)
   questionSetId  String?
-  questionSet    QuestionSet?  @relation(fields: [questionSetId], references: [id], onDelete: SetNull)
+  questionSet    QuestionSet?    @relation(fields: [questionSetId], references: [id], onDelete: SetNull)
   // Config: number of questions, proctoring on/off, allowed tab switches, etc.
-  config         Json          @default("{}")
+  config         Json            @default("{}")
   createdById    String
-  createdBy      User          @relation("InterviewCreatedBy", fields: [createdById], references: [id])
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  createdBy      User            @relation("InterviewCreatedBy", fields: [createdById], references: [id])
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 
   questions InterviewQuestion[]
   sessions  InterviewSession[]
@@ -378,7 +389,7 @@ model InterviewQuestion {
 // Exam lifecycle — admin-gated start + auto-termination (Exam Security Policy).
 enum ExamState {
   SCHEDULED
-  WAITING_APPROVAL   // candidate cannot self-start; admin must unlock
+  WAITING_APPROVAL // candidate cannot self-start; admin must unlock
   ACTIVE
   WARNING_ISSUED
   SUSPENDED
@@ -388,12 +399,12 @@ enum ExamState {
 
 // A single candidate's attempt at an interview.
 model InterviewSession {
-  id            String          @id @default(cuid())
-  interviewId   String
-  interview     Interview       @relation(fields: [interviewId], references: [id], onDelete: Cascade)
-  candidateId   String
-  candidate     User            @relation(fields: [candidateId], references: [id], onDelete: Cascade)
-  status        InterviewStatus @default(SCHEDULED)
+  id          String          @id @default(cuid())
+  interviewId String
+  interview   Interview       @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  candidateId String
+  candidate   User            @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  status      InterviewStatus @default(SCHEDULED)
 
   // ── Exam security & lifecycle ──
   examState        ExamState @default(SCHEDULED)
@@ -401,7 +412,7 @@ model InterviewSession {
   // is stored. The token is single-use and time-boxed.
   sessionTokenHash String?   @unique
   tokenExpiresAt   DateTime?
-  approvedById     String?   // admin/recruiter who unlocked the assessment
+  approvedById     String? // admin/recruiter who unlocked the assessment
   approvedAt       DateTime?
   identityVerified Boolean   @default(false)
   warningCount     Int       @default(0)
@@ -409,14 +420,14 @@ model InterviewSession {
   terminatedReason String?
   lockedAt         DateTime? // once locked the candidate cannot rejoin
 
-  startedAt     DateTime?
-  completedAt   DateTime?
-  recordingUrl  String?     // S3 key for full session replay
-  transcript    Json?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  recordingUrl String? // S3 key for full session replay
+  transcript   Json?
   // Live risk snapshot maintained by the risk engine (0-100 + probability).
-  riskScore     Float       @default(0)
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+  riskScore    Float     @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   answers           Answer[]
   evaluation        Evaluation?
@@ -436,7 +447,7 @@ model Warning {
   id            String           @id @default(cuid())
   sessionId     String
   session       InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  level         Int              // 1, 2, or 3
+  level         Int // 1, 2, or 3
   triggerType   ProctorEventType
   // Evidence pointers (S3 keys) — screenshot + webcam snapshot.
   screenshotUrl String?
@@ -450,36 +461,36 @@ model Warning {
 
 // Rolling AI + heuristic risk assessment for a session (evidence, not verdict).
 model RiskAssessment {
-  id                 String   @id @default(cuid())
-  sessionId          String   @unique
-  session            InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  riskScore          Float    @default(0)  // 0-100
-  cheatingProbability Float   @default(0)  // 0-1
-  confidenceScore    Float    @default(0)  // 0-1 model confidence in the assessment
+  id                  String           @id @default(cuid())
+  sessionId           String           @unique
+  session             InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  riskScore           Float            @default(0) // 0-100
+  cheatingProbability Float            @default(0) // 0-1
+  confidenceScore     Float            @default(0) // 0-1 model confidence in the assessment
   // Weighted contribution per signal category, for explainability.
-  breakdown          Json     @default("{}")
-  topSignals         String[]
-  updatedAt          DateTime @updatedAt
-  createdAt          DateTime @default(now())
+  breakdown           Json             @default("{}")
+  topSignals          String[]
+  updatedAt           DateTime         @updatedAt
+  createdAt           DateTime         @default(now())
 }
 
 model Answer {
-  id                 String   @id @default(cuid())
-  sessionId          String
-  session            InterviewSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  id                  String            @id @default(cuid())
+  sessionId           String
+  session             InterviewSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   interviewQuestionId String
-  interviewQuestion  InterviewQuestion @relation(fields: [interviewQuestionId], references: [id], onDelete: Cascade)
+  interviewQuestion   InterviewQuestion @relation(fields: [interviewQuestionId], references: [id], onDelete: Cascade)
   // Free-text / transcribed answer, or code for coding rounds.
-  responseText       String?
-  code               String?
-  language           String?
+  responseText        String?
+  code                String?
+  language            String?
   // Code execution result for coding rounds.
-  execResult         Json?
+  execResult          Json?
   // Per-answer AI score (0-100) + rationale.
-  score              Float?
-  aiFeedback         Json?
-  timeSpentSec       Int?
-  createdAt          DateTime @default(now())
+  score               Float?
+  aiFeedback          Json?
+  timeSpentSec        Int?
+  createdAt           DateTime          @default(now())
 
   @@index([sessionId])
 }
@@ -500,25 +511,25 @@ enum SubmissionStatus {
 }
 
 model CodingSubmission {
-  id           String   @id @default(cuid())
-  sessionId    String
-  session      InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  questionId   String
-  question     Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
-  language     String
-  code         String
-  status       SubmissionStatus @default(QUEUED)
+  id          String           @id @default(cuid())
+  sessionId   String
+  session     InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  questionId  String
+  question    Question         @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  language    String
+  code        String
+  status      SubmissionStatus @default(QUEUED)
   // Per-test-case results from the execution engine.
-  results      Json     @default("[]")
-  passed       Int      @default(0)
-  total        Int      @default(0)
-  runtimeMs    Int?
-  memoryKb     Int?
+  results     Json             @default("[]")
+  passed      Int              @default(0)
+  total       Int              @default(0)
+  runtimeMs   Int?
+  memoryKb    Int?
   // Similarity fingerprint (token-shingle hash set) for plagiarism checks.
-  fingerprint  String?
+  fingerprint String?
   // Highest similarity found against other submissions (0-1), if flagged.
-  similarity   Float?
-  createdAt    DateTime @default(now())
+  similarity  Float?
+  createdAt   DateTime         @default(now())
 
   @@index([sessionId])
   @@index([questionId])
@@ -538,20 +549,20 @@ enum Recommendation {
 }
 
 model Evaluation {
-  id             String   @id @default(cuid())
-  sessionId      String   @unique
+  id             String           @id @default(cuid())
+  sessionId      String           @unique
   session        InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  overallScore   Float    // 0-100 aggregate
+  overallScore   Float // 0-100 aggregate
   // Competency breakdown: communication, technical, confidence, problemSolving,
   // leadership, behavioral — stored as a flexible scored map.
-  competencies   Json     @default("{}")
+  competencies   Json             @default("{}")
   strengths      String[]
   weaknesses     String[]
   summary        String
   recommendation Recommendation
   // Which model(s) produced this, for auditability & A/B.
-  modelMeta      Json     @default("{}")
-  createdAt      DateTime @default(now())
+  modelMeta      Json             @default("{}")
+  createdAt      DateTime         @default(now())
 
   @@index([recommendation])
 }
@@ -622,18 +633,18 @@ enum ProctorSeverity {
 }
 
 model ProctorEvent {
-  id         String   @id @default(cuid())
-  sessionId  String
-  session    InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  type       ProctorEventType
-  severity   ProctorSeverity  @default(LOW)
+  id          String           @id @default(cuid())
+  sessionId   String
+  session     InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  type        ProctorEventType
+  severity    ProctorSeverity  @default(LOW)
   // Raw payload from the client SDK or external proctor provider.
-  payload    Json     @default("{}")
+  payload     Json             @default("{}")
   // Optional evidence pointer (S3 key: snapshot/clip).
   evidenceUrl String?
   // Which system produced it: "internal" | "<external-proctor-name>".
-  provider   String   @default("internal")
-  occurredAt DateTime @default(now())
+  provider    String           @default("internal")
+  occurredAt  DateTime         @default(now())
 
   @@index([sessionId, type])
   @@index([severity])
@@ -658,17 +669,17 @@ enum SubscriptionStatus {
 }
 
 model Subscription {
-  id                 String   @id @default(cuid())
-  organizationId     String
-  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  plan               Plan
-  status             SubscriptionStatus @default(TRIALING)
-  stripeCustomerId   String?
-  stripeSubId        String?
-  seats              Int      @default(1)
-  currentPeriodEnd   DateTime?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id               String             @id @default(cuid())
+  organizationId   String
+  organization     Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan             Plan
+  status           SubscriptionStatus @default(TRIALING)
+  stripeCustomerId String?
+  stripeSubId      String?
+  seats            Int                @default(1)
+  currentPeriodEnd DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
 
   @@index([organizationId])
 }
@@ -678,19 +689,565 @@ model Subscription {
 // ─────────────────────────────────────────────────────────────
 
 model AuditLog {
-  id             String   @id @default(cuid())
+  id             String        @id @default(cuid())
   organizationId String?
   organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
   actorId        String?
-  actor          User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
-  action         String   // e.g. "interview.create", "question.approve"
+  actor          User?         @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  action         String // e.g. "interview.create", "question.approve"
   targetType     String?
   targetId       String?
   ip             String?
   userAgent      String?
-  metadata       Json     @default("{}")
-  createdAt      DateTime @default(now())
+  metadata       Json          @default("{}")
+  createdAt      DateTime      @default(now())
 
   @@index([organizationId, createdAt])
   @@index([action])
+}
+
+// ─────────────────────────────────────────────────────────────
+// HYRTE — Living Workplace Simulation (Workplace Environment Engine)
+// Phase 1: session shell + workplace content. Session's 6 generator inputs
+// (role/experienceLevel/industry/companyType/difficulty/culture) are captured
+// here but currently seeded from a hardcoded fixture — the Dynamic Simulation
+// Generator (a later phase) replaces the fixture with LLM-generated content
+// without touching this schema.
+// ─────────────────────────────────────────────────────────────
+
+enum HyrteSessionType {
+  PRACTICE
+  ASSESSMENT
+}
+
+enum HyrteSessionPhase {
+  MISSION_BRIEF
+  BASELINE_SKILL_CHECK
+  WORKSPACE_ACTIVE
+  INTERVIEW
+  REPORT
+  COMPLETED
+}
+
+model HyrteSession {
+  id                  String            @id @default(cuid())
+  candidateId         String
+  candidate           User              @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  sessionType         HyrteSessionType  @default(PRACTICE)
+  phase               HyrteSessionPhase @default(MISSION_BRIEF)
+  // The 6 generator inputs (doc §4).
+  role                String
+  experienceLevel     String
+  industry            String
+  companyType         String
+  difficulty          Difficulty
+  culture             String
+  companyName         String
+  // UX flow §8 steps 1-2, generated alongside the rest of the fixture at
+  // session creation but only shown before WORKSPACE_ACTIVE.
+  missionBrief        Json?
+  baselineChallenge   Json?
+  // The candidate's chosen optionId + free-text reasoning (§8 step 2).
+  baselineResponse    Json?
+  // Growing turn array for the reflection interview (doc §9) — same pattern as
+  // the main product's InterviewSession.transcript.
+  interviewTranscript Json?
+  // §5.9 Adversarial "Boss Level" mode — explicit opt-in, and a hard-capped
+  // jab counter enforced in code (HyrteInterviewService), never left to the
+  // LLM's own judgment about when to stop.
+  interviewBossMode   Boolean           @default(false)
+  interviewJabCount   Int               @default(0)
+  startedAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  companyState        HyrteCompanyState?
+  stakeholders        HyrteStakeholder[]
+  inboxMessages       HyrteInboxMessage[]
+  slackMessages       HyrteSlackMessage[]
+  tasks               HyrteTask[]
+  calendarEvents      HyrteCalendarEvent[]
+  knowledgeDocs       HyrteKnowledgeDoc[]
+  decisionLog         HyrteDecisionLogEntry[]
+  stakeholderMemory   HyrteStakeholderMemory[]
+  interviewReport     HyrteInterviewReport?
+  evidenceObjects     EvidenceObject[]
+  jobSuccessModel     JobSuccessModel?
+  investigationPlan   InvestigationPlan?
+  councilAgentReports HyrteCouncilAgentReport[]
+  councilDiscussion   HyrteCouncilDiscussionEntry[]
+  councilQA           HyrteCouncilQA[]
+  aiAuditLog          HyrteAiAuditLog[]
+  hiringOutcomeEvents HyrteHiringOutcomeEvent[]
+
+  @@index([candidateId])
+}
+
+// §8 Hardening — audit trail across every AI agent call (Council's 9 agents +
+// discussion synthesis, Decision Cortex Q&A, Report Intelligence), not just
+// the candidate-facing Decision/Evidence graphs. Answers "did every agent
+// actually run for this session" (the bias-auditor coverage question) and
+// gives a debuggable trail independent of what each agent concluded.
+model HyrteAiAuditLog {
+  id           String       @id @default(cuid())
+  sessionId    String
+  session      HyrteSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  agentKey     String // e.g. "council.hiringManager", "council.discussion", "cortex.ask", "reportIntelligence.dnaRecovery"
+  success      Boolean
+  durationMs   Int
+  errorMessage String?
+  createdAt    DateTime     @default(now())
+
+  @@index([sessionId, createdAt])
+  @@index([agentKey, success])
+}
+
+// Doc §10's Decision Intelligence Report, scoped to simulation-only evidence
+// (no resume/JD claims — see plan for System 5).
+// The candidate-facing "combined report" (§6.3.4 default view). `recommendation`
+// is now set from the Decision Council's deterministic vote tally (Phase 6),
+// not a single LLM guess — see DecisionCouncilService.
+model HyrteInterviewReport {
+  id                     String       @id @default(cuid())
+  sessionId              String       @unique
+  session                HyrteSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  strengths              String[]
+  developmentAreas       String[]
+  contradictions         Json         @default("[]") // [{ claimedInInterview, evidenceFromSimulation }]
+  recommendation         String // e.g. "Strong Fit" | "Fit" | "Weak Fit" | "Not a Fit"
+  summary                String
+  evidenceTrail          Json         @default("[]") // [{ action, interviewProbe, interpretation }]
+  // §6.3.3 Decision Cortex aggregate fields — not present until Phase 6 runs
+  // (nullable so this stays backward-compatible with reports generated by
+  // Phase 4's synthesis-only flow).
+  confidencePercent      Int?
+  nextStepRecommendation String?
+  // §7 Phase 7 — read-models computed over the DIG (Decision Graph + Evidence
+  // Graph + Council output populated in Phases 1-6), not new data collection.
+  // All nullable — absent until Phase 7's ReportIntelligenceService runs.
+  decisionDNA            Json? // { traits: string[], reasoning: string }
+  recoveryScore          Json? // { score: int, descriptor: string, reasoning: string }
+  counterfactuals        Json?        @default("[]") // [{ decisionPoint, alternativePath, projectedOutcome }]
+  predictions            Json?        @default("[]") // [{ dimension, likelihood, reasoning }] — the Prediction Engine
+  metricsBreakdown       Json?        @default("[]") // [{ bucket, score, explanation }] — §7 shared metrics framework
+  generatedAt            DateTime     @default(now())
+}
+
+// §6.3.1 — one row per Decision Council agent per session, visible directly
+// to the recruiter, not only as input to the combined report.
+enum CouncilStance {
+  HIRE
+  LEAN_HIRE
+  LEAN_NO_HIRE
+  NO_HIRE
+}
+
+model HyrteCouncilAgentReport {
+  id        String         @id @default(cuid())
+  sessionId String
+  session   HyrteSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  agentKey  String // e.g. "hiringManager" — see council-agents.config.ts
+  agentName String
+  // Null for the 4 non-voting oversight agents (Devil's Advocate, Bias
+  // Auditor, Evidence Auditor, Decision Cortex) — their job is to challenge/
+  // aggregate, not cast a hire/no-hire lean of their own.
+  stance    CouncilStance?
+  reasoning String
+  keyPoints String[]       @default([])
+  createdAt DateTime       @default(now())
+
+  @@unique([sessionId, agentKey])
+  @@index([sessionId])
+}
+
+// §6.3.2 — the committee's actual debate, not just a final aggregated score.
+model HyrteCouncilDiscussionEntry {
+  id                   String       @id @default(cuid())
+  sessionId            String
+  session              HyrteSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  agentKey             String
+  statement            String
+  respondingToAgentKey String?
+  ordinal              Int
+  createdAt            DateTime     @default(now())
+
+  @@index([sessionId, ordinal])
+}
+
+// §6.3.3 — Decision Cortex's recruiter Q&A history, persisted so a recruiter
+// can revisit past answers without re-asking.
+model HyrteCouncilQA {
+  id        String       @id @default(cuid())
+  sessionId String
+  session   HyrteSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  askedBy   String // recruiter userId
+  question  String
+  answer    String
+  createdAt DateTime     @default(now())
+
+  @@index([sessionId, createdAt])
+}
+
+// Mutable company KPI object every future stakeholder agent reads before responding (doc §5).
+model HyrteCompanyState {
+  sessionId            String       @id
+  session              HyrteSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  revenue              Int
+  customerSatisfaction Int
+  engineeringCapacity  Int
+  technicalDebt        Int
+  teamMorale           Int
+  budget               Int
+  riskLevel            Int
+  deadlinePressure     Int
+  marketReputation     Int
+  cashRunway           Int
+  complianceRisk       Int
+  // Phase 2 — Living Organizational World Model (§4.11) canonical variable
+  // list completed; the original 11 fields above predate this phase.
+  productQuality       Int          @default(50)
+  burnout              Int          @default(50)
+  hiringCapacity       Int          @default(50)
+  operationalRisk      Int          @default(50)
+  growth               Int          @default(50)
+  updatedAt            DateTime     @updatedAt
+}
+
+model HyrteStakeholder {
+  id              String       @id @default(cuid())
+  sessionId       String
+  session         HyrteSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  name            String
+  role            String
+  avatarSeed      String
+  // Traits/goals, read by the Stakeholder Engine's agent prompt.
+  personality     Json         @default("{}")
+  // 12-layer stakeholder architecture (§4.12) Layer 10 — what this stakeholder
+  // actually wants that is never told to the candidate upfront. Read only by
+  // HyrteStakeholderAgentService's prompt; every API response that returns a
+  // stakeholder row MUST select fields explicitly and omit this one.
+  hiddenIntention String?
+  // Relationship toward this specific candidate — updated after every agent interaction.
+  trust           Int          @default(50)
+  respect         Int          @default(50)
+  cooperation     Int          @default(50)
+  influence       Int          @default(50)
+  // Emotional state, seeded from difficulty by the generator, also updated after every interaction.
+  stress          Int          @default(50)
+  urgency         Int          @default(50)
+  patience        Int          @default(50)
+  motivation      Int          @default(50)
+
+  inboxMessages HyrteInboxMessage[]
+  slackMessages HyrteSlackMessage[]
+  memory        HyrteStakeholderMemory[]
+
+  @@index([sessionId])
+}
+
+// Per-stakeholder conversation transcript, read by the agent to stay coherent across turns.
+model HyrteStakeholderMemory {
+  id            String           @id @default(cuid())
+  sessionId     String
+  session       HyrteSession     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  stakeholderId String
+  stakeholder   HyrteStakeholder @relation(fields: [stakeholderId], references: [id], onDelete: Cascade)
+  speaker       String // "candidate" | "stakeholder"
+  content       String
+  createdAt     DateTime         @default(now())
+
+  @@index([sessionId, stakeholderId, createdAt])
+}
+
+model HyrteInboxMessage {
+  id                String            @id @default(cuid())
+  sessionId         String
+  session           HyrteSession      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  fromStakeholderId String?
+  fromStakeholder   HyrteStakeholder? @relation(fields: [fromStakeholderId], references: [id], onDelete: SetNull)
+  subject           String
+  body              String
+  urgent            Boolean           @default(false)
+  // §4.20 Ethical Gray Zones — flagged at generation time; read back when the
+  // candidate replies so the resulting evidence gets tagged ETHICAL_DECISION
+  // instead of a generic SIMULATION_ACTION.
+  ethicalDilemma    Boolean           @default(false)
+  readAt            DateTime?
+  createdAt         DateTime          @default(now())
+
+  @@index([sessionId])
+}
+
+model HyrteSlackMessage {
+  id                String            @id @default(cuid())
+  sessionId         String
+  session           HyrteSession      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  channel           String // "#product" | "dm:<stakeholderId>"
+  fromStakeholderId String?
+  fromStakeholder   HyrteStakeholder? @relation(fields: [fromStakeholderId], references: [id], onDelete: SetNull)
+  body              String
+  ethicalDilemma    Boolean           @default(false)
+  createdAt         DateTime          @default(now())
+
+  @@index([sessionId, channel])
+}
+
+model HyrteTask {
+  id        String       @id @default(cuid())
+  sessionId String
+  session   HyrteSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  title     String
+  priority  String
+  status    String       @default("open")
+  dueAt     DateTime?
+  createdAt DateTime     @default(now())
+
+  @@index([sessionId])
+}
+
+model HyrteCalendarEvent {
+  id        String       @id @default(cuid())
+  sessionId String
+  session   HyrteSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  title     String
+  startAt   DateTime
+  endAt     DateTime
+
+  @@index([sessionId])
+}
+
+model HyrteKnowledgeDoc {
+  id        String       @id @default(cuid())
+  sessionId String
+  session   HyrteSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  title     String
+  body      String
+  category  String
+
+  @@index([sessionId])
+}
+
+// Auto-generated timeline of what the candidate did (doc §3) — raw material for the future interviewer.
+// Doubles as the Decision Intelligence Graph's Decision Graph node (build-prompt
+// §3.5): reasoning/alternativesConsidered/outcome/recoveryOf are the DIG fields,
+// added on top of the original actor/actionType/payload rather than a new table
+// (Phase 1 architecture decision — see ARCHITECTURE.md §4). Written through
+// DecisionGraphService (apps/api/src/hyrte/dig/decision-graph.service.ts), the
+// DIG's write-path contract, never via a raw Prisma call from a feature service.
+model HyrteDecisionLogEntry {
+  id                     String                  @id @default(cuid())
+  sessionId              String
+  session                HyrteSession            @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  actor                  String // candidateId today; a stakeholderId once agents can act
+  actionType             String // "email.reply" | "slack.send" | "task.complete" | ...
+  payload                Json                    @default("{}")
+  // DIG Decision Graph node fields — optional because most Phase-1 callers
+  // (existing workplace actions) won't populate them yet; later phases
+  // (task execution, ethical gray zones) are expected to fill these in.
+  reasoning              String?
+  alternativesConsidered String[]                @default([])
+  riskAssessment         String?
+  outcome                String?
+  recoveryOfId           String?
+  recoveryOf             HyrteDecisionLogEntry?  @relation("RecoveryChain", fields: [recoveryOfId], references: [id], onDelete: SetNull)
+  recoveries             HyrteDecisionLogEntry[] @relation("RecoveryChain")
+  createdAt              DateTime                @default(now())
+
+  @@index([sessionId, createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────
+// HYRTE Phase 1 — Data backbone (build prompt §3): Candidate Evidence Graph,
+// Candidate Intelligence Card, Job Success Model, Investigation Plan.
+// Schema only in this phase — no subsystem writes to these yet except the
+// Decision Graph node above; simulation/interview integration is Phase 2-4.
+// ─────────────────────────────────────────────────────────────
+
+enum EvidenceSource {
+  RESUME
+  LINKEDIN
+  SIMULATION
+  STAKEHOLDER_INTERACTION
+  INTERVIEW
+  INFERENCE
+}
+
+enum EvidenceType {
+  RESUME_CLAIM
+  LINKEDIN_SIGNAL
+  SIMULATION_ACTION
+  SIMULATION_DECISION
+  STAKEHOLDER_INTERACTION
+  INTERVIEW_STATEMENT
+  CONTRADICTION
+  SKILL_DEMONSTRATION
+  BEHAVIORAL_SIGNAL
+  // §4.20 Ethical Gray Zones — its own signal type, never scored as
+  // right/wrong at write time, only tracked as a distinct evidence category.
+  ETHICAL_DECISION
+}
+
+// §4.18 Contextual Behavior — the same evidence tagged by which context it
+// happened in, so later scoring never averages "confident with peers" and
+// "indecisive under executive pressure" into one number. Nullable: not every
+// evidence object cleanly maps to one of these (e.g. a baseline-challenge
+// decision doesn't happen "with" anyone), and forcing a bad-fit tag is worse
+// than leaving it unset.
+enum BehaviorContext {
+  PEER
+  MANAGER
+  CUSTOMER
+  CONFLICT
+  PRESSURE
+  AMBIGUITY
+  FAILURE
+  SUCCESS
+}
+
+enum EvidenceStatus {
+  PENDING
+  INVESTIGATED
+  VERIFIED
+  CONTRADICTED
+}
+
+// One claim/observation/inference (§3.1). `confidenceScore` is the computed
+// Evidence Confidence Score (§3.1 NEW) — never hand-set, always derived by
+// EvidenceGraphService from supporting/contradicting links.
+model EvidenceObject {
+  id                 String           @id @default(cuid())
+  hyrteSessionId     String?
+  hyrteSession       HyrteSession?    @relation(fields: [hyrteSessionId], references: [id], onDelete: Cascade)
+  candidateId        String
+  source             EvidenceSource
+  type               EvidenceType
+  rawText            String
+  confidenceScore    Int              @default(50)
+  needsInvestigation Boolean          @default(false)
+  probeCandidates    String[]         @default([])
+  status             EvidenceStatus   @default(PENDING)
+  // §4.18 Contextual Behavior — see BehaviorContext doc comment above.
+  behaviorContext    BehaviorContext?
+  metadata           Json             @default("{}")
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  linksFrom EvidenceLink[] @relation("LinkFrom")
+  linksTo   EvidenceLink[] @relation("LinkTo")
+
+  @@index([hyrteSessionId])
+  @@index([candidateId])
+  @@index([type])
+}
+
+enum EvidenceLinkKind {
+  SUPPORTS
+  CONTRADICTS
+  ELABORATES
+}
+
+// A contradiction (§3.1) is modeled as a typed link between two evidence
+// objects rather than a third free-floating object, so both linked claims
+// stay queryable from either side.
+model EvidenceLink {
+  id        String           @id @default(cuid())
+  fromId    String
+  from      EvidenceObject   @relation("LinkFrom", fields: [fromId], references: [id], onDelete: Cascade)
+  toId      String
+  to        EvidenceObject   @relation("LinkTo", fields: [toId], references: [id], onDelete: Cascade)
+  kind      EvidenceLinkKind
+  note      String?
+  createdAt DateTime         @default(now())
+
+  @@index([fromId])
+  @@index([toId])
+}
+
+// Denormalized read-model over the Evidence Graph (§3.2) — rebuilt, not
+// hand-edited, by CandidateIntelligenceCardService whenever evidence changes.
+model CandidateIntelligenceCard {
+  id                       String   @id @default(cuid())
+  candidateId              String   @unique
+  candidate                User     @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  experiencePattern        String? // "linear" | "non-linear" | "entrepreneurial"
+  primaryExposureAreas     String[] @default([])
+  careerPattern            String?
+  evidenceDensity          Int      @default(0)
+  leadershipExposure       String? // confidence-labeled, e.g. "low" | "medium" | "high"
+  technicalDepthConfidence String? // confidence-labeled
+  computedAt               DateTime @updatedAt
+}
+
+// JD decomposition (§3.3), scoped per HYRTE session today since that's the
+// only caller — the existing product's recruiter-authored Interview doesn't
+// feed this yet (Section 7 migration question, see ARCHITECTURE.md §4).
+model JobSuccessModel {
+  id                     String        @id @default(cuid())
+  hyrteSessionId         String?       @unique
+  hyrteSession           HyrteSession? @relation(fields: [hyrteSessionId], references: [id], onDelete: Cascade)
+  role                   String
+  coreOutcomes           String[]      @default([])
+  capabilityRequirements Json          @default("[]") // [{ skill, importance, depth }]
+  industryContext        Json          @default("{}")
+  companyContext         Json          @default("{}")
+  createdAt              DateTime      @default(now())
+}
+
+// §3.4 — drives which simulation events fire and which interview probes get
+// selected (later phases); Phase 1 only builds the plan and stores it.
+model InvestigationPlan {
+  id             String       @id @default(cuid())
+  hyrteSessionId String       @unique
+  hyrteSession   HyrteSession @relation(fields: [hyrteSessionId], references: [id], onDelete: Cascade)
+  areas          Json         @default("[]") // [{ area, currentEvidence, need, priority }]
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+}
+
+// ─────────────────────────────────────────────────────────────
+// §3.5 / §9 Learning Engine — SCHEMA ONLY, per the build phases' own
+// instruction: "design the schema now; the retraining loop itself can be a
+// later milestone... do not paint yourself into a corner architecturally."
+// Nothing reads this data to improve anything yet — it is purely what a
+// future aggregation/retraining job would consume: `Decision Graph →
+// Hiring Outcome → Model Improvement`, with the middle term captured here.
+//
+// Modeled as an append-only event log (matching HyrteDecisionLogEntry's own
+// shape) rather than one mutable row per candidate — a real hire accumulates
+// outcome events over months/years (hired, retained, promoted, eventually
+// resigned), and an event log makes each observation a permanent fact
+// instead of overwriting history on every update.
+// ─────────────────────────────────────────────────────────────
+
+enum HiringOutcomeEventType {
+  HIRED
+  REJECTED
+  WITHDREW
+  OFFER_DECLINED
+  RETENTION_CHECKPOINT // periodic "still employed, here's how it's going" signal
+  PROMOTED
+  RESIGNED
+  TERMINATED
+}
+
+enum PerformanceRating {
+  HIGH_PERFORMER
+  MEETS_EXPECTATIONS
+  BELOW_EXPECTATIONS
+}
+
+model HyrteHiringOutcomeEvent {
+  id                String                 @id @default(cuid())
+  sessionId         String
+  session           HyrteSession           @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  recordedBy        String // recruiter userId
+  eventType         HiringOutcomeEventType
+  // Only meaningful on RETENTION_CHECKPOINT/PROMOTED/TERMINATED-style events —
+  // nullable because most event types don't carry a performance judgment.
+  performanceRating PerformanceRating?
+  notes             String?
+  occurredAt        DateTime               @default(now())
+  createdAt         DateTime               @default(now())
+
+  @@index([sessionId, occurredAt])
+  @@index([eventType])
 }

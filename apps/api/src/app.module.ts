@@ -22,6 +22,7 @@ import { BillingModule } from './billing/billing.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { AdminModule } from './admin/admin.module';
 import { PracticeModule } from './practice/practice.module';
+import { HyrteModule } from './hyrte/hyrte.module';
 import { HealthController } from './health/health.controller';
 
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
@@ -52,6 +53,7 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     AnalyticsModule,
     AdminModule,
     PracticeModule,
+    HyrteModule,
   ],
   controllers: [HealthController],
   providers: [

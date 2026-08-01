@@ -34,7 +34,10 @@ export class ElevenLabsTTS implements TTSProvider {
         body: JSON.stringify({
           text,
           model_id: 'eleven_multilingual_v2',
-          voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+          // Lower stability + non-zero style is the standard ElevenLabs lever
+          // for natural, expressive speech — stability:0.5/no style (the old
+          // config) trends flat/robotic. speaker_boost adds presence/clarity.
+          voice_settings: { stability: 0.4, similarity_boost: 0.75, style: 0.35, use_speaker_boost: true },
         }),
       },
     );

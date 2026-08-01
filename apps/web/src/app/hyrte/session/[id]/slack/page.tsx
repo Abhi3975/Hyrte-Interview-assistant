@@ -1,0 +1,113 @@
+'use client';
+
+import { use, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { DashboardShell } from '@/components/dashboard-shell';
+import { HyrteSessionInfoCard } from '@/components/hyrte/session-info-card';
+import { hyrteNav } from '@/lib/hyrte-nav';
+import { api } from '@/lib/api';
+import { useHyrteStore } from '@/store/hyrte';
+import { HyrteSlackMessage, HyrteStakeholder } from '@/lib/hyrte-types';
+
+const CHANNELS = ['#product', '#engineering', '#sales', '#leadership'];
+
+export default function HyrteSlack({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params);
+  const { slackVersion } = useHyrteStore();
+  const queryClient = useQueryClient();
+  const [channel, setChannel] = useState(CHANNELS[0]);
+  const [draft, setDraft] = useState('');
+  const [sending, setSending] = useState(false);
+
+  const { data: stakeholders } = useQuery({
+    queryKey: ['hyrte', 'stakeholders', id],
+    queryFn: () => api.get<HyrteStakeholder[]>(`/hyrte/sessions/${id}/stakeholders`),
+  });
+  const { data: messages } = useQuery({
+    queryKey: ['hyrte', 'slack', id, channel, slackVersion],
+    queryFn: () => api.get<HyrteSlackMessage[]>(`/hyrte/sessions/${id}/slack?channel=${encodeURIComponent(channel)}`),
+  });
+
+  async function send() {
+    if (!draft.trim()) return;
+    setSending(true);
+    try {
+      await api.post(`/hyrte/sessions/${id}/slack`, { channel, body: draft });
+      setDraft('');
+      queryClient.invalidateQueries({ queryKey: ['hyrte', 'slack', id, channel] });
+      queryClient.invalidateQueries({ queryKey: ['hyrte', 'decision-log', id] });
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <DashboardShell
+      area="hyrte"
+      title="Slack"
+      requiredRoles={['CANDIDATE']}
+      navOverride={hyrteNav(id)}
+      sidebarExtra={<HyrteSessionInfoCard sessionId={id} />}
+      backHref="/candidate"
+      backLabel="Exit"
+    >
+      <div className="grid h-full gap-4 md:grid-cols-[200px_1fr]">
+        <div className="card h-fit">
+          <div className="mb-2 text-xs font-semibold uppercase text-black/40 dark:text-white/40">Channels</div>
+          <nav className="space-y-1">
+            {CHANNELS.map((c) => (
+              <button
+                key={c}
+                onClick={() => setChannel(c)}
+                className={`block w-full rounded-lg px-2 py-1.5 text-left text-sm ${channel === c ? 'bg-brand-500/15 font-medium' : 'hover:bg-black/5 dark:hover:bg-white/5'}`}
+              >
+                {c}
+              </button>
+            ))}
+          </nav>
+          <div className="mb-2 mt-4 text-xs font-semibold uppercase text-black/40 dark:text-white/40">Direct messages</div>
+          <nav className="space-y-1">
+            {stakeholders?.map((s) => {
+              const dm = `dm:${s.id}`;
+              return (
+                <button
+                  key={s.id}
+                  onClick={() => setChannel(dm)}
+                  className={`block w-full rounded-lg px-2 py-1.5 text-left text-sm ${channel === dm ? 'bg-brand-500/15 font-medium' : 'hover:bg-black/5 dark:hover:bg-white/5'}`}
+                >
+                  {s.name}
+                </button>
+              );
+            })}
+          </nav>
+        </div>
+
+        <div className="card flex h-[calc(100vh-9rem)] flex-col">
+          <div className="mb-3 font-semibold">{channel}</div>
+          <div className="flex-1 space-y-3 overflow-y-auto">
+            {messages?.map((m) => (
+              <div key={m.id} className="text-sm">
+                <span className="font-medium">{m.fromStakeholder?.name ?? 'You'}</span>{' '}
+                <span className="text-xs text-black/40 dark:text-white/40">{new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                <p className="text-black/80 dark:text-white/80">{m.body}</p>
+              </div>
+            ))}
+            {!messages?.length && <p className="text-sm text-black/50 dark:text-white/50">No messages in {channel} yet.</p>}
+          </div>
+          <div className="mt-3 flex gap-2">
+            <input
+              className="flex-1 rounded-lg border border-black/10 bg-transparent px-3 py-2 text-sm dark:border-white/10"
+              placeholder={`Message ${channel}`}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && send()}
+            />
+            <button className="btn-primary" disabled={sending} onClick={send}>
+              Send
+            </button>
+          </div>
+        </div>
+      </div>
+    </DashboardShell>
+  );
+}
