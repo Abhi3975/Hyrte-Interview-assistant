@@ -4,7 +4,9 @@ import { AIService } from '../../ai/ai.service';
 import { HyrteGateway } from '../hyrte.gateway';
 import { CompanyStateDelta, COMPANY_STATE_KEYS, HyrteConsequenceService } from '../consequences/consequence.service';
 import { EvidenceGraphService } from '../dig/evidence-graph.service';
+import { DecisionGraphService } from '../dig/decision-graph.service';
 import { inferContextFromRole } from '../dig/behavior-context.util';
+import { getVisibleStateKeys } from '../dig/info-scope.util';
 import { OMIT_HIDDEN_INTENTION } from '../dig/hidden-intention.util';
 
 /** §4.17 Decision Cost — a relationship shift this negative reframes the exchange as conflict, not routine peer/manager chat. */
@@ -45,9 +47,16 @@ export class HyrteStakeholderAgentService {
     private readonly gateway: HyrteGateway,
     private readonly consequences: HyrteConsequenceService,
     private readonly evidence: EvidenceGraphService,
+    private readonly decisionGraph: DecisionGraphService,
   ) {}
 
-  async respond(sessionId: string, stakeholderId: string, candidateMessage: string, target: AgentReplyTarget): Promise<void> {
+  async respond(
+    sessionId: string,
+    stakeholderId: string,
+    candidateMessage: string,
+    target: AgentReplyTarget,
+    decisionId?: string,
+  ): Promise<void> {
     try {
       const [stakeholder, companyState, session, recentMemory] = await Promise.all([
         this.prisma.hyrteStakeholder.findUnique({ where: { id: stakeholderId } }),
@@ -112,6 +121,20 @@ export class HyrteStakeholderAgentService {
         })
         .catch((e) => this.logger.warn(e));
 
+      // §3.5 Decision Graph — enrich the candidate's original decision node
+      // (already written synchronously when they sent the message) with the
+      // same benefit/cost reasoning the reply itself is grounded in, so
+      // reasoning/riskAssessment/outcome aren't left null for this action
+      // type either.
+      if (decisionId && (result.benefit || result.cost)) {
+        this.decisionGraph
+          .recordOutcome(decisionId, {
+            outcome: `${stakeholder.name} replied: "${reply}" (trust ${trustShift >= 0 ? '+' : ''}${trustShift}).`,
+            riskAssessment: result.cost,
+          })
+          .catch((e) => this.logger.warn(e));
+      }
+
       if (target.kind === 'inbox') {
         const subject = target.subject.startsWith('Re: ') ? target.subject : `Re: ${target.subject}`;
         const created = await this.prisma.hyrteInboxMessage.create({
@@ -127,6 +150,72 @@ export class HyrteStakeholderAgentService {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       this.logger.warn(`Stakeholder agent turn failed (session ${sessionId}, stakeholder ${stakeholderId}): ${msg}`);
+    }
+  }
+
+  /**
+   * §4.12 Layers 5/9/11 — a stakeholder who was NOT talked to independently
+   * reacts to something the candidate just did with someone else, from their
+   * own goals/personality/relationship, with no visibility into what (if
+   * anything) the first stakeholder said. Two calls that never see each
+   * other's output is what makes divergence (agree / object / indifferent)
+   * genuine rather than scripted — previously every stakeholder only ever
+   * replied 1:1 to whoever the candidate addressed directly.
+   */
+  async reactIndependently(sessionId: string, aboutStakeholderId: string, candidateAction: string): Promise<void> {
+    try {
+      const [session, others] = await Promise.all([
+        this.prisma.hyrteSession.findUnique({ where: { id: sessionId } }),
+        this.prisma.hyrteStakeholder.findMany({ where: { sessionId, id: { not: aboutStakeholderId } } }),
+      ]);
+      if (!session || others.length === 0) return;
+
+      const reactor = others[Math.floor(Math.random() * others.length)];
+      const companyState = await this.prisma.hyrteCompanyState.findUnique({ where: { sessionId } });
+
+      const result = await this.ai.completeJson<AgentJsonResponse>(
+        [
+          { role: 'system', content: this.buildSystemPrompt(reactor, companyState, session.companyName, reactor.hiddenIntention) },
+          {
+            role: 'user',
+            content:
+              `You just heard, secondhand (not from the candidate directly), that they did this: "${candidateAction}". ` +
+              'You were not consulted and have not discussed it with anyone else on the team yet — this is your ' +
+              'own unprompted, independent take, posted as a proactive message. You might agree with it, object ' +
+              "to it, or feel indifferent — react as yourself, from your own goals, not as a company consensus.",
+          },
+        ],
+        { temperature: 0.9, maxTokens: 300 },
+      );
+
+      const reply = (result.reply ?? '').trim();
+      if (!reply) return;
+
+      const updated = await this.applyDeltas(reactor, result);
+      this.gateway.broadcast(sessionId, { type: 'stakeholder:update', stakeholder: updated });
+      if (result.companyStateDelta) {
+        await this.consequences.applyCompanyStateDelta(sessionId, result.companyStateDelta);
+      }
+
+      const channel = /engineer|technical/i.test(reactor.role) ? '#engineering' : /sales/i.test(reactor.role) ? '#sales' : '#product';
+      const created = await this.prisma.hyrteSlackMessage.create({
+        data: { sessionId, channel, fromStakeholderId: reactor.id, body: reply },
+      });
+      this.gateway.broadcast(sessionId, { type: 'slack:new', message: created });
+
+      this.evidence
+        .createEvidence({
+          hyrteSessionId: sessionId,
+          candidateId: session.candidateId,
+          source: 'STAKEHOLDER_INTERACTION',
+          type: 'STAKEHOLDER_INTERACTION',
+          rawText: `${reactor.name} (${reactor.role}), unprompted, reacted independently to the candidate's action ("${candidateAction}"): "${reply}"`,
+          behaviorContext: inferContextFromRole(reactor.role),
+          metadata: { independentReaction: true },
+        })
+        .catch((e) => this.logger.warn(e));
+    } catch (e) {
+      this.logger.warn(`reactIndependently failed (session ${sessionId}): ${errMsg(e)}`);
     }
   }
 
@@ -149,7 +238,16 @@ export class HyrteStakeholderAgentService {
     hiddenIntention: string | null,
   ): string {
     const personality = JSON.stringify(stakeholder.personality ?? {});
-    const stateJson = companyState ? JSON.stringify(omitMeta(companyState)) : '{}';
+    // §4.13 Hidden Information System / §4.12 Layer 2 — scoped: each
+    // stakeholder only sees the company-state fields plausible for their
+    // role, not the full 16-variable object every agent used to receive
+    // identically (which meant no agent's information was actually distinct
+    // from any other's — see ARCHITECTURE.md).
+    const visibleKeys = getVisibleStateKeys(stakeholder.role);
+    const scopedState = companyState
+      ? Object.fromEntries(Object.entries(omitMeta(companyState)).filter(([k]) => visibleKeys.includes(k as never)))
+      : {};
+    const stateJson = JSON.stringify(scopedState);
     const hiddenIntentionClause = hiddenIntention
       ? ` PRIVATE MOTIVE (never state this directly — it should only color your tone, urgency, or what ` +
         `you choose to volunteer vs. withhold, and could surface if the candidate specifically investigates ` +
@@ -162,7 +260,9 @@ export class HyrteStakeholderAgentService {
       `patience ${stakeholder.patience}, motivation ${stakeholder.motivation}. ` +
       `Your relationship with this candidate (0-100): trust ${stakeholder.trust}, respect ${stakeholder.respect}, ` +
       `cooperation ${stakeholder.cooperation}, influence ${stakeholder.influence}. ` +
-      `Current company state: ${stateJson}. ` +
+      `Company metrics YOU can see from your role (others may know different things you don't — if asked ` +
+      `about a metric not listed here, say you'd need to check with the right team rather than guessing a ` +
+      `number): ${stateJson}. ` +
       'Respond naturally and in character — vary tone based on your emotional state and relationship, ' +
       "don't default to uniformly friendly or helpful. Keep it concise (1-4 sentences). " +
       'Return ONLY JSON: {"reply": string, "relationshipDelta": {"trust": int, "respect": int, ' +
@@ -211,4 +311,8 @@ export class HyrteStakeholderAgentService {
 function omitMeta(state: Record<string, unknown>): Record<string, unknown> {
   const { sessionId: _sessionId, updatedAt: _updatedAt, ...rest } = state;
   return rest;
+}
+
+function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
 }

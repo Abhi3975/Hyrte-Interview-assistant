@@ -134,6 +134,13 @@ model CandidateProfile {
   skills     String[] // selected + parsed skills
   yearsOfExp Int?
   location   String?
+  // Candidate Evidence Graph intake (build prompt §0/§3.1) — LinkedIn has no
+  // scrape/OAuth integration (LinkedIn's real API requires Partner Program
+  // approval, out of reach here), so this is a self-reported summary paste,
+  // parsed into evidence the same way a resume is. GitHub is real API
+  // ingestion (public REST API, no auth required for public profiles).
+  linkedinSummary String?
+  githubUsername  String?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -853,6 +860,10 @@ model HyrteCouncilAgentReport {
   stance    CouncilStance?
   reasoning String
   keyPoints String[]       @default([])
+  // Real EvidenceObject ids this agent's reasoning is grounded in — resolved
+  // server-side from the EVn labels the agent cited in the evidence brief,
+  // never trusted as free-form LLM output. Empty when the agent cited none.
+  citedEvidenceIds String[] @default([])
   createdAt DateTime       @default(now())
 
   @@unique([sessionId, agentKey])
@@ -1065,6 +1076,7 @@ model HyrteDecisionLogEntry {
 enum EvidenceSource {
   RESUME
   LINKEDIN
+  GITHUB
   SIMULATION
   STAKEHOLDER_INTERACTION
   INTERVIEW
@@ -1189,6 +1201,12 @@ model JobSuccessModel {
   capabilityRequirements Json          @default("[]") // [{ skill, importance, depth }]
   industryContext        Json          @default("{}")
   companyContext         Json          @default("{}")
+  // §0/§3.3 real-JD intake — set when this model was decomposed from actual
+  // pasted JD text rather than synthesized from the session's 6 generator
+  // inputs. Null for the synthetic path (still the default when no JD is
+  // provided), so existing callers/models are unaffected.
+  sourceJobDescription   String?
+  sourceCompanyContext   String?
   createdAt              DateTime      @default(now())
 }
 

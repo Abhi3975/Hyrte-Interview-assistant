@@ -11,6 +11,8 @@ class UpdateProfileDto {
   @IsOptional() @IsString() resumeText?: string;
   @IsOptional() @IsArray() skills?: string[];
   @IsOptional() @IsString() location?: string;
+  @IsOptional() @IsString() linkedinSummary?: string;
+  @IsOptional() @IsString() githubUsername?: string;
 }
 
 @ApiTags('users')

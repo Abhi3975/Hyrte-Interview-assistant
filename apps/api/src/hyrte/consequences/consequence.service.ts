@@ -3,6 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { AIService } from '../../ai/ai.service';
 import { HyrteGateway } from '../hyrte.gateway';
 import { EvidenceGraphService } from '../dig/evidence-graph.service';
+import { DecisionGraphService } from '../dig/decision-graph.service';
 import { OMIT_HIDDEN_INTENTION } from '../dig/hidden-intention.util';
 
 export const COMPANY_STATE_KEYS = [
@@ -84,6 +85,7 @@ export class HyrteConsequenceService {
     private readonly ai: AIService,
     private readonly gateway: HyrteGateway,
     private readonly evidence: EvidenceGraphService,
+    private readonly decisionGraph: DecisionGraphService,
   ) {}
 
   /** Shared, concurrency-safe path for every company-state mutation in the app. */
@@ -116,7 +118,12 @@ export class HyrteConsequenceService {
     }
   }
 
-  async reasonTaskConsequence(sessionId: string, task: { title: string; priority: string }, candidateId: string): Promise<void> {
+  async reasonTaskConsequence(
+    sessionId: string,
+    task: { title: string; priority: string },
+    candidateId: string,
+    decisionId?: string,
+  ): Promise<void> {
     try {
       const [session, companyState] = await Promise.all([
         this.prisma.hyrteSession.findUnique({ where: { id: sessionId } }),
@@ -163,6 +170,19 @@ export class HyrteConsequenceService {
             metadata: { benefit: result.benefit, cost: result.cost },
           })
           .catch((e) => this.logger.warn(e));
+        // §3.5 Decision Graph — the node was already written synchronously
+        // when the task status changed; enrich it now with the same
+        // benefit/cost reasoning rather than leaving reasoning/riskAssessment
+        // null, which was the case for every action type except the
+        // baseline challenge before this fix.
+        if (decisionId) {
+          this.decisionGraph
+            .recordOutcome(decisionId, {
+              outcome: `Benefit: ${result.benefit ?? '—'}. Cost: ${result.cost ?? '—'}.`,
+              riskAssessment: result.cost,
+            })
+            .catch((e) => this.logger.warn(e));
+        }
       }
     } catch (e) {
       this.logger.warn(`reasonTaskConsequence failed (session ${sessionId}): ${errMsg(e)}`);
@@ -253,6 +273,25 @@ export class HyrteConsequenceService {
           type: 'SIMULATION_ACTION',
           rawText: `Ignored an urgent message${originalSender ? ` from ${originalSender.name}` : ''} — ${escalator.name} escalated: "${text}"`,
           behaviorContext: 'PRESSURE',
+        })
+        .catch((e) => this.logger.warn(e));
+
+      // §3.5 Decision Graph — inaction is itself a decision node (the doc's
+      // own canonical example: "read customer email → ignored → customer
+      // trust decreased → customer escalated"). Nothing wrote this before —
+      // only the evidence object above existed, with no corresponding graph
+      // node, so reasoning/outcome/riskAssessment were never populated for
+      // this trigger type at all.
+      this.decisionGraph
+        .recordDecision({
+          sessionId,
+          actor: session.candidateId,
+          actionType: 'inbox.message_ignored',
+          payload: { messageId: message.id, escalatorId: escalator.id },
+          reasoning: 'No reply sent before the message’s active window elapsed.',
+          riskAssessment:
+            'Urgent messages from named stakeholders left unanswered risk relationship damage and escalation.',
+          outcome: `${escalator.name} escalated: "${text}"`,
         })
         .catch((e) => this.logger.warn(e));
 

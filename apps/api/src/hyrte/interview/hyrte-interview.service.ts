@@ -67,6 +67,10 @@ interface TurnResponse {
   contradictionNote?: string;
   /** §5.9 Boss Level — set true only when this reply included a pointed/sarcastic jab. */
   wasJab?: boolean;
+  /** §3.1 — true when the candidate's statement is an unverified claim worth probing further, not something the evidence brief already confirms or contradicts. */
+  needsInvestigation?: boolean;
+  /** §3.1 probe_candidates — concrete follow-up questions that would verify the claim (e.g. "What was the baseline?"), only when needsInvestigation is true. */
+  probeCandidates?: string[];
 }
 
 interface ReportResponse {
@@ -114,6 +118,26 @@ function pick<T>(arr: T[]): T {
  */
 function stripEvidenceLabels(text: string): string {
   return text.replace(/\s*\(?EV\d+\)?/g, '').replace(/\s{2,}/g, ' ').trim();
+}
+
+const MIN_CALLBACK_WORDS = 8;
+
+/**
+ * §5.8 Conversation Memory — picks the most substantive earlier candidate
+ * answer to call back to (longest by word count, above a floor so a short
+ * "yes"/"okay" never gets quoted back), trimmed to a short quotable snippet.
+ * Returns null when nothing earlier is substantive enough yet.
+ */
+function pickCallbackSnippet(priorAnswers: string[]): string | null {
+  const candidates = priorAnswers.filter((a) => a.trim().split(/\s+/).length >= MIN_CALLBACK_WORDS);
+  if (candidates.length === 0) return null;
+  const longest = candidates.reduce((a, b) => (b.length > a.length ? b : a));
+  // Drop a leading "earlier ..." clause from the answer itself so the quoted
+  // snippet doesn't read as "Earlier you mentioned 'Earlier ...'".
+  const trimmed = longest.replace(/^\s*earlier[^,]*,\s*/i, '').trim() || longest;
+  const words = trimmed.split(/\s+/);
+  const snippet = words.slice(0, 12).join(' ');
+  return words.length > 12 ? `${snippet}...` : snippet;
 }
 
 /**
@@ -322,6 +346,27 @@ export class HyrteInterviewService {
         'Call this out directly and press for genuinely new information — do not accept it at face value.'
       : '';
 
+    // §5.8 Conversation Memory — distinct from evidence-graph-aware
+    // questioning (5.2, which cross-references simulation behavior): this is
+    // remembering something the candidate said earlier in THIS interview and
+    // calling back to it naturally, the way a human interviewer does, even
+    // when it's not a contradiction. The full transcript was already visible
+    // to every turn, but nothing forced this specific behavior, so it rarely
+    // happened in practice — this makes it an explicit, checkable directive.
+    const priorInterviewerText = transcript.filter((t) => t.role === 'interviewer').map((t) => t.content).join(' ');
+    const alreadyCalledBack = /earlier (in (this|our) conversation|you (mentioned|said))/i.test(priorInterviewerText);
+    // A prompt instruction alone was tried here and proved unreliable (this
+    // system prompt already carries tone/company-voice/candidate-signal/
+    // boss-mode/repetition/contradiction directives, and the callback
+    // instruction consistently lost out to the others in testing) — same
+    // "don't trust instruction-following alone" lesson already applied to
+    // hiddenIntention, EVn labels, and repetition detection elsewhere in
+    // this file. The callback is injected deterministically below instead,
+    // once the reply is known.
+    const priorCandidateAnswers = candidateAnswers.slice(0, -1);
+    const callbackSnippet =
+      !alreadyCalledBack && candidateTurns >= 2 ? pickCallbackSnippet(priorCandidateAnswers) : null;
+
     const tone = getBaseTone(session.difficulty);
     const companyVoice = getCompanyVoice(session.companyType);
     const candidateSignal = computeCandidateSignal(transcript);
@@ -356,21 +401,36 @@ export class HyrteInterviewService {
             'contradiction if there genuinely isn\'t one. NEVER mention an "EVn" label, or the word ' +
             '"evidence graph", inside "reply" itself — describe what happened in plain language instead ' +
             '(the EVn label goes ONLY in the separate contradictsEvidenceRef field). Keep questions concise ' +
-            '(1-3 sentences). This ' +
+            '(1-3 sentences). Separately, if the candidate\'s LATEST statement is a claim not already ' +
+            'confirmed or contradicted by the evidence above (e.g. a general self-description, a claimed ' +
+            'habit, or a plan for the future) — set "needsInvestigation": true and "probeCandidates": 1-3 ' +
+            'short concrete follow-up questions that would verify it (e.g. "What specifically would you ' +
+            'check first?", "How would you know that worked?") — these are for the record, not necessarily ' +
+            'ones you ask right now. Omit both fields (or set needsInvestigation false) when the statement ' +
+            'is already fully backed or already contradicted. This ' +
             `conversation has had ${candidateTurns} candidate replies so far; once you've covered ` +
             `${targetMin}-${targetMax} exchanges and have enough to assess judgment, set ` +
             '"done": true. When done, reply with ONLY a brief (1 sentence) acknowledgement of their final ' +
             'answer — do NOT write your own closing statement or mention a report, that is handled ' +
             'separately. Return ONLY JSON: {"reply": string, "done": boolean, "contradictsEvidenceRef": ' +
-            'string (optional), "contradictionNote": string (optional), "wasJab": boolean (optional)}.',
+            'string (optional), "contradictionNote": string (optional), "wasJab": boolean (optional), ' +
+            '"needsInvestigation": boolean (optional), "probeCandidates": string[] (optional)}.',
         },
         { role: 'user', content: `${brief}\n\nConversation so far:\n${transcriptText}` },
       ],
       { temperature: 0.7, maxTokens: 350 },
     );
 
-    const llmReply = stripEvidenceLabels(result.reply ?? 'Thanks for walking me through that.');
+    const llmReplyRaw = stripEvidenceLabels(result.reply ?? 'Thanks for walking me through that.');
     const done = Boolean(result.done) || willEnd;
+
+    // §5.8 Conversation Memory — deterministic callback to a specific earlier
+    // (non-contradictory) detail, injected once per interview rather than
+    // hoping the LLM volunteers it (see note above on why the prompt-only
+    // version didn't hold up). Never on the closing turn, which has its own
+    // fixed acknowledgement-only shape.
+    const llmReply =
+      callbackSnippet && !done ? `Earlier you mentioned "${callbackSnippet}" — ${llmReplyRaw}` : llmReplyRaw;
 
     // §5.4 — deterministic variation banks instead of trusting the LLM to
     // vary its own closing/filler phrasing, which tends to converge on the
@@ -392,6 +452,8 @@ export class HyrteInterviewService {
       source: 'INTERVIEW',
       type: 'INTERVIEW_STATEMENT',
       rawText: message,
+      needsInvestigation: Boolean(result.needsInvestigation),
+      probeCandidates: result.needsInvestigation ? (result.probeCandidates ?? []).slice(0, 3) : [],
       metadata: isRepeat ? { antiGamingFlag: 'repetitive_answer' } : undefined,
     });
     const contradictedRef = result.contradictsEvidenceRef && refs.find((r) => r.label === result.contradictsEvidenceRef);
@@ -421,7 +483,7 @@ export class HyrteInterviewService {
     const session = await this.prisma.hyrteSession.findUnique({ where: { id: sessionId } });
     if (!session) return;
     const transcript = (session.interviewTranscript as unknown as TranscriptTurn[]) ?? [];
-    const { text: brief } = await this.buildEvidenceBrief(sessionId);
+    const { text: brief, refs: evidenceRefs } = await this.buildEvidenceBrief(sessionId);
     const transcriptText = transcript.map((t) => `${t.role === 'candidate' ? 'Candidate' : 'Interviewer'}: ${t.content}`).join('\n');
 
     const result = await this.ai.completeJson<ReportResponse>(
@@ -486,7 +548,7 @@ export class HyrteInterviewService {
     // Decision Cortex fields (now grounded in the Prediction Engine above).
     // Failure here must not block the candidate from seeing their report.
     await this.council
-      .convene(sessionId, brief, transcriptText, predictions)
+      .convene(sessionId, brief, transcriptText, predictions, evidenceRefs)
       .catch((e) => this.logger.warn(`council.convene failed (session ${sessionId}): ${errMsg(e)}`));
 
     await this.prisma.hyrteSession.update({ where: { id: sessionId }, data: { phase: 'COMPLETED' } });

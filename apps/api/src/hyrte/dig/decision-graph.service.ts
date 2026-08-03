@@ -53,11 +53,19 @@ export class DecisionGraphService {
     });
   }
 
-  /** Attach a resolved outcome to a decision once its consequence plays out. */
-  async recordOutcome(decisionId: string, outcome: string) {
+  /**
+   * Enrich a decision node once its consequence resolves — e.g. once the
+   * async benefit/cost reasoning for a task completion or stakeholder reply
+   * comes back, after the node itself was already written synchronously.
+   * Only supplied fields are touched.
+   */
+  async recordOutcome(
+    decisionId: string,
+    patch: { outcome?: string; riskAssessment?: string; reasoning?: string },
+  ) {
     return this.prisma.hyrteDecisionLogEntry.update({
       where: { id: decisionId },
-      data: { outcome },
+      data: patch,
     });
   }
 

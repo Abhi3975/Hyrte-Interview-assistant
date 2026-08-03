@@ -64,6 +64,24 @@ export class CreateEvidenceDto {
   @IsOptional() @IsArray() @IsString({ each: true }) probeCandidates?: string[];
 }
 
+export class IngestResumeDto {
+  @IsString() resumeText!: string;
+}
+
+export class IngestLinkedInDto {
+  @IsString() linkedinSummary!: string;
+}
+
+export class IngestGitHubDto {
+  @IsString() username!: string;
+}
+
+export class IngestJobDescriptionDto {
+  @IsString() jobDescriptionText!: string;
+  @IsOptional() @IsString() companyContext?: string;
+  @IsOptional() @IsString() sessionId?: string;
+}
+
 export class LinkEvidenceDto {
   @IsString() toId!: string;
   @IsEnum(EvidenceLinkKind) kind!: EvidenceLinkKind;

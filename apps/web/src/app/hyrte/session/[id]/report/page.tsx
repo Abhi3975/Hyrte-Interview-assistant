@@ -9,7 +9,7 @@ import { Meter } from '@/components/hyrte/meter';
 import { CheckIcon, AlertIcon, XIcon } from '@/components/icons';
 import { hyrteNav } from '@/lib/hyrte-nav';
 import { api, ApiError } from '@/lib/api';
-import { HyrteInterviewReport } from '@/lib/hyrte-types';
+import { HyrteInterviewReport, groupMetrics } from '@/lib/hyrte-types';
 
 const RECOMMENDATION_META: Record<string, { icon: typeof CheckIcon; wrap: string; icon_bg: string; icon_fg: string; text: string }> = {
   'Strong Fit': { icon: CheckIcon, wrap: 'border-emerald-500/30 bg-emerald-500/5', icon_bg: 'bg-emerald-500/15', icon_fg: 'text-emerald-600', text: 'text-emerald-600' },
@@ -70,6 +70,9 @@ export default function HyrteReport({ params }: { params: Promise<{ id: string }
                   </span>
                 )}
               </div>
+              <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-black/40 dark:text-white/40">
+                Hiring Insight — not a score, insights
+              </p>
               <p className="mt-1 text-sm leading-relaxed text-black/70 dark:text-white/70">{report.summary}</p>
               {report.nextStepRecommendation && (
                 <p className="mt-2 text-xs font-medium text-black/50 dark:text-white/50">
@@ -155,19 +158,43 @@ export default function HyrteReport({ params }: { params: Promise<{ id: string }
               </div>
             )}
 
-            {report.metricsBreakdown.length > 0 && (
-              <div className="card">
-                <h3 className="mb-3 text-sm font-semibold text-black/50 dark:text-white/50">Evaluation Metrics</h3>
-                <div className="space-y-3">
-                  {report.metricsBreakdown.map((m) => (
-                    <div key={m.bucket} title={m.explanation}>
-                      <Meter label={m.bucket} value={m.score} />
-                    </div>
-                  ))}
+          </div>
+
+          {report.metricsBreakdown.length > 0 && (() => {
+            const { roleCompetency, workplaceIntelligence } = groupMetrics(report.metricsBreakdown);
+            return (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="card">
+                  <h3 className="mb-3 flex items-baseline justify-between text-sm font-semibold text-black/50 dark:text-white/50">
+                    <span>Role Competency (50%)</span>
+                    {roleCompetency.avgScore !== null && <span className="text-black/70 dark:text-white/70">{roleCompetency.avgScore}/100</span>}
+                  </h3>
+                  <div className="space-y-3">
+                    {roleCompetency.buckets.map((m) => (
+                      <div key={m.bucket} title={m.explanation}>
+                        <Meter label={m.bucket} value={m.score} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="card">
+                  <h3 className="mb-3 flex items-baseline justify-between text-sm font-semibold text-black/50 dark:text-white/50">
+                    <span>Workplace Intelligence (50%)</span>
+                    {workplaceIntelligence.avgScore !== null && (
+                      <span className="text-black/70 dark:text-white/70">{workplaceIntelligence.avgScore}/100</span>
+                    )}
+                  </h3>
+                  <div className="space-y-3">
+                    {workplaceIntelligence.buckets.map((m) => (
+                      <div key={m.bucket} title={m.explanation}>
+                        <Meter label={m.bucket} value={m.score} />
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
-            )}
-          </div>
+            );
+          })()}
 
           {report.predictions.length > 0 && (
             <div className="card">

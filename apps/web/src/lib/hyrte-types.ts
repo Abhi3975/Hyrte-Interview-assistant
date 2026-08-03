@@ -124,6 +124,32 @@ export interface HyrteInterviewReport {
   generatedAt: string;
 }
 
+// §6.3 Decision Council — recruiter-facing surfaces (agent-reports, discussion, qa).
+export interface HyrteCouncilAgentReport {
+  id: string;
+  agentKey: string;
+  agentName: string;
+  stance: 'HIRE' | 'LEAN_HIRE' | 'LEAN_NO_HIRE' | 'NO_HIRE' | null;
+  reasoning: string;
+  keyPoints: string[];
+  citedEvidenceIds: string[];
+  createdAt: string;
+}
+
+export interface HyrteCouncilDiscussionEntry {
+  agentKey: string;
+  statement: string;
+  respondingToAgentKey: string | null;
+  ordinal: number;
+}
+
+export interface HyrteCouncilQA {
+  id: string;
+  question: string;
+  answer: string;
+  createdAt: string;
+}
+
 export const COMPANY_STATE_LABELS: Record<keyof HyrteCompanyState, string> = {
   revenue: 'Revenue',
   customerSatisfaction: 'Customer Satisfaction',
@@ -152,3 +178,53 @@ export const INVERTED_COMPANY_STATE_KEYS: Set<keyof HyrteCompanyState> = new Set
   'burnout',
   'operationalRisk',
 ]);
+
+/**
+ * §4.1 Analytics tab scoping — "the same dashboards an employee in that role
+ * would actually see, no more." HYRTE's actual tracked metrics are the 16
+ * company-state variables, not the doc's full per-role metric catalogs
+ * (MAU/API-latency/win-rate etc. — that needs a new metric-generation layer,
+ * a separate, larger build). This is a scoped but real interpretation: every
+ * role used to see the identical 16-meter dashboard; now each sees a curated,
+ * role-appropriate subset of the same underlying data, framed for that job.
+ */
+const ROLE_ANALYTICS_KEYS: { pattern: RegExp; keys: (keyof HyrteCompanyState)[] }[] = [
+  { pattern: /product/i, keys: ['productQuality', 'customerSatisfaction', 'growth', 'deadlinePressure', 'technicalDebt', 'marketReputation'] },
+  { pattern: /engineer|developer|technical/i, keys: ['engineeringCapacity', 'technicalDebt', 'operationalRisk', 'productQuality', 'deadlinePressure'] },
+  { pattern: /sales/i, keys: ['revenue', 'growth', 'marketReputation', 'deadlinePressure', 'customerSatisfaction'] },
+  { pattern: /\bhr\b|people|human resources/i, keys: ['teamMorale', 'burnout', 'hiringCapacity', 'complianceRisk'] },
+  { pattern: /financ/i, keys: ['budget', 'cashRunway', 'complianceRisk', 'revenue', 'riskLevel'] },
+  { pattern: /marketing/i, keys: ['marketReputation', 'growth', 'customerSatisfaction', 'budget'] },
+];
+
+export function getAnalyticsKeysForRole(role: string): (keyof HyrteCompanyState)[] {
+  const match = ROLE_ANALYTICS_KEYS.find((r) => r.pattern.test(role));
+  return match ? match.keys : (Object.keys(COMPANY_STATE_LABELS) as (keyof HyrteCompanyState)[]);
+}
+
+/**
+ * §8.1's canonical report groups every metric under "Role Competency (50%)"
+ * / "Workplace Intelligence (50%)" rather than a flat list — mirrors
+ * apps/api/.../evaluation-metrics.ts's METRIC_BUCKET_GROUP exactly. Purely
+ * a presentation grouping over scores the API already returns; no new data.
+ */
+export const METRIC_BUCKET_GROUP: Record<string, 'ROLE_COMPETENCY' | 'WORKPLACE_INTELLIGENCE'> = {
+  'Technical/Role Competency': 'ROLE_COMPETENCY',
+  Cognitive: 'ROLE_COMPETENCY',
+  Communication: 'WORKPLACE_INTELLIGENCE',
+  Behavioral: 'WORKPLACE_INTELLIGENCE',
+  'Confidence & Delivery': 'WORKPLACE_INTELLIGENCE',
+  'Risk Detection': 'WORKPLACE_INTELLIGENCE',
+  'Hiring Readiness': 'WORKPLACE_INTELLIGENCE',
+  'Recruiter Decision': 'WORKPLACE_INTELLIGENCE',
+};
+
+export function groupMetrics(metrics: { bucket: string; score: number; explanation: string }[]) {
+  const roleCompetency = metrics.filter((m) => METRIC_BUCKET_GROUP[m.bucket] === 'ROLE_COMPETENCY');
+  const workplaceIntelligence = metrics.filter((m) => METRIC_BUCKET_GROUP[m.bucket] === 'WORKPLACE_INTELLIGENCE');
+  const avg = (arr: { score: number }[]) => (arr.length ? Math.round(arr.reduce((s, m) => s + m.score, 0) / arr.length) : null);
+  return {
+    roleCompetency: { buckets: roleCompetency, avgScore: avg(roleCompetency) },
+    workplaceIntelligence: { buckets: workplaceIntelligence, avgScore: avg(workplaceIntelligence) },
+  };
+}

@@ -5,7 +5,9 @@ import { JobSuccessModelService } from './job-success-model.service';
 import { InvestigationPlanService } from './investigation-plan.service';
 import { CandidateIntelligenceCardService } from './candidate-intelligence-card.service';
 import { AuditLogService } from './audit-log.service';
+import { ProfileIngestionService } from './profile-ingestion.service';
 import { DigController } from './dig.controller';
+import { ProfileIngestionController } from './profile-ingestion.controller';
 
 /**
  * Phase 1 data backbone (build prompt §3): Evidence Graph, Candidate
@@ -17,7 +19,7 @@ import { DigController } from './dig.controller';
  * re-provided here.
  */
 @Module({
-  controllers: [DigController],
+  controllers: [DigController, ProfileIngestionController],
   providers: [
     DecisionGraphService,
     EvidenceGraphService,
@@ -25,6 +27,7 @@ import { DigController } from './dig.controller';
     InvestigationPlanService,
     CandidateIntelligenceCardService,
     AuditLogService,
+    ProfileIngestionService,
   ],
   exports: [
     DecisionGraphService,
@@ -33,6 +36,7 @@ import { DigController } from './dig.controller';
     InvestigationPlanService,
     CandidateIntelligenceCardService,
     AuditLogService,
+    ProfileIngestionService,
   ],
 })
 export class DigModule {}

@@ -10,6 +10,9 @@ import { EvidenceGraphService } from './dig/evidence-graph.service';
 import { inferContextFromRole } from './dig/behavior-context.util';
 import { OMIT_HIDDEN_INTENTION } from './dig/hidden-intention.util';
 
+/** §4.12 Layers 5/9/11 — chance a stakeholder NOT party to an exchange independently reacts to it. Not 100%: constant chatter reads as noise, not signal. */
+const INDEPENDENT_REACTION_PROBABILITY = 0.5;
+
 @Injectable()
 export class HyrteWorkplaceService {
   private readonly logger = new Logger(HyrteWorkplaceService.name);
@@ -96,8 +99,15 @@ export class HyrteWorkplaceService {
 
     if (message.fromStakeholderId) {
       this.agent
-        .respond(sessionId, message.fromStakeholderId, dto.body, { kind: 'inbox', subject: message.subject })
+        .respond(sessionId, message.fromStakeholderId, dto.body, { kind: 'inbox', subject: message.subject }, entry.id)
         .catch((e) => this.logger.warn(e));
+      // §4.12 Layers 5/9/11 — someone NOT party to this exchange independently
+      // reacts, probabilistically (not every message, to avoid noise).
+      if (Math.random() < INDEPENDENT_REACTION_PROBABILITY) {
+        this.agent
+          .reactIndependently(sessionId, message.fromStakeholderId, `replied to an email: "${dto.body}"`)
+          .catch((e) => this.logger.warn(e));
+      }
     }
     return entry;
   }
@@ -137,7 +147,7 @@ export class HyrteWorkplaceService {
       });
       behaviorContext = target ? inferContextFromRole(target.role) : undefined;
     }
-    await this.logDecision(
+    const entry = await this.logDecision(
       sessionId,
       candidateId,
       'slack.send',
@@ -151,8 +161,13 @@ export class HyrteWorkplaceService {
     if (dto.channel.startsWith('dm:')) {
       const stakeholderId = dto.channel.slice(3);
       this.agent
-        .respond(sessionId, stakeholderId, dto.body, { kind: 'slack', channel: dto.channel })
+        .respond(sessionId, stakeholderId, dto.body, { kind: 'slack', channel: dto.channel }, entry.id)
         .catch((e) => this.logger.warn(e));
+      if (Math.random() < INDEPENDENT_REACTION_PROBABILITY) {
+        this.agent
+          .reactIndependently(sessionId, stakeholderId, `sent a Slack DM: "${dto.body}"`)
+          .catch((e) => this.logger.warn(e));
+      }
     }
     return created;
   }
@@ -174,8 +189,9 @@ export class HyrteWorkplaceService {
       data: { status: dto.status ?? task.status },
     });
     this.gateway.broadcast(sessionId, { type: 'task:update', task: updated });
+    let decisionEntry: { id: string } | undefined;
     if (dto.status) {
-      await this.logDecision(
+      decisionEntry = await this.logDecision(
         sessionId,
         candidateId,
         'task.status_change',
@@ -184,7 +200,9 @@ export class HyrteWorkplaceService {
       );
     }
     if (dto.status === 'done' && task.status !== 'done') {
-      this.consequences.reasonTaskConsequence(sessionId, updated, candidateId).catch((e) => this.logger.warn(e));
+      this.consequences
+        .reasonTaskConsequence(sessionId, updated, candidateId, decisionEntry?.id)
+        .catch((e) => this.logger.warn(e));
     }
     return updated;
   }

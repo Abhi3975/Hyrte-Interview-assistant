@@ -11,6 +11,12 @@ interface AgentResponse {
   keyPoints?: string[];
   confidencePercent?: number;
   nextStepRecommendation?: string;
+  citedEvidenceIds?: string[];
+}
+
+interface EvidenceRef {
+  label: string;
+  id: string;
 }
 
 /** Shape of one Prediction Engine entry (see ReportIntelligenceService) — duplicated here to avoid a cross-module type import for one small interface. */
@@ -69,7 +75,14 @@ export class DecisionCouncilService {
     private readonly auditLog: AuditLogService,
   ) {}
 
-  async convene(sessionId: string, brief: string, transcriptText: string, predictions: PredictionEntry[] = []): Promise<ConveneResult> {
+  async convene(
+    sessionId: string,
+    brief: string,
+    transcriptText: string,
+    predictions: PredictionEntry[] = [],
+    evidenceRefs: EvidenceRef[] = [],
+  ): Promise<ConveneResult> {
+    const refsByLabel = new Map(evidenceRefs.map((r) => [r.label, r.id]));
     const predictionsText = predictions.length
       ? predictions.map((p) => `- ${p.dimension}: ${p.likelihood} — ${p.reasoning}`).join('\n')
       : null;
@@ -104,8 +117,15 @@ export class DecisionCouncilService {
     );
 
     await Promise.all(
-      agentResults.map(({ agent, result }) =>
-        this.prisma.hyrteCouncilAgentReport.upsert({
+      agentResults.map(({ agent, result }) => {
+        // Never trust the LLM's citation as a real id directly — it only ever
+        // sees EVn labels, so resolve those against the same refs map the
+        // evidence brief was built from. Anything that doesn't resolve
+        // (hallucinated label) is silently dropped rather than stored.
+        const citedEvidenceIds = [...new Set(result.citedEvidenceIds ?? [])]
+          .map((label) => refsByLabel.get(label))
+          .filter((id): id is string => Boolean(id));
+        return this.prisma.hyrteCouncilAgentReport.upsert({
           where: { sessionId_agentKey: { sessionId, agentKey: agent.key } },
           create: {
             sessionId,
@@ -114,14 +134,16 @@ export class DecisionCouncilService {
             stance: agent.votes && result.stance && VALID_STANCES.has(result.stance) ? result.stance : null,
             reasoning: result.reasoning ?? '(no response)',
             keyPoints: result.keyPoints ?? [],
+            citedEvidenceIds,
           },
           update: {
             stance: agent.votes && result.stance && VALID_STANCES.has(result.stance) ? result.stance : null,
             reasoning: result.reasoning ?? '(no response)',
             keyPoints: result.keyPoints ?? [],
+            citedEvidenceIds,
           },
-        }),
-      ),
+        });
+      }),
     );
 
     await this.runDiscussion(sessionId, agentResults);
@@ -149,14 +171,21 @@ export class DecisionCouncilService {
   }
 
   private buildAgentPrompt(agent: (typeof COUNCIL_AGENTS)[number], hasPredictions = false): string {
+    const citedEvidenceField =
+      '"citedEvidenceIds": string[] (the EVn labels from the evidence brief above that your reasoning is ' +
+      'actually grounded in — e.g. ["EV2","EV5"]; at least one if any evidence brief entries exist; never a ' +
+      "label you didn't see in the brief)";
     const responseShape = agent.votes
-      ? '{"stance": "HIRE"|"LEAN_HIRE"|"LEAN_NO_HIRE"|"NO_HIRE", "reasoning": string (2-3 sentences, ' +
-        'evidence-grounded, plain English — no jargon), "keyPoints": string[] (2-3 short evidence citations)}'
+      ? `{"stance": "HIRE"|"LEAN_HIRE"|"LEAN_NO_HIRE"|"NO_HIRE", "reasoning": string (2-3 sentences, ` +
+        `evidence-grounded, plain English — no jargon), "keyPoints": string[] (2-3 short evidence citations), ` +
+        `${citedEvidenceField}}`
       : agent.key === 'decisionCortex'
-        ? '{"reasoning": string (2-3 sentences), "keyPoints": string[] (missing signals or evidence gaps), ' +
-          '"confidencePercent": int (0-100), "nextStepRecommendation": string (one short phrase, e.g. ' +
-          '"proceed to next round" | "targeted follow-up on X" | "additional simulation recommended")}'
-        : '{"reasoning": string (2-3 sentences), "keyPoints": string[] (2-3 specific findings per your mandate)}';
+        ? `{"reasoning": string (2-3 sentences), "keyPoints": string[] (missing signals or evidence gaps), ` +
+          `"confidencePercent": int (0-100), "nextStepRecommendation": string (one short phrase, e.g. ` +
+          `"proceed to next round" | "targeted follow-up on X" | "additional simulation recommended"), ` +
+          `${citedEvidenceField}}`
+        : `{"reasoning": string (2-3 sentences), "keyPoints": string[] (2-3 specific findings per your mandate), ` +
+          `${citedEvidenceField}}`;
 
     // §6.4 (resolved) — Decision Cortex consumes the DIG's Prediction Engine
     // instead of estimating predicted success independently, when it's
@@ -174,7 +203,13 @@ export class DecisionCouncilService {
       `simulation and reflection interview. Your mandate: ${agent.mandate}${cortexDirective} ` +
       'You are one of several committee members working independently — you have not seen the others\' ' +
       'notes yet. Ground everything in the evidence brief and transcript below; never invent a claim not ' +
-      `supported by them. Return ONLY JSON: ${responseShape}.`
+      'supported by them. Other committee members are separately assessing execution/ownership, ' +
+      'role-specific technical depth, collaboration/coachability, and long-term growth potential — stay ' +
+      'strictly inside YOUR mandate above rather than restating a generic reliability/communication concern ' +
+      "every member could equally make; if the evidence's most obvious angle belongs to someone else's " +
+      "mandate, find the specific angle on it that only your mandate would surface, or say plainly that " +
+      "this evidence doesn't speak to your mandate rather than repeating another agent's likely conclusion. " +
+      `Return ONLY JSON: ${responseShape}.`
     );
   }
 

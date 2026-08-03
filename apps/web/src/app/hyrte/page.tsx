@@ -32,6 +32,8 @@ export default function HyrteEntry() {
   const [companyType, setCompanyType] = useState(COMPANY_TYPES[0]);
   const [difficulty, setDifficulty] = useState(DIFFICULTIES[1]);
   const [culture, setCulture] = useState(CULTURES[0]);
+  const [jobDescriptionText, setJobDescriptionText] = useState('');
+  const [companyContext, setCompanyContext] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -47,6 +49,18 @@ export default function HyrteEntry() {
         difficulty,
         culture,
       });
+      // §0/§3.3 — if a real JD was pasted, replace the synthetic Job Success
+      // Model (built from the six selects above) with one decomposed from
+      // the actual text. Best-effort: a failure here shouldn't block entry.
+      if (jobDescriptionText.trim()) {
+        await api
+          .post('/profile/ingest/job-description', {
+            jobDescriptionText,
+            companyContext: companyContext || undefined,
+            sessionId: session.id,
+          })
+          .catch(() => undefined);
+      }
       router.push(`/hyrte/session/${session.id}/mission-brief`);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Could not start the simulation');
@@ -76,6 +90,30 @@ export default function HyrteEntry() {
           <Field label="Company type" value={companyType} onChange={setCompanyType} options={COMPANY_TYPES} />
           <Field label="Difficulty" value={difficulty} onChange={setDifficulty} options={DIFFICULTIES} />
           <Field label="Company culture" value={culture} onChange={setCulture} options={CULTURES} />
+
+          <details className="rounded-lg border border-black/10 p-3 dark:border-white/10">
+            <summary className="cursor-pointer text-sm font-medium">
+              Have a real job description? Paste it (optional)
+            </summary>
+            <p className="mb-3 mt-2 text-xs text-black/50 dark:text-white/50">
+              Replaces the six selections above as the source for the Job Success Model — decomposed from your
+              actual text instead of synthesized.
+            </p>
+            <textarea
+              value={jobDescriptionText}
+              onChange={(e) => setJobDescriptionText(e.target.value)}
+              rows={6}
+              placeholder="Paste the job description…"
+              className="w-full rounded-lg border border-black/10 bg-transparent px-3 py-2 text-sm outline-none focus:border-brand-500 dark:border-white/15"
+            />
+            <textarea
+              value={companyContext}
+              onChange={(e) => setCompanyContext(e.target.value)}
+              rows={2}
+              placeholder="Company/industry context (optional)…"
+              className="mt-2 w-full rounded-lg border border-black/10 bg-transparent px-3 py-2 text-sm outline-none focus:border-brand-500 dark:border-white/15"
+            />
+          </details>
 
           {error && <p className="text-sm text-red-500">{error}</p>}
 

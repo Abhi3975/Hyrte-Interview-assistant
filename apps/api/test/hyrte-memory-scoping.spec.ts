@@ -41,6 +41,7 @@ describe('HyrteStakeholderAgentService memory scoping (Multi-Day Memory security
     const gateway = { broadcast: jest.fn() };
     const consequences = { applyCompanyStateDelta: jest.fn() };
     const evidence = { createEvidence: jest.fn() };
+    const decisionGraph = { recordOutcome: jest.fn() };
 
     return new HyrteStakeholderAgentService(
       prisma as any,
@@ -48,6 +49,7 @@ describe('HyrteStakeholderAgentService memory scoping (Multi-Day Memory security
       gateway as any,
       consequences as any,
       evidence as any,
+      decisionGraph as any,
     );
   }
 
