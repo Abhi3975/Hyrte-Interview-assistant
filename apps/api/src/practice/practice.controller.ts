@@ -72,6 +72,7 @@ class InterviewTurnDto {
   @IsOptional() @IsString() style?: string;
   @IsArray() transcript!: TurnMsgDto[];
   @IsOptional() end?: boolean;
+  @IsOptional() forceAdvance?: boolean;
 }
 
 class TestCaseDto {

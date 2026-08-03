@@ -128,6 +128,7 @@ export class PracticeService {
     style?: string;
     transcript: { role: 'interviewer' | 'candidate'; content: string }[];
     end?: boolean;
+    forceAdvance?: boolean;
   }): Promise<{ text: string }> {
     const extra = [
       input.experience ? `- Candidate experience level: ${input.experience} (calibrate depth/difficulty to this).` : '',
@@ -163,7 +164,9 @@ export class PracticeService {
           'Hiring Recommendation (Hire / Lean Hire / No Hire) and EXPLAIN WHY with evidence from the interview.',
           'Then a personalized Learning Roadmap: a 7-Day plan, a 30-Day plan, a 90-Day plan, plus recommended resources, practice questions, projects and interview tips.',
         ].join(' ')
-      : 'Continue the interview naturally. Reply with ONLY your next spoken message as the interviewer — no stage directions. Keep it conversational and reasonably brief (it is read aloud by TTS), EXCEPT when giving structured code review/feedback which can be longer. Ask ONE thing at a time and wait.';
+      : input.forceAdvance
+        ? 'The introduction/small-talk phase has already used its allotted time budget. In THIS reply: wrap up the introduction in ONE short warm sentence (do not ask any further get-to-know-you questions), then immediately move on — explain today\'s focus briefly and ask the first real interview question. Reply with ONLY your next spoken message as the interviewer — no stage directions.'
+        : 'Continue the interview naturally. Reply with ONLY your next spoken message as the interviewer — no stage directions. Keep it conversational and reasonably brief (it is read aloud by TTS), EXCEPT when giving structured code review/feedback which can be longer. Ask ONE thing at a time and wait.';
 
     const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
       { role: 'system', content: `${INTERVIEWER_SYSTEM}\n\n${persona}\n\n${ctx}${resume}${modeNote}\n\n${directive}` },

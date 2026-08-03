@@ -121,6 +121,10 @@ interface Evaluation {
 type Phase = 'setup' | 'lobby' | 'live' | 'evaluating' | 'result';
 interface Flags { tabSwitch: number; eyeShift: number; multiFace: number; aiAssist: number; secondVoice: number; screen: number }
 const ZERO_FLAGS: Flags = { tabSwitch: 0, eyeShift: 0, multiFace: 0, aiAssist: 0, secondVoice: 0, screen: 0 };
+// The intro/small-talk phase gets a hard wall-clock cap — after this many ms
+// we force Ally to wrap it up (deterministically, not just via prompt wording)
+// and unlock the Coding tab regardless of what she says next.
+const INTRO_CAP_MS = 90_000;
 
 function useHydratedAuth() {
   const { user } = useAuthStore();
@@ -211,6 +215,10 @@ function InterviewRoomInner() {
   const sendTurnRef = useRef<((t?: string, o?: { end?: boolean; behaviorSummary?: string }) => void) | null>(null);
   const sendingRef = useRef(false);
   const micOnRef = useRef(micOn);
+  const introStartedAtRef = useRef<number | null>(null);
+  const introForceSentRef = useRef(false);
+  const forceAdvanceConsumedRef = useRef(false);
+  const [introForced, setIntroForced] = useState(false);
 
   const topic = wizardTopic ?? assessmentTopic ?? TOPICS[topicIdx];
   useEffect(() => { messagesRef.current = messages; }, [messages]);
@@ -325,7 +333,13 @@ function InterviewRoomInner() {
   // timer
   useEffect(() => {
     if (phase !== 'live') return;
-    const iv = setInterval(() => setRemaining((r) => { if (r <= 1) { clearInterval(iv); endInterview(); return 0; } return r - 1; }), 1000);
+    const iv = setInterval(() => {
+      setRemaining((r) => { if (r <= 1) { clearInterval(iv); endInterview(); return 0; } return r - 1; });
+      if (introStartedAtRef.current && !introForceSentRef.current && Date.now() - introStartedAtRef.current >= INTRO_CAP_MS) {
+        introForceSentRef.current = true;
+        setIntroForced(true);
+      }
+    }, 1000);
     return () => clearInterval(iv);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
@@ -370,6 +384,11 @@ function InterviewRoomInner() {
     return Math.max(0, 100 - p);
   }, [flags]);
 
+  // Intro is structurally done once Ally has spoken twice (greeting, then the
+  // post-intro "here's today's focus" message) — or once the hard time cap
+  // below forces it, whichever comes first. The Coding tab stays gated until then.
+  const introComplete = introForced || messages.filter((m) => m.role === 'ai').length >= 2;
+
   // ── conversational turn ──
   const sendTurn = useCallback(async (candidateText?: string, opts?: { end?: boolean; behaviorSummary?: string }) => {
     const base = messagesRef.current.slice();
@@ -384,6 +403,8 @@ function InterviewRoomInner() {
     setMessages(base);
     setInput('');
     setSending(true);
+    const shouldForceAdvance = introForced && !forceAdvanceConsumedRef.current && !opts?.end;
+    if (shouldForceAdvance) forceAdvanceConsumedRef.current = true;
     try {
       const res = await api.post<{ text: string }>('/practice/interview/turn', {
         jobRole: topic.label, category: topic.category, difficulty, topic: topic.topic,
@@ -391,6 +412,7 @@ function InterviewRoomInner() {
         candidateName: user?.fullName?.split(' ')[0], resumeContext: resumeContextRef.current,
         transcript: base.map((m) => ({ role: m.role === 'ai' ? 'interviewer' : 'candidate', content: m.text })),
         end: opts?.end ?? false, behaviorSummary: opts?.behaviorSummary,
+        forceAdvance: shouldForceAdvance,
       });
       if (opts?.end) return res.text;
       setMessages((m) => [...m, { role: 'ai', text: res.text }]);
@@ -404,7 +426,7 @@ function InterviewRoomInner() {
       setSending(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [topic, difficulty, numQuestions, personality, interviewType, experience, company, language, theoryStyle, user, speak]);
+  }, [topic, difficulty, numQuestions, personality, interviewType, experience, company, language, theoryStyle, user, speak, introForced]);
   useEffect(() => { sendTurnRef.current = sendTurn; }, [sendTurn]);
 
   function onSend() {
@@ -438,6 +460,10 @@ function InterviewRoomInner() {
     setError(''); setLoading(true);
     setFlags(ZERO_FLAGS); setMessages([]); setInput(''); setReport('');
     endedRef.current = false;
+    introStartedAtRef.current = null;
+    introForceSentRef.current = false;
+    forceAdvanceConsumedRef.current = false;
+    setIntroForced(false);
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
         throw new Error(window.isSecureContext ? 'Camera/microphone are not available in this browser.' : 'Camera & mic need a secure (HTTPS) connection. Open this site over https:// and allow permissions.');
@@ -502,6 +528,7 @@ function InterviewRoomInner() {
       }
       setRemaining(durationMin * 60);
       setPhase('live');
+      introStartedAtRef.current = Date.now();
       sendTurn(); // AI greeting + asks for intro
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not access camera/microphone.');
@@ -797,7 +824,13 @@ function InterviewRoomInner() {
         <div className="flex min-h-0 flex-col gap-3">
           <div className="flex gap-1 rounded-xl bg-white/5 p-1 text-sm">
             <button onClick={() => setTab('chat')} className={`flex-1 rounded-lg px-3 py-1.5 ${tab === 'chat' ? 'bg-white/15 font-medium' : 'text-white/60'}`}>Interview</button>
-            {coding && <button onClick={() => setTab('code')} className={`flex-1 rounded-lg px-3 py-1.5 ${tab === 'code' ? 'bg-white/15 font-medium' : 'text-white/60'}`}>Coding {codeResult && <span className={codeResult.passed === codeResult.total ? 'text-emerald-400' : 'text-amber-400'}>· {codeResult.passed}/{codeResult.total}</span>}</button>}
+            {coding && (
+              introComplete ? (
+                <button onClick={() => setTab('code')} className={`flex-1 rounded-lg px-3 py-1.5 ${tab === 'code' ? 'bg-white/15 font-medium' : 'text-white/60'}`}>Coding {codeResult && <span className={codeResult.passed === codeResult.total ? 'text-emerald-400' : 'text-amber-400'}>· {codeResult.passed}/{codeResult.total}</span>}</button>
+              ) : (
+                <button disabled title="Finish your introduction with Ally first" className="flex-1 cursor-not-allowed rounded-lg px-3 py-1.5 text-white/25">Coding 🔒</button>
+              )
+            )}
           </div>
 
           {tab === 'code' && coding ? (
