@@ -53,11 +53,34 @@ export default function HyrteInterview({ params }: { params: Promise<{ id: strin
   useEffect(() => { doneRef.current = done; }, [done]);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  /** Monotonically-increasing token — lets an in-flight speak() call detect it's been superseded and bail out instead of also starting playback. */
+  const speakTokenRef = useRef(0);
+
+  /**
+   * Stops whatever might currently be producing or capturing audio — any
+   * previous TTS playback, the browser-TTS fallback, and the mic. Upgrade —
+   * called at the START of every speak() (not just relied on the reactive
+   * voiceState→mic-guard effect, which only runs on the NEXT render/commit)
+   * so there's no window where old audio is still playing, or the mic is
+   * still listening, while new audio starts. That window is exactly what
+   * produced live: the mic caught the interviewer's own TTS output
+   * ("You chose to redesign..." transcribed back as "you choose to read")
+   * and, separately, overlapping playback read as literal audio "echo".
+   */
+  const stopAllAudio = useCallback(() => {
+    if (audioRef.current) {
+      try { audioRef.current.pause(); audioRef.current.currentTime = 0; } catch {}
+      audioRef.current = null;
+    }
+    try { window.speechSynthesis?.cancel(); } catch {}
+    try { recognitionRef.current?.stop?.(); } catch {}
+    recognitionRef.current = null;
+  }, []);
 
   /** Last-resort fallback only — robotic by nature, never the intended path. */
-  const speakBrowser = useCallback((clean: string) => {
+  const speakBrowser = useCallback((clean: string, token: number) => {
     const synth = typeof window !== 'undefined' ? window.speechSynthesis : null;
-    if (!synth) { setVoiceState(doneRef.current ? 'idle' : 'listening'); return; }
+    if (!synth) { if (speakTokenRef.current === token) setVoiceState(doneRef.current ? 'idle' : 'listening'); return; }
     const u = new SpeechSynthesisUtterance(clean);
     const voices = synth.getVoices();
     const en = voices.filter((v) => v.lang?.toLowerCase().startsWith('en'));
@@ -67,36 +90,48 @@ export default function HyrteInterview({ params }: { params: Promise<{ id: strin
     if (pick) u.voice = pick;
     u.rate = 1.0;
     u.pitch = 1.15;
-    u.onend = () => setVoiceState(doneRef.current ? 'idle' : 'listening');
-    u.onerror = () => setVoiceState(doneRef.current ? 'idle' : 'listening');
+    u.onend = () => { if (speakTokenRef.current === token) setVoiceState(doneRef.current ? 'idle' : 'listening'); };
+    u.onerror = () => { if (speakTokenRef.current === token) setVoiceState(doneRef.current ? 'idle' : 'listening'); };
+    // A superseding speak() call already cancelled us via stopAllAudio(); don't (re-)speak if we lost the race.
+    if (speakTokenRef.current !== token) return;
     try { synth.resume(); } catch {}
     synth.cancel();
-    setTimeout(() => { try { synth.speak(u); } catch { setVoiceState(doneRef.current ? 'idle' : 'listening'); } }, 60);
+    setTimeout(() => {
+      if (speakTokenRef.current !== token) return;
+      try { synth.speak(u); } catch { if (speakTokenRef.current === token) setVoiceState(doneRef.current ? 'idle' : 'listening'); }
+    }, 60);
   }, []);
 
   const speak = useCallback(async (text: string) => {
+    // Cancel anything already speaking/listening BEFORE deciding whether to
+    // speak at all, and mint a token so a slower, now-superseded call can
+    // tell it lost the race and must not also start playback.
+    stopAllAudio();
+    const token = ++speakTokenRef.current;
     if (!voiceMode || muted) { setVoiceState(doneRef.current ? 'idle' : 'listening'); return; }
     setVoiceState('speaking');
     const clean = text.replace(/[#*`_>]/g, '');
     try {
-      const token = useAuthStore.getState().accessToken;
+      const authToken = useAuthStore.getState().accessToken;
       const res = await fetch('/api/voice/speak', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+        headers: { 'content-type': 'application/json', ...(authToken ? { authorization: `Bearer ${authToken}` } : {}) },
         body: JSON.stringify({ text: clean }),
       });
+      if (speakTokenRef.current !== token) return; // superseded while the network call was in flight
       if (!res.ok) throw new Error(`tts ${res.status}`);
       const blob = await res.blob();
+      if (speakTokenRef.current !== token) return;
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
       audioRef.current = audio;
-      audio.onended = () => { URL.revokeObjectURL(url); setVoiceState(doneRef.current ? 'idle' : 'listening'); };
-      audio.onerror = () => { URL.revokeObjectURL(url); speakBrowser(clean); };
+      audio.onended = () => { URL.revokeObjectURL(url); if (speakTokenRef.current === token) setVoiceState(doneRef.current ? 'idle' : 'listening'); };
+      audio.onerror = () => { URL.revokeObjectURL(url); if (speakTokenRef.current === token) speakBrowser(clean, token); };
       await audio.play();
     } catch {
-      speakBrowser(clean);
+      if (speakTokenRef.current === token) speakBrowser(clean, token);
     }
-  }, [voiceMode, muted, speakBrowser]);
+  }, [voiceMode, muted, speakBrowser, stopAllAudio]);
 
   const startListening = useCallback(() => {
     const Ctor = (window as unknown as { SpeechRecognition?: any; webkitSpeechRecognition?: any }).SpeechRecognition
@@ -142,7 +177,15 @@ export default function HyrteInterview({ params }: { params: Promise<{ id: strin
     }
   }, [voiceState, micOn, voiceMode, done, startListening]);
 
+  const initStartedRef = useRef(false);
   useEffect(() => {
+    // Guards against React calling this effect twice for the same mount
+    // (Strict Mode in dev, or a fast remount) — /interview/start isn't
+    // idempotent, so a double-fire would ask the backend for two different
+    // opening questions and speak() both, which reads as literal "echo,
+    // repeating at the same time".
+    if (initStartedRef.current) return;
+    initStartedRef.current = true;
     (async () => {
       const existing = await api.get<TranscriptResponse>(`/hyrte/sessions/${id}/interview`);
       if (existing.transcript.length > 0) {
