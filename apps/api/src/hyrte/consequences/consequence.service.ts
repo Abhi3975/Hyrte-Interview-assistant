@@ -35,6 +35,18 @@ const MIN_IGNORED_WINDOW_MS = 45_000;
 const MAX_IGNORED_WINDOW_MS = 75_000;
 /** §4.5 Chaos Engine — a single wave, timed from workspace unlock, not from random ticks. */
 const CHAOS_WAVE_DELAY_MS = 100_000;
+/**
+ * Multi-hop escalation chain (doc's own worked example: sales follow-up →
+ * customer escalation → manager question), each hop spaced over time via the
+ * same CONDITIONAL-event mechanism as hop 1 — a hop only fires if the
+ * PREVIOUS hop was also ignored, so the whole chain only plays out if the
+ * candidate genuinely never responds. Capped at 3 hops, matching the doc's
+ * own worked example length exactly.
+ */
+const MAX_ESCALATION_HOPS = 3;
+/** Later hops carry more weight — a manager's pointed question should land harder than a peer's nudge. */
+const HOP_RELATIONSHIP_DELTA_CAP = [15, 20, 25] as const;
+const HOP_STATE_DELTA_CAP = [MAX_DELTA, 14, 18] as const;
 
 export const randomIgnoredWindow = () =>
   MIN_IGNORED_WINDOW_MS + Math.floor(Math.random() * (MAX_IGNORED_WINDOW_MS - MIN_IGNORED_WINDOW_MS));
@@ -206,33 +218,58 @@ export class HyrteConsequenceService {
    * candidate_ignored_email > 5min"); persisted as a real HyrteWorldEvent row
    * (PENDING → FIRED if escalated, CANCELLED if read in time) instead of a
    * bare untracked setTimeout.
+   *
+   * Upgrade — multi-hop chain (doc's own worked example: sales follow-up →
+   * customer escalation → manager question). `hop`/`rootMessageId` are only
+   * passed by escalateIgnoredMessage when scheduling the NEXT hop; external
+   * callers always start a fresh chain at hop 1.
    */
-  scheduleIgnoredCheck(sessionId: string, messageId: string, delayMs: number): void {
+  scheduleIgnoredCheck(sessionId: string, messageId: string, delayMs: number, hop = 1, rootMessageId?: string): void {
     this.prisma.hyrteWorldEvent
       .create({
-        data: { sessionId, kind: 'CONDITIONAL', surface: 'inbox', triggerCondition: `message_unread:${messageId}` },
+        data: {
+          sessionId,
+          kind: 'CONDITIONAL',
+          surface: 'inbox',
+          triggerCondition: `message_unread:${messageId}`,
+          payload: { hop } as unknown as Prisma.InputJsonValue,
+        },
       })
       .then((event) => {
         setTimeout(() => {
-          this.checkAndEscalate(sessionId, messageId, event.id).catch((e) => this.logger.warn(errMsg(e)));
+          this.checkAndEscalate(sessionId, messageId, event.id, hop, rootMessageId ?? messageId).catch((e) => this.logger.warn(errMsg(e)));
         }, delayMs);
       })
       .catch((e) => this.logger.warn(errMsg(e)));
   }
 
-  private async checkAndEscalate(sessionId: string, messageId: string, eventId: string): Promise<void> {
+  private async checkAndEscalate(sessionId: string, messageId: string, eventId: string, hop: number, rootMessageId: string): Promise<void> {
     const message = await this.prisma.hyrteInboxMessage.findUnique({ where: { id: messageId } });
     if (!message || message.readAt) {
       await this.prisma.hyrteWorldEvent.update({ where: { id: eventId }, data: { status: 'CANCELLED' } }).catch(() => {});
       return; // acted on in time — no consequence
     }
-    await this.escalateIgnoredMessage(sessionId, message);
+    await this.escalateIgnoredMessage(sessionId, message, hop, rootMessageId);
     await this.prisma.hyrteWorldEvent.update({ where: { id: eventId }, data: { status: 'FIRED', firedAt: new Date() } }).catch(() => {});
   }
 
+  /**
+   * Upgrade — each hop is a distinct stage, not a repeat of hop 1 with a new
+   * random target: hop 1 is a peer-level nudge, hop 2 reframes the stakes as
+   * now visibly affecting a customer/external party (preferring a
+   * customer-facing stakeholder if the roster has one), hop 3 goes to the
+   * highest-authority stakeholder — computed the same deterministic way as
+   * the Mission Brief's manager, never LLM-guessed, since "does escalation
+   * actually reach a real manager" is exactly the kind of guarantee that
+   * shouldn't depend on the model choosing correctly. If hop < MAX, the next
+   * hop is scheduled on THIS escalation message, so the chain only continues
+   * if the candidate ignores this one too.
+   */
   private async escalateIgnoredMessage(
     sessionId: string,
     message: { id: string; subject: string; body: string; fromStakeholderId: string | null },
+    hop: number,
+    rootMessageId: string,
   ): Promise<void> {
     try {
       const [session, companyState, stakeholders, originalSender] = await Promise.all([
@@ -246,21 +283,45 @@ export class HyrteConsequenceService {
       if (!session || !companyState || stakeholders.length === 0) return;
 
       const others = stakeholders.filter((s) => s.id !== message.fromStakeholderId);
-      const roster = (others.length > 0 ? others : stakeholders).map((s) => ({ key: s.id, name: s.name, role: s.role }));
+      const candidates = others.length > 0 ? others : stakeholders;
+      const hopIdx = Math.min(hop, MAX_ESCALATION_HOPS) - 1;
+      const stateCap = HOP_STATE_DELTA_CAP[hopIdx];
+      const relationshipCap = HOP_RELATIONSHIP_DELTA_CAP[hopIdx];
+
+      // Hop 3 — the manager question — is a deterministic pick, not an LLM
+      // choice: the highest-authority stakeholder in the session, same
+      // derivation as the Mission Brief's manager.
+      const forcedEscalator =
+        hop >= MAX_ESCALATION_HOPS ? candidates.reduce((a, b) => ((b.authorityLevel ?? 50) > (a.authorityLevel ?? 50) ? b : a)) : undefined;
+      const roster = (forcedEscalator ? [forcedEscalator] : candidates).map((s) => ({ key: s.id, name: s.name, role: s.role }));
+
+      const hopFraming =
+        hop === 1
+          ? 'This is the FIRST escalation (of up to 3) after the candidate ignored an urgent message — a colleague ' +
+            'sends a short, frustrated follow-up about the lack of response, from their own perspective.'
+          : hop === 2
+            ? 'This is the SECOND escalation — the FIRST follow-up was ALSO ignored. Reframe the stakes as now ' +
+              'visibly affecting something external/customer-facing (a customer complaint, an at-risk deal, a ' +
+              'visible failure) — noticeably more urgent and higher-stakes than a routine internal nudge. Prefer ' +
+              'a customer-facing stakeholder (sales/support/success-flavored role) from the roster if one fits.'
+            : 'This is the THIRD and FINAL escalation — TWO prior follow-ups were ignored. The stakeholder in the ' +
+              'roster is the most senior person in the company and is now asking a direct, serious question about ' +
+              'why this still hasn\'t been handled. This should read as a manager stepping in, not a peer nudging — ' +
+              'noticeably more consequential than hops 1-2.';
 
       const result = await this.ai.completeJson<EscalationResponse>(
         [
           {
             role: 'system',
             content:
-              'You are generating a consequence event for a workplace simulation: the candidate ignored ' +
-              'an urgent message. Pick ONE stakeholder from the given roster (by "key") to send a short, ' +
-              'frustrated follow-up about the lack of response, from their own perspective. Return ONLY ' +
-              'JSON: {"stakeholderKey": string (must match a roster key), "message": string (2-4 ' +
-              'sentences, urgent/frustrated tone), "companyStateDelta": {<at most 2 of: ' +
-              `${COMPANY_STATE_KEYS.join(', ')}, each -${MAX_DELTA}..${MAX_DELTA}>}, "relationshipDelta": ` +
-              '{"trust": int, "respect": int, "cooperation": int, "influence": int} (each -15..0, the ' +
-              "damage to the ORIGINAL sender's relationship from being ignored)}.",
+              'You are generating a consequence event for a workplace simulation: the candidate ignored an ' +
+              `urgent message, now escalating. ${hopFraming} Pick ONE stakeholder from the given roster (by ` +
+              '"key"). Return ONLY JSON: {"stakeholderKey": string (must match a roster key), "message": ' +
+              'string (2-4 sentences, tone matching the escalation stage described), "companyStateDelta": ' +
+              `{<at most 2 of: ${COMPANY_STATE_KEYS.join(', ')}, each -${stateCap}..${stateCap}>}, ` +
+              `"relationshipDelta": {"trust": int, "respect": int, "cooperation": int, "influence": int} (each ` +
+              `-${relationshipCap}..0, the damage to the ORIGINAL sender's relationship from being ignored this ` +
+              'many times).',
           },
           {
             role: 'user',
@@ -277,25 +338,27 @@ export class HyrteConsequenceService {
       if (!text) return;
 
       const escalator =
-        (others.length > 0 ? others : stakeholders).find((s) => s.id === result.stakeholderKey) ??
-        (others.length > 0 ? others : stakeholders)[Math.floor(Math.random() * (others.length > 0 ? others : stakeholders).length)];
+        forcedEscalator ??
+        candidates.find((s) => s.id === result.stakeholderKey) ??
+        candidates[Math.floor(Math.random() * candidates.length)];
 
+      const hopLabel = hop === 1 ? 'still waiting' : hop === 2 ? 'this is now customer-facing' : 'manager follow-up';
       const created = await this.prisma.hyrteInboxMessage.create({
         data: {
           sessionId,
           fromStakeholderId: escalator.id,
-          subject: `Re: ${message.subject.replace(/^Re: /, '')} — still waiting`,
+          subject: `Re: ${message.subject.replace(/^Re: /, '')} — ${hopLabel}`,
           body: text,
           urgent: true,
-          // Upgrade §5/Step 19 — marks this as a recovery opportunity so
-          // HyrteWorkplaceService can link a reply's Decision Graph node back
-          // to the original ignored-message node via recoveryOfId.
-          escalatesMessageId: message.id,
+          // Upgrade §5/Step 19 — always points at the ROOT of the chain (not
+          // the immediately-preceding hop), so replying at ANY hop links
+          // recovery back to the original ignored-message decision node.
+          escalatesMessageId: rootMessageId,
         },
       });
       this.gateway.broadcast(sessionId, { type: 'inbox:new', message: created });
 
-      await this.applyCompanyStateDelta(sessionId, result.companyStateDelta ?? {}, 'escalation');
+      await this.applyCompanyStateDelta(sessionId, result.companyStateDelta ?? {}, `escalation_hop_${hop}`);
 
       this.evidence
         .createEvidence({
@@ -303,8 +366,9 @@ export class HyrteConsequenceService {
           candidateId: session.candidateId,
           source: 'SIMULATION',
           type: 'SIMULATION_ACTION',
-          rawText: `Ignored an urgent message${originalSender ? ` from ${originalSender.name}` : ''} — ${escalator.name} escalated: "${text}"`,
+          rawText: `Ignored an urgent message${originalSender ? ` from ${originalSender.name}` : ''} — escalation hop ${hop}/${MAX_ESCALATION_HOPS}, ${escalator.name} (${escalator.role}): "${text}"`,
           behaviorContext: 'PRESSURE',
+          metadata: { escalationHop: hop },
         })
         .catch((e) => this.logger.warn(e));
 
@@ -319,11 +383,11 @@ export class HyrteConsequenceService {
           sessionId,
           actor: session.candidateId,
           actionType: 'inbox.message_ignored',
-          payload: { messageId: message.id, escalatorId: escalator.id },
+          payload: { messageId: message.id, escalatorId: escalator.id, hop },
           reasoning: 'No reply sent before the message’s active window elapsed.',
           riskAssessment:
             'Urgent messages from named stakeholders left unanswered risk relationship damage and escalation.',
-          outcome: `${escalator.name} escalated: "${text}"`,
+          outcome: `Escalation hop ${hop}/${MAX_ESCALATION_HOPS} — ${escalator.name} escalated: "${text}"`,
         })
         .catch((e) => this.logger.warn(e));
 
@@ -333,14 +397,22 @@ export class HyrteConsequenceService {
         const updated = await this.prisma.hyrteStakeholder.update({
           where: { id: originalSender.id },
           data: {
-            trust: clamp(originalSender.trust + clampDelta(rd.trust ?? 0, 15)),
-            respect: clamp(originalSender.respect + clampDelta(rd.respect ?? 0, 15)),
-            cooperation: clamp(originalSender.cooperation + clampDelta(rd.cooperation ?? 0, 15)),
-            influence: clamp(originalSender.influence + clampDelta(rd.influence ?? 0, 15)),
+            trust: clamp(originalSender.trust + clampDelta(rd.trust ?? 0, relationshipCap)),
+            respect: clamp(originalSender.respect + clampDelta(rd.respect ?? 0, relationshipCap)),
+            cooperation: clamp(originalSender.cooperation + clampDelta(rd.cooperation ?? 0, relationshipCap)),
+            influence: clamp(originalSender.influence + clampDelta(rd.influence ?? 0, relationshipCap)),
           },
           omit: OMIT_HIDDEN_INTENTION,
         });
         this.gateway.broadcast(sessionId, { type: 'stakeholder:update', stakeholder: updated });
+      }
+
+      // Chain continues only if this hop also gets ignored — the whole
+      // point of "spaced over time, not simultaneous" (doc's acceptance
+      // check): the next hop's window doesn't even start until this one's
+      // message exists.
+      if (hop < MAX_ESCALATION_HOPS) {
+        this.scheduleIgnoredCheck(sessionId, created.id, randomIgnoredWindow(), hop + 1, rootMessageId);
       }
     } catch (e) {
       this.logger.warn(`escalateIgnoredMessage failed (session ${sessionId}): ${errMsg(e)}`);
