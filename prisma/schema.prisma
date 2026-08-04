@@ -77,15 +77,16 @@ model User {
   updatedAt      DateTime      @updatedAt
   lastLoginAt    DateTime?
 
-  memberships        Membership[]
-  candidateProfile   CandidateProfile?
-  refreshTokens      RefreshToken[]
-  createdInterviews  Interview[]                @relation("InterviewCreatedBy")
-  sessions           InterviewSession[]
-  submittedQuestions Question[]                 @relation("QuestionSubmittedBy")
-  auditLogs          AuditLog[]
-  hyrteSessions      HyrteSession[]
-  intelligenceCard   CandidateIntelligenceCard?
+  memberships             Membership[]
+  candidateProfile        CandidateProfile?
+  refreshTokens           RefreshToken[]
+  createdInterviews       Interview[]                @relation("InterviewCreatedBy")
+  sessions                InterviewSession[]
+  submittedQuestions      Question[]                 @relation("QuestionSubmittedBy")
+  auditLogs               AuditLog[]
+  hyrteSessions           HyrteSession[]
+  intelligenceCard        CandidateIntelligenceCard?
+  hyrteSimulationRequests HyrteSimulationRequest[]
 
   @@index([organizationId])
   @@index([role])
@@ -126,14 +127,14 @@ model RefreshToken {
 // ─────────────────────────────────────────────────────────────
 
 model CandidateProfile {
-  id         String   @id @default(cuid())
-  userId     String   @unique
-  headline   String?
-  resumeUrl  String?
-  resumeText String? // extracted text for AI context & search
-  skills     String[] // selected + parsed skills
-  yearsOfExp Int?
-  location   String?
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  headline        String?
+  resumeUrl       String?
+  resumeText      String? // extracted text for AI context & search
+  skills          String[] // selected + parsed skills
+  yearsOfExp      Int?
+  location        String?
   // Candidate Evidence Graph intake (build prompt §0/§3.1) — LinkedIn has no
   // scrape/OAuth integration (LinkedIn's real API requires Partner Program
   // approval, out of reach here), so this is a self-reported summary paste,
@@ -141,8 +142,8 @@ model CandidateProfile {
   // ingestion (public REST API, no auth required for public profiles).
   linkedinSummary String?
   githubUsername  String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
@@ -728,6 +729,14 @@ enum HyrteSessionType {
 }
 
 enum HyrteSessionPhase {
+  // Upgrade §2/§4 — placeholder phase while the generation pipeline runs in
+  // the background. Session creation used to await the full pipeline inline;
+  // with the pipeline now taking multiple sequential/parallel LLM round-trips
+  // (Steps 2-6), that occasionally exceeded real infra timeouts (a dev-proxy
+  // 30s ceiling was hit and reproduced live) — session creation now returns
+  // immediately in this phase and the candidate's client polls until it
+  // flips to MISSION_BRIEF.
+  GENERATING
   MISSION_BRIEF
   BASELINE_SKILL_CHECK
   WORKSPACE_ACTIVE
@@ -737,11 +746,16 @@ enum HyrteSessionPhase {
 }
 
 model HyrteSession {
-  id                  String            @id @default(cuid())
+  id                  String                  @id @default(cuid())
+  // Upgrade §2 — a generated-world identity distinct from the session id.
+  // 1:1 with sessionId today (no world reuse across sessions yet), but kept
+  // separate so a future feature (e.g. Counterfactual re-simulation) can
+  // reuse a world across more than one session without a schema change.
+  worldId             String                  @unique @default(cuid())
   candidateId         String
-  candidate           User              @relation(fields: [candidateId], references: [id], onDelete: Cascade)
-  sessionType         HyrteSessionType  @default(PRACTICE)
-  phase               HyrteSessionPhase @default(MISSION_BRIEF)
+  candidate           User                    @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  sessionType         HyrteSessionType        @default(PRACTICE)
+  phase               HyrteSessionPhase       @default(MISSION_BRIEF)
   // The 6 generator inputs (doc §4).
   role                String
   experienceLevel     String
@@ -750,6 +764,12 @@ model HyrteSession {
   difficulty          Difficulty
   culture             String
   companyName         String
+  // U1 — §1 entry point. Set when this session was launched from a
+  // recruiter-configured SimulationRequest (JD + six seeds) rather than a
+  // candidate's own free picks on /hyrte. Null for self-serve PRACTICE
+  // sessions, which keep working exactly as before.
+  simulationRequestId String?
+  simulationRequest   HyrteSimulationRequest? @relation(fields: [simulationRequestId], references: [id], onDelete: SetNull)
   // UX flow §8 steps 1-2, generated alongside the rest of the fixture at
   // session creation but only shown before WORKSPACE_ACTIVE.
   missionBrief        Json?
@@ -762,31 +782,35 @@ model HyrteSession {
   // §5.9 Adversarial "Boss Level" mode — explicit opt-in, and a hard-capped
   // jab counter enforced in code (HyrteInterviewService), never left to the
   // LLM's own judgment about when to stop.
-  interviewBossMode   Boolean           @default(false)
-  interviewJabCount   Int               @default(0)
-  startedAt           DateTime          @default(now())
-  updatedAt           DateTime          @updatedAt
+  interviewBossMode   Boolean                 @default(false)
+  interviewJabCount   Int                     @default(0)
+  startedAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
 
-  companyState        HyrteCompanyState?
-  stakeholders        HyrteStakeholder[]
-  inboxMessages       HyrteInboxMessage[]
-  slackMessages       HyrteSlackMessage[]
-  tasks               HyrteTask[]
-  calendarEvents      HyrteCalendarEvent[]
-  knowledgeDocs       HyrteKnowledgeDoc[]
-  decisionLog         HyrteDecisionLogEntry[]
-  stakeholderMemory   HyrteStakeholderMemory[]
-  interviewReport     HyrteInterviewReport?
-  evidenceObjects     EvidenceObject[]
-  jobSuccessModel     JobSuccessModel?
-  investigationPlan   InvestigationPlan?
-  councilAgentReports HyrteCouncilAgentReport[]
-  councilDiscussion   HyrteCouncilDiscussionEntry[]
-  councilQA           HyrteCouncilQA[]
-  aiAuditLog          HyrteAiAuditLog[]
-  hiringOutcomeEvents HyrteHiringOutcomeEvent[]
+  companyState             HyrteCompanyState?
+  stakeholders             HyrteStakeholder[]
+  inboxMessages            HyrteInboxMessage[]
+  slackMessages            HyrteSlackMessage[]
+  tasks                    HyrteTask[]
+  calendarEvents           HyrteCalendarEvent[]
+  knowledgeDocs            HyrteKnowledgeDoc[]
+  decisionLog              HyrteDecisionLogEntry[]
+  stakeholderMemory        HyrteStakeholderMemory[]
+  interviewReport          HyrteInterviewReport?
+  evidenceObjects          EvidenceObject[]
+  jobSuccessModel          JobSuccessModel?
+  investigationPlan        InvestigationPlan?
+  councilAgentReports      HyrteCouncilAgentReport[]
+  councilDiscussion        HyrteCouncilDiscussionEntry[]
+  councilQA                HyrteCouncilQA[]
+  aiAuditLog               HyrteAiAuditLog[]
+  hiringOutcomeEvents      HyrteHiringOutcomeEvent[]
+  worldGenerationArtifacts HyrteWorldGenerationArtifact[]
+  worldEvents              HyrteWorldEvent[]
+  companyStateHistory      HyrteCompanyStateHistory[]
 
   @@index([candidateId])
+  @@index([simulationRequestId])
 }
 
 // §8 Hardening — audit trail across every AI agent call (Council's 9 agents +
@@ -849,22 +873,22 @@ enum CouncilStance {
 }
 
 model HyrteCouncilAgentReport {
-  id        String         @id @default(cuid())
-  sessionId String
-  session   HyrteSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  agentKey  String // e.g. "hiringManager" — see council-agents.config.ts
-  agentName String
+  id               String         @id @default(cuid())
+  sessionId        String
+  session          HyrteSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  agentKey         String // e.g. "hiringManager" — see council-agents.config.ts
+  agentName        String
   // Null for the 4 non-voting oversight agents (Devil's Advocate, Bias
   // Auditor, Evidence Auditor, Decision Cortex) — their job is to challenge/
   // aggregate, not cast a hire/no-hire lean of their own.
-  stance    CouncilStance?
-  reasoning String
-  keyPoints String[]       @default([])
+  stance           CouncilStance?
+  reasoning        String
+  keyPoints        String[]       @default([])
   // Real EvidenceObject ids this agent's reasoning is grounded in — resolved
   // server-side from the EVn labels the agent cited in the evidence brief,
   // never trusted as free-form LLM output. Empty when the agent cited none.
-  citedEvidenceIds String[] @default([])
-  createdAt DateTime       @default(now())
+  citedEvidenceIds String[]       @default([])
+  createdAt        DateTime       @default(now())
 
   @@unique([sessionId, agentKey])
   @@index([sessionId])
@@ -920,7 +944,33 @@ model HyrteCompanyState {
   hiringCapacity       Int          @default(50)
   operationalRisk      Int          @default(50)
   growth               Int          @default(50)
+  // Upgrade §2 — lightweight Organization structure for the simulated
+  // company: [{name, headStakeholderKey}]. Deliberately not a normalized
+  // Department table (no reporting-hierarchy queries need it yet) — matches
+  // this schema's existing precedent of JSON for generator-produced
+  // structure (personality, missionBrief) over new relational tables.
+  departments          Json         @default("[]")
   updatedAt            DateTime     @updatedAt
+}
+
+// Upgrade §5/Step 14 — "State history is versioned per action so the final
+// report can show state evolution over time." HyrteCompanyState itself stays
+// a single mutable row (matches Step 14's "single Company State object"
+// requirement exactly); this table is the append-only version log next to
+// it, written by the same shared path every state mutation already goes
+// through (HyrteConsequenceService.applyCompanyStateDelta).
+model HyrteCompanyStateHistory {
+  id        String       @id @default(cuid())
+  sessionId String
+  session   HyrteSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  // The delta that was applied (only the changed keys), not a full snapshot —
+  // cheap to write, and the full state at any point is reconstructable by
+  // replaying deltas from session start if ever needed.
+  delta     Json
+  reason    String? // e.g. "task_completion" | "escalation" | "chaos_wave" | "stakeholder_reply"
+  createdAt DateTime     @default(now())
+
+  @@index([sessionId, createdAt])
 }
 
 model HyrteStakeholder {
@@ -930,6 +980,17 @@ model HyrteStakeholder {
   name            String
   role            String
   avatarSeed      String
+  // Upgrade §3 — richer stakeholder generation. department matches a name in
+  // the session's HyrteCompanyState.departments; kpis/currentTasks are
+  // free-text (no work-product/task-assignment UI to link a real HyrteTask
+  // row yet — that's separately-scoped, see U2 notes); authorityLevel is
+  // distinct from `influence` (which is candidate-relationship-specific and
+  // mutates over the session — authorityLevel is a fixed org-position fact).
+  department      String?
+  experienceLevel String?
+  authorityLevel  Int          @default(50)
+  kpis            String[]     @default([])
+  currentTasks    String[]     @default([])
   // Traits/goals, read by the Stakeholder Engine's agent prompt.
   personality     Json         @default("{}")
   // 12-layer stakeholder architecture (§4.12) Layer 10 — what this stakeholder
@@ -970,20 +1031,27 @@ model HyrteStakeholderMemory {
 }
 
 model HyrteInboxMessage {
-  id                String            @id @default(cuid())
-  sessionId         String
-  session           HyrteSession      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  fromStakeholderId String?
-  fromStakeholder   HyrteStakeholder? @relation(fields: [fromStakeholderId], references: [id], onDelete: SetNull)
-  subject           String
-  body              String
-  urgent            Boolean           @default(false)
+  id                 String            @id @default(cuid())
+  sessionId          String
+  session            HyrteSession      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  fromStakeholderId  String?
+  fromStakeholder    HyrteStakeholder? @relation(fields: [fromStakeholderId], references: [id], onDelete: SetNull)
+  subject            String
+  body               String
+  urgent             Boolean           @default(false)
   // §4.20 Ethical Gray Zones — flagged at generation time; read back when the
   // candidate replies so the resulting evidence gets tagged ETHICAL_DECISION
   // instead of a generic SIMULATION_ACTION.
-  ethicalDilemma    Boolean           @default(false)
-  readAt            DateTime?
-  createdAt         DateTime          @default(now())
+  ethicalDilemma     Boolean           @default(false)
+  readAt             DateTime?
+  createdAt          DateTime          @default(now())
+  // Upgrade §5/Step 19 — set only on the auto-generated "still waiting"
+  // follow-up HyrteConsequenceService.escalateIgnoredMessage creates. Lets
+  // HyrteWorkplaceService detect "this reply is a recovery attempt" instead
+  // of guessing from subject-line text, and link the Decision Graph node via
+  // recoveryOfId (built in Phase 1, never populated by any real caller until
+  // now).
+  escalatesMessageId String?
 
   @@index([sessionId])
 }
@@ -1020,6 +1088,7 @@ model HyrteCalendarEvent {
   sessionId String
   session   HyrteSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   title     String
+  agenda    String?
   startAt   DateTime
   endAt     DateTime
 
@@ -1064,6 +1133,60 @@ model HyrteDecisionLogEntry {
   createdAt              DateTime                @default(now())
 
   @@index([sessionId, createdAt])
+}
+
+// Upgrade §2/§6 — one row per generation-pipeline step (company_org,
+// stakeholders, knowledge, workplace_assets, event_queue), persisted so a
+// future Stabilization Gate (U3) can inspect/re-run a single failing step
+// instead of the whole pipeline, and so generation is debuggable after the
+// fact — matches the doc's "persisted intermediate artifacts per step".
+model HyrteWorldGenerationArtifact {
+  id        String       @id @default(cuid())
+  sessionId String
+  session   HyrteSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  step      String // "company_org" | "stakeholders" | "knowledge" | "workplace_assets" | "event_queue"
+  status    String // "OK" | "FAILED_FELL_BACK"
+  payload   Json
+  createdAt DateTime     @default(now())
+
+  @@index([sessionId, step])
+}
+
+enum HyrteWorldEventKind {
+  IMMEDIATE
+  SCHEDULED
+  CONDITIONAL
+}
+
+enum HyrteWorldEventStatus {
+  PENDING
+  FIRED
+  CANCELLED
+}
+
+// Upgrade §6 — the Event Queue. IMMEDIATE events are materialized straight
+// into inbox/Slack at session creation (no queue row needed — they're not
+// "upcoming"). SCHEDULED events (the old `arrivesLater` boolean) and
+// CONDITIONAL events (e.g. "message_unread:<messageId>", the existing
+// ignored-message-escalation mechanic) get a real, queryable row here instead
+// of being purely an in-process `setTimeout` with no persisted trace. Content
+// for CONDITIONAL events that react to live state (chaos wave, escalation
+// text) is necessarily generated at fire time, not pre-generated — payload is
+// a placeholder for those until `firedAt` is set; see HyrteConsequenceService.
+model HyrteWorldEvent {
+  id                  String                @id @default(cuid())
+  sessionId           String
+  session             HyrteSession          @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  kind                HyrteWorldEventKind
+  status              HyrteWorldEventStatus @default(PENDING)
+  surface             String // "inbox" | "slack" | "chaos_wave"
+  triggerCondition    String? // CONDITIONAL only, e.g. "message_unread:<messageId>"
+  fireAtOffsetSeconds Int? // SCHEDULED only — seconds after workspace unlock
+  payload             Json                  @default("{}")
+  firedAt             DateTime?
+  createdAt           DateTime              @default(now())
+
+  @@index([sessionId, status])
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1208,6 +1331,54 @@ model JobSuccessModel {
   sourceJobDescription   String?
   sourceCompanyContext   String?
   createdAt              DateTime      @default(now())
+}
+
+enum HyrteSimulationRequestStatus {
+  OPEN
+  LAUNCHED
+  EXPIRED
+}
+
+// Upgrade §1 — the entry point. A recruiter decomposes a real JD into a Job
+// Success Model + six seeds (LLM-suggested, always editable before create),
+// gets back a shareable code. A candidate resolves the code (pre-login OK,
+// same pattern as the main product's `Interview` invite codes), then launches
+// a HyrteSession whose world-generation is grounded in this decomposition —
+// not just the six seed labels. Self-serve PRACTICE sessions from /hyrte
+// still work unchanged and have no SimulationRequest at all.
+model HyrteSimulationRequest {
+  id          String                       @id @default(cuid())
+  createdById String
+  createdBy   User                         @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  code        String                       @unique
+  status      HyrteSimulationRequestStatus @default(OPEN)
+
+  jobDescriptionRaw      String
+  companyContextRaw      String?
+  // Job Success Model decomposition (§3.3 shape), cached here at creation
+  // time so launch() never has to re-call the LLM — copied verbatim into a
+  // real JobSuccessModel row, linked to the session, at launch.
+  role                   String
+  coreOutcomes           String[] @default([])
+  capabilityRequirements Json     @default("[]")
+  industryContext        Json     @default("{}")
+  companyContext         Json     @default("{}")
+
+  // The six seeds (doc §4.14) — LLM-suggested from the JD, recruiter-editable
+  // in the UI before this row is created. Same shape as CreateHyrteSessionDto
+  // so a launch is a straight copy.
+  experienceLevel String
+  industry        String
+  companyType     String
+  difficulty      Difficulty
+  culture         String
+
+  expiresAt DateTime?
+  createdAt DateTime  @default(now())
+
+  sessions HyrteSession[]
+
+  @@index([createdById])
 }
 
 // §3.4 — drives which simulation events fire and which interview probes get

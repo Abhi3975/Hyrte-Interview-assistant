@@ -29,6 +29,21 @@ export class HyrteSessionsController {
     return this.sessions.getCompanyState(id, user.id);
   }
 
+  @Get(':id/company-state/history')
+  companyStateHistory(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.sessions.getCompanyStateHistory(id, user.id);
+  }
+
+  @Get(':id/world-events')
+  worldEvents(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.sessions.getWorldEvents(id, user.id);
+  }
+
+  @Get(':id/world-generation-artifacts')
+  worldGenerationArtifacts(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.sessions.getWorldGenerationArtifacts(id, user.id);
+  }
+
   // UX flow §8 steps 1-2 — mission brief and baseline challenge content ships
   // as part of the session GET above (`missionBrief`/`baselineChallenge`
   // fields); these two endpoints only handle the phase transitions.

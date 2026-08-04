@@ -10,6 +10,13 @@ export interface FixtureStakeholder {
   name: string;
   role: string;
   avatarSeed: string;
+  /** Upgrade §3 — matches a name in FixtureOrganization.departments. */
+  department?: string;
+  experienceLevel?: string;
+  /** Fixed org-position fact, distinct from `influence` (candidate-relationship-specific, mutates). */
+  authorityLevel?: number;
+  kpis?: string[];
+  currentTasks?: string[];
   personality: Record<string, unknown>;
   /** §4.12 Layer 10 — never returned to the candidate, only read by the stakeholder-agent prompt. */
   hiddenIntention?: string;
@@ -18,6 +25,12 @@ export interface FixtureStakeholder {
   urgency?: number;
   patience?: number;
   motivation?: number;
+}
+
+/** Upgrade §2 — lightweight Organization structure for the simulated company. */
+export interface FixtureDepartment {
+  name: string;
+  headStakeholderKey?: string;
 }
 
 export interface FixtureInboxMessage {
@@ -47,8 +60,28 @@ export interface FixtureTask {
 
 export interface FixtureCalendarEvent {
   title: string;
+  agenda?: string;
   startInHours: number;
   durationMins: number;
+}
+
+/**
+ * Upgrade §6 — Event Queue. Only SCHEDULED events are pre-generated content
+ * (the old `arrivesLater` boolean, now with an explicit offset and a real
+ * queue row instead of a bare setTimeout). CONDITIONAL events describe a
+ * trigger, not content — their actual message is generated at fire time from
+ * live company state (ignored-message escalation, chaos wave), so `body`ish
+ * fields are absent here by design; see HyrteWorldEvent's schema comment.
+ */
+export interface FixtureScheduledEvent {
+  surface: 'inbox' | 'slack';
+  fromKey: string;
+  subject?: string; // inbox only
+  channel?: string; // slack only
+  body: string;
+  fireAtOffsetSeconds: number;
+  urgent?: boolean;
+  ethicalDilemma?: boolean;
 }
 
 export interface FixtureKnowledgeDoc {
@@ -62,10 +95,20 @@ export interface FixtureBaselineChallengeOption {
   label: string;
 }
 
-/** UX flow §8 step 2 — a quick warm-up scenario before the workspace opens. */
+/**
+ * Upgrade §4/Step 9 — Role Calibration, "not MCQ-only". `scenario`+`options`
+ * is the original decision-framework judgment call (kept deliberately
+ * unscored — no single correct option, per the doc). `roleKnowledgeQuestion`
+ * and `toolsQuestion` are new: short free-text questions testing real role
+ * knowledge and tools/industry familiarity, LLM-scored at submission time
+ * into a calibrationScore that adjusts event difficulty (see
+ * HyrteConsequenceService.scheduleChaosWave).
+ */
 export interface FixtureBaselineChallenge {
   scenario: string;
   options: FixtureBaselineChallengeOption[];
+  roleKnowledgeQuestion: string;
+  toolsQuestion: string;
 }
 
 /** UX flow §8 step 1 — shown before the workspace opens. */
@@ -74,6 +117,8 @@ export interface FixtureMissionBrief {
   whyItMatters: string;
   currentHealth: string;
   successMetrics: string[];
+  /** Upgrade §4/Step 8 — the candidate's reporting manager, derived from the real generated roster (highest-authority stakeholder), not invented separately. */
+  manager?: { name: string; role: string };
 }
 
 export interface HyrteFixture {
@@ -99,10 +144,14 @@ export interface HyrteFixture {
   };
   missionBrief: FixtureMissionBrief;
   baselineChallenge: FixtureBaselineChallenge;
+  /** Upgrade §2 — Organization structure; empty for the static fallback fixture (pre-upgrade shape). */
+  departments: FixtureDepartment[];
   stakeholders: FixtureStakeholder[];
   inbox: FixtureInboxMessage[];
   slack: FixtureSlackMessage[];
   tasks: FixtureTask[];
   calendarEvents: FixtureCalendarEvent[];
   knowledgeDocs: FixtureKnowledgeDoc[];
+  /** Upgrade §6 — Event Queue (SCHEDULED content only; see FixtureScheduledEvent). */
+  scheduledEvents: FixtureScheduledEvent[];
 }

@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AIService } from '../../ai/ai.service';
 import { HyrteGateway } from '../hyrte.gateway';
@@ -88,8 +89,14 @@ export class HyrteConsequenceService {
     private readonly decisionGraph: DecisionGraphService,
   ) {}
 
-  /** Shared, concurrency-safe path for every company-state mutation in the app. */
-  async applyCompanyStateDelta(sessionId: string, delta: CompanyStateDelta): Promise<void> {
+  /**
+   * Shared, concurrency-safe path for every company-state mutation in the
+   * app. Upgrade §5/Step 14 — every mutation is also appended to
+   * HyrteCompanyStateHistory (the delta actually applied, not a full
+   * snapshot), so the final report can show real state evolution over time
+   * instead of only ever seeing the current values.
+   */
+  async applyCompanyStateDelta(sessionId: string, delta: CompanyStateDelta, reason?: string): Promise<void> {
     const entries = Object.entries(delta).filter(
       ([k, v]) => COMPANY_STATE_KEYS.includes(k as CompanyStateKey) && typeof v === 'number' && v !== 0,
     ) as [string, number][];
@@ -113,6 +120,9 @@ export class HyrteConsequenceService {
       }
 
       this.gateway.broadcast(sessionId, { type: 'company_state:update', state });
+      this.prisma.hyrteCompanyStateHistory
+        .create({ data: { sessionId, delta: Object.fromEntries(entries) as Prisma.InputJsonValue, reason } })
+        .catch((e) => this.logger.warn(`companyStateHistory write failed (session ${sessionId}): ${errMsg(e)}`));
     } catch (e) {
       this.logger.warn(`applyCompanyStateDelta failed (session ${sessionId}): ${errMsg(e)}`);
     }
@@ -157,7 +167,7 @@ export class HyrteConsequenceService {
         { temperature: 0.6, maxTokens: 300 },
       );
 
-      await this.applyCompanyStateDelta(sessionId, result.companyStateDelta ?? {});
+      await this.applyCompanyStateDelta(sessionId, result.companyStateDelta ?? {}, 'task_completion');
 
       if (result.benefit || result.cost) {
         this.evidence
@@ -189,17 +199,35 @@ export class HyrteConsequenceService {
     }
   }
 
-  /** Schedules a check; fires an escalation only if the message is still unread. */
+  /**
+   * Schedules a check; fires an escalation only if the message is still
+   * unread. Upgrade §6 — this IS the doc's own worked example of a
+   * CONDITIONAL event ("fires only if a trigger condition is met, e.g.
+   * candidate_ignored_email > 5min"); persisted as a real HyrteWorldEvent row
+   * (PENDING → FIRED if escalated, CANCELLED if read in time) instead of a
+   * bare untracked setTimeout.
+   */
   scheduleIgnoredCheck(sessionId: string, messageId: string, delayMs: number): void {
-    setTimeout(() => {
-      this.checkAndEscalate(sessionId, messageId).catch((e) => this.logger.warn(errMsg(e)));
-    }, delayMs);
+    this.prisma.hyrteWorldEvent
+      .create({
+        data: { sessionId, kind: 'CONDITIONAL', surface: 'inbox', triggerCondition: `message_unread:${messageId}` },
+      })
+      .then((event) => {
+        setTimeout(() => {
+          this.checkAndEscalate(sessionId, messageId, event.id).catch((e) => this.logger.warn(errMsg(e)));
+        }, delayMs);
+      })
+      .catch((e) => this.logger.warn(errMsg(e)));
   }
 
-  private async checkAndEscalate(sessionId: string, messageId: string): Promise<void> {
+  private async checkAndEscalate(sessionId: string, messageId: string, eventId: string): Promise<void> {
     const message = await this.prisma.hyrteInboxMessage.findUnique({ where: { id: messageId } });
-    if (!message || message.readAt) return; // acted on in time — no consequence
+    if (!message || message.readAt) {
+      await this.prisma.hyrteWorldEvent.update({ where: { id: eventId }, data: { status: 'CANCELLED' } }).catch(() => {});
+      return; // acted on in time — no consequence
+    }
     await this.escalateIgnoredMessage(sessionId, message);
+    await this.prisma.hyrteWorldEvent.update({ where: { id: eventId }, data: { status: 'FIRED', firedAt: new Date() } }).catch(() => {});
   }
 
   private async escalateIgnoredMessage(
@@ -259,11 +287,15 @@ export class HyrteConsequenceService {
           subject: `Re: ${message.subject.replace(/^Re: /, '')} — still waiting`,
           body: text,
           urgent: true,
+          // Upgrade §5/Step 19 — marks this as a recovery opportunity so
+          // HyrteWorkplaceService can link a reply's Decision Graph node back
+          // to the original ignored-message node via recoveryOfId.
+          escalatesMessageId: message.id,
         },
       });
       this.gateway.broadcast(sessionId, { type: 'inbox:new', message: created });
 
-      await this.applyCompanyStateDelta(sessionId, result.companyStateDelta ?? {});
+      await this.applyCompanyStateDelta(sessionId, result.companyStateDelta ?? {}, 'escalation');
 
       this.evidence
         .createEvidence({
@@ -324,21 +356,38 @@ export class HyrteConsequenceService {
    * itself is a fixed delay rather than tracking the candidate's own pace of
    * work (that needs action-count/attention instrumentation this pass
    * doesn't build — see ARCHITECTURE.md).
+   *
+   * Upgrade §4/Step 9 — `calibrationScore` (0-100, from Role Calibration's
+   * two scored questions) adjusts the delay: a stronger calibration means
+   * less grace period before the first real pressure test, a weaker one
+   * means more runway to get oriented first. This is the concrete "adjust
+   * event difficulty weights" the doc asks Role Calibration results to do.
    */
-  scheduleChaosWave(sessionId: string): void {
-    setTimeout(() => {
-      this.triggerChaosWave(sessionId).catch((e) => this.logger.warn(errMsg(e)));
-    }, CHAOS_WAVE_DELAY_MS);
+  scheduleChaosWave(sessionId: string, calibrationScore?: number): void {
+    const delayMs = chaosWaveDelayFor(calibrationScore);
+    this.prisma.hyrteWorldEvent
+      .create({
+        data: { sessionId, kind: 'SCHEDULED', surface: 'chaos_wave', fireAtOffsetSeconds: Math.round(delayMs / 1000) },
+      })
+      .then((event) => {
+        setTimeout(() => {
+          this.triggerChaosWave(sessionId, event.id).catch((e) => this.logger.warn(errMsg(e)));
+        }, delayMs);
+      })
+      .catch((e) => this.logger.warn(errMsg(e)));
   }
 
-  private async triggerChaosWave(sessionId: string): Promise<void> {
+  private async triggerChaosWave(sessionId: string, eventId: string): Promise<void> {
     const [session, companyState, stakeholders] = await Promise.all([
       this.prisma.hyrteSession.findUnique({ where: { id: sessionId } }),
       this.prisma.hyrteCompanyState.findUnique({ where: { sessionId } }),
       this.prisma.hyrteStakeholder.findMany({ where: { sessionId }, select: { id: true, name: true, role: true } }),
     ]);
     // Session may have already finished (interview/report) by the time this fires — skip quietly.
-    if (!session || !companyState || stakeholders.length === 0 || session.phase !== 'WORKSPACE_ACTIVE') return;
+    if (!session || !companyState || stakeholders.length === 0 || session.phase !== 'WORKSPACE_ACTIVE') {
+      await this.prisma.hyrteWorldEvent.update({ where: { id: eventId }, data: { status: 'CANCELLED' } }).catch(() => {});
+      return;
+    }
 
     const roster = stakeholders.map((s) => ({ key: s.id, name: s.name, role: s.role }));
 
@@ -369,7 +418,10 @@ export class HyrteConsequenceService {
     );
 
     const events = (result.events ?? []).filter((e) => stakeholders.some((s) => s.id === e.stakeholderKey)).slice(0, 3);
-    if (events.length === 0) return;
+    if (events.length === 0) {
+      await this.prisma.hyrteWorldEvent.update({ where: { id: eventId }, data: { status: 'CANCELLED' } }).catch(() => {});
+      return;
+    }
 
     for (const e of events) {
       if (e.channel === 'inbox') {
@@ -392,7 +444,7 @@ export class HyrteConsequenceService {
       }
     }
 
-    await this.applyCompanyStateDelta(sessionId, result.companyStateDelta ?? {});
+    await this.applyCompanyStateDelta(sessionId, result.companyStateDelta ?? {}, 'chaos_wave');
 
     this.evidence
       .createEvidence({
@@ -405,7 +457,16 @@ export class HyrteConsequenceService {
         metadata: { chaosWave: true },
       })
       .catch((e) => this.logger.warn(e));
+
+    await this.prisma.hyrteWorldEvent.update({ where: { id: eventId }, data: { status: 'FIRED', firedAt: new Date() } }).catch(() => {});
   }
+}
+
+/** Upgrade §4/Step 9 — weaker calibration gets more runway before the first real pressure test; stronger calibration gets less. */
+function chaosWaveDelayFor(calibrationScore?: number): number {
+  if (typeof calibrationScore !== 'number' || Number.isNaN(calibrationScore)) return CHAOS_WAVE_DELAY_MS;
+  const multiplier = calibrationScore < 40 ? 1.5 : calibrationScore > 75 ? 0.6 : 1;
+  return Math.round(CHAOS_WAVE_DELAY_MS * multiplier);
 }
 
 function clampDelta(n: unknown, max = MAX_DELTA): number {

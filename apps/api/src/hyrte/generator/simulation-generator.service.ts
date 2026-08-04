@@ -2,27 +2,98 @@ import { Injectable, Logger } from '@nestjs/common';
 import { AIService } from '../../ai/ai.service';
 import { CreateHyrteSessionDto } from '../dto/hyrte.dto';
 import { COMPANY_STATE_KEYS } from '../consequences/consequence.service';
+import { ValidationReport, WorldStabilizationError, validateWorld } from './world-stabilization';
 import {
-  FixtureBaselineChallenge,
   FixtureCalendarEvent,
+  FixtureDepartment,
   FixtureInboxMessage,
   FixtureKnowledgeDoc,
   FixtureMissionBrief,
+  FixtureScheduledEvent,
   FixtureSlackMessage,
   FixtureStakeholder,
   FixtureTask,
   HyrteFixture,
 } from '../fixtures/hyrte-fixture.types';
 
-const CAPS = { stakeholders: 6, inbox: 4, slack: 5, tasks: 4, calendarEvents: 3, knowledgeDocs: 4, successMetrics: 4, baselineOptions: 4 };
+/** §2 World Stabilization Gate — regenerate + re-validate up to this many times before surfacing an error. */
+const MAX_REPAIR_LOOPS = 3;
+
+const CAPS = {
+  stakeholders: 6,
+  inbox: 3,
+  slack: 3,
+  tasks: 4,
+  calendarEvents: 3,
+  knowledgeDocs: 8,
+  successMetrics: 4,
+  baselineOptions: 4,
+  departments: 5,
+  scheduledEvents: 4,
+};
 
 /**
- * Produces a unique `HyrteFixture` per session from the candidate's 6 inputs
- * (doc §4) — the whole point being that no two candidates get an identical
- * simulation. Culture deliberately does NOT skew the starting company-state
- * numbers here; per the doc, culture changes how the same decision is later
- * *scored* (a future system's job), not the scenario itself — it only
- * flavors tone/content in the prompt below.
+ * Upgrade §1 grounding — when a session is launched from a recruiter's
+ * SimulationRequest (a real, decomposed JD), every pipeline step below gets
+ * the actual core outcomes / capability requirements / industry themes
+ * folded into its prompt, so the generated crisis/tasks/inbox trace back to
+ * the real JD instead of just the six seed labels. Undefined for self-serve
+ * PRACTICE sessions (unchanged behavior — six seeds only).
+ */
+export interface JobSuccessModelGrounding {
+  coreOutcomes: string[];
+  capabilityRequirements: { skill: string; importance: string; depth?: string }[];
+  industryProbeThemes: string[];
+}
+
+/** One row per pipeline step — persisted by the caller (HyrteSessionsService) once the session exists. */
+export interface WorldGenerationArtifact {
+  step: 'company_org' | 'stakeholders' | 'knowledge' | 'workplace_assets' | 'event_queue' | 'stabilization_gate';
+  status: 'OK' | 'FAILED_FELL_BACK';
+  payload: unknown;
+}
+
+export interface GeneratedWorld {
+  fixture: HyrteFixture;
+  artifacts: WorldGenerationArtifact[];
+}
+
+interface CompanyOrgResult {
+  companyName?: string;
+  companyState?: Record<string, unknown>;
+  missionBrief?: Record<string, unknown>;
+  baselineChallenge?: Record<string, unknown>;
+  departments?: { name?: unknown }[];
+}
+
+interface StakeholdersResult {
+  stakeholders?: Record<string, unknown>[];
+}
+
+interface KnowledgeResult {
+  knowledgeDocs?: Record<string, unknown>[];
+}
+
+interface WorkplaceAssetsResult {
+  inbox?: Record<string, unknown>[];
+  slack?: Record<string, unknown>[];
+  tasks?: Record<string, unknown>[];
+  calendarEvents?: Record<string, unknown>[];
+}
+
+interface EventQueueResult {
+  scheduledEvents?: Record<string, unknown>[];
+}
+
+/**
+ * Upgrade §2/§6 — the generation pipeline, restructured into 5 ordered steps
+ * (was: one mega-call producing the entire fixture as a single JSON blob).
+ * Each step is its own LLM call, informed by the REAL output of the steps
+ * before it (stakeholders see the real department list; knowledge/workplace
+ * assets/event-queue see the real stakeholder roster) — this is what actually
+ * cuts down on dangling references, not just post-hoc repair. Each step's raw
+ * + sanitized output is returned as a WorldGenerationArtifact for the caller
+ * to persist (doc's "persisted intermediate artifacts per step").
  */
 @Injectable()
 export class HyrteSimulationGeneratorService {
@@ -30,88 +101,292 @@ export class HyrteSimulationGeneratorService {
 
   constructor(private readonly ai: AIService) {}
 
-  async generate(dto: CreateHyrteSessionDto): Promise<HyrteFixture> {
-    const raw = await this.ai.completeJson<unknown>(
-      [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: this.buildUserPrompt(dto) },
-      ],
-      { temperature: 0.9, maxTokens: 3600 },
-    );
-    return sanitizeFixture(raw);
+  /**
+   * Upgrade §2 — World Stabilization Gate. Runs the full pipeline, validates
+   * the result with real code checks (world-stabilization.ts), and — if it
+   * fails — regenerates and re-validates, up to MAX_REPAIR_LOOPS times, never
+   * returning an unvalidated world. Retries the WHOLE pipeline per attempt
+   * rather than surgically re-running only the failing step in isolation:
+   * the steps are sequentially dependent (stakeholders feed knowledge/
+   * assets/events), so a full retry is simpler and no less correct for a
+   * linear pipeline — a documented scope simplification, not an oversight.
+   */
+  async generate(dto: CreateHyrteSessionDto, grounding?: JobSuccessModelGrounding): Promise<GeneratedWorld> {
+    let lastReport: ValidationReport | undefined;
+    for (let attempt = 1; attempt <= MAX_REPAIR_LOOPS; attempt++) {
+      try {
+        const { fixture, artifacts } = await this.generateOnce(dto, grounding);
+        const report = validateWorld(fixture, artifacts, attempt);
+        artifacts.push({ step: 'stabilization_gate', status: report.passed ? 'OK' : 'FAILED_FELL_BACK', payload: report });
+        if (report.passed) return { fixture, artifacts };
+        lastReport = report;
+      } catch (e) {
+        // A degenerate pipeline run (e.g. zero valid stakeholders) is itself
+        // a stabilization failure, not a different error class — retry it
+        // the same way as a soft validation failure.
+        const msg = e instanceof Error ? e.message : String(e);
+        lastReport = { passed: false, attempt, checks: [{ name: 'pipeline_run', passed: false, detail: msg }] };
+      }
+      this.logger.warn(
+        `World failed stabilization (attempt ${attempt}/${MAX_REPAIR_LOOPS}): ` +
+          lastReport.checks.filter((c) => !c.passed).map((c) => `${c.name} — ${c.detail}`).join(' | '),
+      );
+    }
+    // Never admit the candidate into a broken world — the caller
+    // (HyrteSessionsService) catches this and falls back to the hand-authored
+    // static fixture, which is definitionally valid, persisting this report
+    // for debugging rather than silently discarding it.
+    throw new WorldStabilizationError(lastReport!);
   }
 
-  private buildUserPrompt(dto: CreateHyrteSessionDto): string {
+  private async generateOnce(dto: CreateHyrteSessionDto, grounding?: JobSuccessModelGrounding): Promise<GeneratedWorld> {
+    const artifacts: WorldGenerationArtifact[] = [];
     const nonce = Math.random().toString(36).slice(2, 8);
-    return (
-      `Generate a simulation for a ${dto.experienceLevel} ${dto.role} at a ${dto.companyType} ` +
-      `company in the ${dto.industry} industry. Difficulty: ${dto.difficulty} — reflect this in how ` +
-      `bad the starting company-state numbers are and how many things are simultaneously on fire. ` +
-      `Company culture: ${dto.culture} — reflect this only in tone/flavor (what stakeholders care ` +
-      `about, how they talk), not in the numeric company state. ` +
-      `Invent a unique fictional company name and scenario — do not reuse common example names ` +
-      `like Acme, Nimbus, or TechCorp. Variety seed: ${nonce}.`
+    const groundingNote = this.groundingNote(grounding);
+
+    // Step 2 — Company + Organization + Company State.
+    const companyOrg = await this.step<CompanyOrgResult>(
+      'company_org',
+      artifacts,
+      COMPANY_ORG_SYSTEM,
+      `Generate a company for a ${dto.experienceLevel} ${dto.role} at a ${dto.companyType} company in ` +
+        `the ${dto.industry} industry. Difficulty: ${dto.difficulty} — reflect this in how bad the ` +
+        `starting company-state numbers are and how many things are simultaneously on fire. Company ` +
+        `culture: ${dto.culture} — reflect this only in tone/flavor, not the numeric state. Invent a ` +
+        `unique fictional company name — do not reuse common example names like Acme, Nimbus, or ` +
+        `TechCorp. Variety seed: ${nonce}.${groundingNote}`,
+      () => ({
+        companyName: 'Unnamed Co',
+        companyState: {},
+        missionBrief: {},
+        baselineChallenge: {},
+        departments: [{ name: 'Engineering' }, { name: 'Product' }, { name: 'Operations' }],
+      }),
     );
+    const companyName = typeof companyOrg.companyName === 'string' && companyOrg.companyName.trim() ? companyOrg.companyName.trim() : 'Unnamed Co';
+    const departments = sanitizeDepartments(companyOrg.departments);
+    const companyState = sanitizeCompanyState(companyOrg.companyState);
+    const missionBrief = sanitizeMissionBrief(companyOrg.missionBrief);
+    const baselineChallenge = sanitizeBaselineChallenge(companyOrg.baselineChallenge);
+
+    // Step 3 — Stakeholder Generation, informed by the real company + departments above.
+    const stakeholdersRaw = await this.step<StakeholdersResult>(
+      'stakeholders',
+      artifacts,
+      STAKEHOLDERS_SYSTEM,
+      `Company: ${companyName}. Departments: ${departments.map((d) => d.name).join(', ')}. Role this ` +
+        `candidate is filling: ${dto.experienceLevel} ${dto.role}. Difficulty: ${dto.difficulty} — higher ` +
+        `difficulty means higher stress/urgency and lower patience across the roster. Culture: ${dto.culture}.`,
+      () => ({ stakeholders: [] }),
+    );
+    const stakeholders = sanitizeStakeholders(stakeholdersRaw.stakeholders, departments);
+    if (stakeholders.length === 0) throw new Error('Generated fixture had no valid stakeholders');
+    assignDepartmentHeads(departments, stakeholders);
+    const roster = stakeholders.map((s) => ({ key: s.key, name: s.name, role: s.role, department: s.department }));
+
+    // Upgrade §4/Step 8 — the candidate's manager is the highest-authority
+    // real stakeholder, computed after generation, never LLM-invented
+    // separately (which risks naming someone who doesn't exist in the world).
+    const manager = stakeholders.reduce((a, b) => ((b.authorityLevel ?? 50) > (a.authorityLevel ?? 50) ? b : a));
+    missionBrief.manager = { name: manager.name, role: manager.role };
+
+    // Steps 4-6 — Knowledge, Workplace Assets, and Event Queue are each only
+    // informed by the real stakeholder roster from Step 3, not by each
+    // other's output, so they run concurrently rather than as 3 more
+    // sequential round-trips (this materially cuts real-world latency — 5
+    // sequential LLM calls was measured live to push total generation time
+    // past what the dev proxy chain tolerates, causing spurious "Internal
+    // Server Error" responses even on a fully successful generation).
+    const [knowledgeRaw, assetsRaw, eventQueueRaw] = await Promise.all([
+      this.step<KnowledgeResult>(
+        'knowledge',
+        artifacts,
+        KNOWLEDGE_SYSTEM,
+        `Company: ${companyName}. Roster: ${JSON.stringify(roster)}. Role: ${dto.role} (${dto.industry}).`,
+        () => ({ knowledgeDocs: [] }),
+      ),
+      this.step<WorkplaceAssetsResult>(
+        'workplace_assets',
+        artifacts,
+        WORKPLACE_ASSETS_SYSTEM,
+        `Company: ${companyName}. Roster: ${JSON.stringify(roster)}. Role: ${dto.role}.${groundingNote}`,
+        () => ({ inbox: [], slack: [], tasks: [], calendarEvents: [] }),
+      ),
+      this.step<EventQueueResult>(
+        'event_queue',
+        artifacts,
+        EVENT_QUEUE_SYSTEM,
+        `Company: ${companyName}. Roster: ${JSON.stringify(roster)}.`,
+        () => ({ scheduledEvents: [] }),
+      ),
+    ]);
+    const knowledgeDocs = sanitizeKnowledgeDocs(knowledgeRaw.knowledgeDocs);
+    const validKeys = new Set(stakeholders.map((s) => s.key));
+    const resolveKey = (k: unknown) => (typeof k === 'string' && validKeys.has(k) ? k : roster[Math.floor(Math.random() * roster.length)].key);
+    const inbox = sanitizeInbox(assetsRaw.inbox, resolveKey);
+    const slack = sanitizeSlack(assetsRaw.slack, resolveKey);
+    const tasks = sanitizeTasks(assetsRaw.tasks);
+    const calendarEvents = sanitizeCalendarEvents(assetsRaw.calendarEvents);
+    if (inbox.length === 0 && slack.length === 0) throw new Error('Generated fixture had no inbox or Slack content');
+    const scheduledEvents = sanitizeScheduledEvents(eventQueueRaw.scheduledEvents, resolveKey);
+
+    return {
+      fixture: {
+        companyName,
+        companyState,
+        missionBrief,
+        baselineChallenge,
+        departments,
+        stakeholders,
+        inbox,
+        slack,
+        tasks,
+        calendarEvents,
+        knowledgeDocs,
+        scheduledEvents,
+      },
+      artifacts,
+    };
+  }
+
+  private groundingNote(grounding?: JobSuccessModelGrounding): string {
+    if (!grounding) return '';
+    return (
+      '\n\nThis simulation must be grounded in a REAL job description a recruiter provided — the crisis, ' +
+      'tasks, and inbox/Slack content should let the candidate actually demonstrate or fail these specific ' +
+      `things, not generic role busywork:\n` +
+      `- Core outcomes this role must accomplish: ${grounding.coreOutcomes.join('; ') || 'n/a'}\n` +
+      `- Capability requirements to probe: ${grounding.capabilityRequirements.map((c) => `${c.skill} (${c.importance})`).join(', ') || 'n/a'}\n` +
+      `- Industry themes to weave in: ${grounding.industryProbeThemes.join(', ') || 'n/a'}\n` +
+      'At least one task and one inbox/Slack message must directly test one of the core outcomes above.'
+    );
+  }
+
+  /** Runs one pipeline step; on failure, records FAILED_FELL_BACK with the fallback payload rather than aborting the whole pipeline. */
+  private async step<T>(
+    stepName: WorldGenerationArtifact['step'],
+    artifacts: WorldGenerationArtifact[],
+    system: string,
+    user: string,
+    fallback: () => T,
+  ): Promise<T> {
+    try {
+      const result = await this.ai.completeJson<T>(
+        [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+        { temperature: 0.9, maxTokens: 1800 },
+      );
+      artifacts.push({ step: stepName, status: 'OK', payload: result });
+      return result;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      this.logger.warn(`Pipeline step "${stepName}" failed, using fallback: ${msg}`);
+      const fell = fallback();
+      artifacts.push({ step: stepName, status: 'FAILED_FELL_BACK', payload: fell });
+      return fell;
+    }
   }
 }
 
-const SYSTEM_PROMPT =
-  'You are generating a living-workplace simulation for a job-interview platform. Return ONLY JSON ' +
-  'matching this exact shape:\n' +
+// ── Step prompts ──
+
+const COMPANY_ORG_SYSTEM =
+  'You are generating Step 2 (Company + Organization + Company State) of a living-workplace simulation ' +
+  'for a job-interview platform. Return ONLY JSON matching this exact shape:\n' +
   '{\n' +
   '  "companyName": string,\n' +
   '  "companyState": { "revenue": int, "customerSatisfaction": int, "engineeringCapacity": int, ' +
   '"technicalDebt": int, "teamMorale": int, "budget": int, "riskLevel": int, "deadlinePressure": int, ' +
   '"marketReputation": int, "cashRunway": int, "complianceRisk": int, "productQuality": int, ' +
   '"burnout": int, "hiringCapacity": int, "operationalRisk": int, "growth": int } (each 0-100),\n' +
-  '  "missionBrief": { "objective": string (1 sentence, the concrete business objective this ' +
-  "candidate's role owns this quarter), \"whyItMatters\": string (1-2 sentences, the stakes), " +
-  '"currentHealth": string (2-3 sentences narrating the company\'s current state in plain language), ' +
-  '"successMetrics": string[] (2-4 short bullet phrases) },\n' +
-  '  "baselineChallenge": { "scenario": string (2-4 sentences posing a realistic prioritization ' +
-  'trade-off for this exact role, with 3 concrete options embedded in the prose), "options": ' +
-  '[{ "id": string (short slug, e.g. "a"), "label": string (the option, one sentence) }] (exactly 3) },\n' +
-  '  "stakeholders": [{ "key": string (short slug, e.g. "eng_lead"), "name": string, "role": string, ' +
-  '"avatarSeed": string (slug of name), "personality": { "traits": string[], "goals": string[] }, ' +
-  '"hiddenIntention": string (1 sentence — something this stakeholder privately wants or is hiding ' +
-  'that is NEVER told to the candidate directly and would only surface through investigation), ' +
-  '"stress": int, "urgency": int, "patience": int, "motivation": int (each 0-100 — higher difficulty ' +
-  'should mean higher stress/urgency and lower patience across the roster) }] ' +
-  '(4-6 entries, distinct roles that would realistically work with this candidate\'s role),\n' +
-  '  "inbox": [{ "fromKey": string (must match a stakeholder key), "subject": string, "body": string ' +
-  '(2-4 sentences, concrete stakes), "urgent": boolean, "arrivesLater": boolean, "ethicalDilemma": ' +
-  'boolean }] (2-4 entries, at least 1 urgent, at least 1 with arrivesLater:true),\n' +
-  '  "slack": [{ "channel": string ("#product" | "#engineering" | "#sales" | "#leadership" | ' +
-  '"dm:<stakeholderKey>"), "fromKey": string, "body": string (1-2 sentences), "arrivesLater": boolean, ' +
-  '"ethicalDilemma": boolean }] (3-5 entries, at least one dm: channel, at least 1 with arrivesLater:true),\n' +
-  '  "tasks": [{ "title": string, "priority": "low"|"medium"|"high", "dueInHours": int }] (3-4 entries),\n' +
-  '  "calendarEvents": [{ "title": string, "startInHours": number, "durationMins": int }] (2-3 entries),\n' +
-  '  "knowledgeDocs": [{ "title": string, "body": string (2-4 sentences), "category": string }] ' +
-  '(2-4 entries)\n' +
-  '}\n' +
-  'Every fromKey must exactly match a stakeholder key you defined. The baselineChallenge must be ' +
-  'answerable in under a minute and have no single objectively-correct option — each should trade ' +
-  'off against the others. Exactly ONE message across inbox+slack combined must have ' +
-  '"ethicalDilemma": true — a real integrity-pressure situation with no clean answer (e.g. a ' +
-  'stakeholder asking the candidate to ship something untested, mislead a customer, hide a mistake, ' +
-  'or bend a policy under time pressure) — never mark a normal work request as an ethical dilemma. ' +
-  'No prose outside the JSON.';
+  '  "missionBrief": { "objective": string (1 sentence, the concrete business objective this candidate\'s ' +
+  'role owns this quarter), "whyItMatters": string (1-2 sentences), "currentHealth": string (2-3 ' +
+  'sentences narrating the company\'s current state in plain language), "successMetrics": string[] (2-4 ' +
+  'short bullet phrases) },\n' +
+  '  "baselineChallenge": { "scenario": string (2-4 sentences posing a realistic prioritization trade-off ' +
+  'for this exact role, 3 concrete options embedded in the prose), "options": [{ "id": string (short ' +
+  'slug), "label": string (one sentence) }] (exactly 3), "roleKnowledgeQuestion": string (one short, ' +
+  'specific question testing real domain knowledge for THIS role — e.g. a PM gets asked how they\'d ' +
+  'validate a feature idea, an engineer gets asked how they\'d debug a specific class of issue — ' +
+  'answerable in 2-3 sentences), "toolsQuestion": string (one short question about a tool, technique, or ' +
+  'industry-basics fact this role would realistically need, e.g. "what would you check first to diagnose ' +
+  'X") },\n' +
+  '  "departments": [{ "name": string }] (3-5 entries, realistic department names for this company\'s ' +
+  'size/stage, e.g. Engineering, Sales, Marketing, Support, Finance — pick ones that would realistically ' +
+  'interact with this candidate\'s role)\n' +
+  '}\nThe scenario+options must be answerable in under a minute with no single objectively-correct ' +
+  'option; roleKnowledgeQuestion and toolsQuestion DO have better/worse answers (they get scored). No ' +
+  'prose outside the JSON.';
 
-/**
- * LLM JSON is untrusted input feeding straight into Prisma writes — clamp
- * ranges, cap array sizes, drop malformed entries, and repair dangling
- * `fromKey` references rather than let them become orphaned rows.
- */
-/** Clamps an unknown value to an integer 0-100, defaulting to 50 when missing/invalid. */
+const STAKEHOLDERS_SYSTEM =
+  'You are generating Step 3 (Stakeholder Generation) of a living-workplace simulation, given a real ' +
+  'company and its department list. Return ONLY JSON: {"stakeholders": [{ "key": string (short slug), ' +
+  '"name": string, "role": string (job title), "department": string (MUST exactly match one of the given ' +
+  'department names), "experienceLevel": string (e.g. "3 years", "Senior", "New hire"), "authorityLevel": ' +
+  'int 0-100 (org seniority/decision power — a VP should be high, an IC should be low-medium), "kpis": ' +
+  'string[] (2-3 short phrases, what this person is measured on), "currentTasks": string[] (1-2 short ' +
+  'phrases, what they are actively working on right now), "avatarSeed": string (slug of name), ' +
+  '"personality": { "traits": string[], "goals": string[] }, "hiddenIntention": string (1 sentence — ' +
+  'something this stakeholder privately wants or is hiding, never told to the candidate directly, only ' +
+  'surfaces through investigation), "stress": int, "urgency": int, "patience": int, "motivation": int ' +
+  '(each 0-100) }] (4-6 entries, distinct roles across the given departments that would realistically work ' +
+  'with the candidate\'s role). No prose outside the JSON.';
+
+const KNOWLEDGE_SYSTEM =
+  'You are generating Step 4 (Knowledge Generation) of a living-workplace simulation, given the real ' +
+  'company and stakeholder roster. Return ONLY JSON: {"knowledgeDocs": [{ "title": string, "body": string ' +
+  '(2-4 sentences, concrete and specific to this company/roster — reference real stakeholder names or ' +
+  'the company\'s actual situation where natural), "category": string (one of: "wiki", "prd", ' +
+  '"hr_policy", "sales_deck", "roadmap", "backlog", "financial_report", "customer_history", ' +
+  '"meeting_notes") }]} (6-8 entries, spread across DIFFERENT categories — do not put more than 2 docs in ' +
+  'the same category). No prose outside the JSON.';
+
+const WORKPLACE_ASSETS_SYSTEM =
+  'You are generating Step 5 (Workplace Assets — the content present the MOMENT the candidate opens the ' +
+  'workspace, not later) of a living-workplace simulation, given the real company and stakeholder roster. ' +
+  'Return ONLY JSON: {\n' +
+  '  "inbox": [{ "fromKey": string (must match a roster key), "subject": string, "body": string (2-4 ' +
+  'sentences, concrete stakes), "urgent": boolean, "ethicalDilemma": boolean }] (2-3 entries, at least 1 ' +
+  'urgent),\n' +
+  '  "slack": [{ "channel": string ("#product"|"#engineering"|"#sales"|"#leadership"|"dm:<rosterKey>"), ' +
+  '"fromKey": string (must match a roster key), "body": string (1-2 sentences), "ethicalDilemma": boolean ' +
+  '}] (2-3 entries, at least one dm: channel),\n' +
+  '  "tasks": [{ "title": string, "priority": "low"|"medium"|"high", "dueInHours": int }] (3-4 entries),\n' +
+  '  "calendarEvents": [{ "title": string, "agenda": string (1 sentence, what this meeting is actually ' +
+  'about), "startInHours": number, "durationMins": int }] (2-3 entries)\n' +
+  '}\nExactly ONE message across inbox+slack combined must have "ethicalDilemma": true — a real ' +
+  'integrity-pressure situation with no clean answer (asking the candidate to ship untested work, mislead ' +
+  'a customer, hide a mistake, or bend a policy under time pressure) — never mark a normal work request as ' +
+  'an ethical dilemma. No prose outside the JSON.';
+
+const EVENT_QUEUE_SYSTEM =
+  'You are generating Step 6 (Event Queue) of a living-workplace simulation, given the real company and ' +
+  'stakeholder roster. These are messages that arrive a short while AFTER the candidate has already ' +
+  'started working — not present when they open the workspace. Return ONLY JSON: {"scheduledEvents": [{ ' +
+  '"surface": "inbox"|"slack", "fromKey": string (must match a roster key), "subject": string (inbox ' +
+  'only), "channel": string (slack only, same format as workplace assets), "body": string, "urgent": ' +
+  'boolean, "ethicalDilemma": boolean, "fireAtOffsetSeconds": int (15-90, how soon after the workspace ' +
+  'unlocks this arrives) }]} (2-4 entries). No prose outside the JSON.';
+
+// ── Sanitizers — LLM JSON is untrusted input feeding straight into Prisma
+// writes; clamp ranges, cap array sizes, drop malformed entries, repair
+// dangling references rather than let them become orphaned rows. ──
+
 function clamp0to100(v: unknown): number {
   const n = typeof v === 'number' && Number.isFinite(v) ? v : 50;
   return Math.max(0, Math.min(100, Math.round(n)));
 }
 
-/** Narrows an unknown array field to plain objects, dropping anything else. */
 function asRecords(v: unknown): Record<string, unknown>[] {
   if (!Array.isArray(v)) return [];
   return v.filter((x): x is Record<string, unknown> => !!x && typeof x === 'object');
+}
+
+function sanitizeCompanyState(raw: unknown): HyrteFixture['companyState'] {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return Object.fromEntries(COMPANY_STATE_KEYS.map((key) => [key, clamp0to100(r[key])])) as HyrteFixture['companyState'];
 }
 
 function sanitizeMissionBrief(raw: unknown): FixtureMissionBrief {
@@ -133,17 +408,18 @@ function sanitizeMissionBrief(raw: unknown): FixtureMissionBrief {
   };
 }
 
-function sanitizeBaselineChallenge(raw: unknown): FixtureBaselineChallenge {
+function sanitizeBaselineChallenge(raw: unknown): HyrteFixture['baselineChallenge'] {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const options = asRecords(r.options)
     .filter((o) => typeof o.id === 'string' && typeof o.label === 'string')
     .slice(0, CAPS.baselineOptions)
     .map((o) => ({ id: String(o.id), label: String(o.label) }));
+  const roleKnowledgeQuestion = typeof r.roleKnowledgeQuestion === 'string' && r.roleKnowledgeQuestion.trim() ? r.roleKnowledgeQuestion.trim() : 'Walk through how you would approach your first week in this role.';
+  const toolsQuestion = typeof r.toolsQuestion === 'string' && r.toolsQuestion.trim() ? r.toolsQuestion.trim() : 'What tool or resource would you reach for first to understand the current state of things?';
 
   if (typeof r.scenario === 'string' && r.scenario.trim() && options.length >= 2) {
-    return { scenario: r.scenario.trim(), options };
+    return { scenario: r.scenario.trim(), options, roleKnowledgeQuestion, toolsQuestion };
   }
-  // Fallback if the LLM omitted or malformed this field — never leave a session without a challenge.
   return {
     scenario:
       'Your team can only tackle one priority next: (A) a customer-requested feature that could unblock a ' +
@@ -154,26 +430,36 @@ function sanitizeBaselineChallenge(raw: unknown): FixtureBaselineChallenge {
       { id: 'b', label: 'Fix the issue affecting current users' },
       { id: 'c', label: 'Stick to the commitment already made to leadership' },
     ],
+    roleKnowledgeQuestion,
+    toolsQuestion,
   };
 }
 
-export function sanitizeFixture(raw: unknown): HyrteFixture {
-  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+function sanitizeDepartments(raw: unknown): FixtureDepartment[] {
+  const names = asRecords(raw)
+    .map((d) => (typeof d.name === 'string' ? d.name.trim() : ''))
+    .filter((n) => n.length > 0)
+    .slice(0, CAPS.departments);
+  const unique = Array.from(new Set(names));
+  return (unique.length > 0 ? unique : ['Engineering', 'Product', 'Operations']).map((name) => ({ name }));
+}
 
-  const stakeholders: FixtureStakeholder[] = asRecords(r.stakeholders)
-    .filter(
-      (s) =>
-        typeof s.key === 'string' && (s.key as string).length > 0 && typeof s.name === 'string' && typeof s.role === 'string',
-    )
+function sanitizeStakeholders(raw: unknown, departments: FixtureDepartment[]): FixtureStakeholder[] {
+  const deptNames = new Set(departments.map((d) => d.name));
+  const fallbackDept = departments[0]?.name;
+  return asRecords(raw)
+    .filter((s) => typeof s.key === 'string' && (s.key as string).length > 0 && typeof s.name === 'string' && typeof s.role === 'string')
     .slice(0, CAPS.stakeholders)
     .map((s) => ({
       key: s.key as string,
       name: s.name as string,
       role: s.role as string,
-      avatarSeed:
-        typeof s.avatarSeed === 'string' && s.avatarSeed
-          ? (s.avatarSeed as string)
-          : (s.name as string).toLowerCase().replace(/\s+/g, '-'),
+      avatarSeed: typeof s.avatarSeed === 'string' && s.avatarSeed ? (s.avatarSeed as string) : (s.name as string).toLowerCase().replace(/\s+/g, '-'),
+      department: typeof s.department === 'string' && deptNames.has(s.department) ? s.department : fallbackDept,
+      experienceLevel: typeof s.experienceLevel === 'string' ? s.experienceLevel : undefined,
+      authorityLevel: clamp0to100(s.authorityLevel),
+      kpis: Array.isArray(s.kpis) ? s.kpis.filter((k): k is string => typeof k === 'string').slice(0, 4) : [],
+      currentTasks: Array.isArray(s.currentTasks) ? s.currentTasks.filter((t): t is string => typeof t === 'string').slice(0, 3) : [],
       personality: s.personality && typeof s.personality === 'object' ? (s.personality as Record<string, unknown>) : {},
       hiddenIntention: typeof s.hiddenIntention === 'string' && s.hiddenIntention.trim() ? s.hiddenIntention.trim() : undefined,
       stress: clamp0to100(s.stress),
@@ -181,15 +467,26 @@ export function sanitizeFixture(raw: unknown): HyrteFixture {
       patience: clamp0to100(s.patience),
       motivation: clamp0to100(s.motivation),
     }));
+}
 
-  if (stakeholders.length === 0) {
-    throw new Error('Generated fixture had no valid stakeholders');
+/** Picks the highest-authority stakeholder per department as its head — computed, never LLM-guessed. */
+function assignDepartmentHeads(departments: FixtureDepartment[], stakeholders: FixtureStakeholder[]): void {
+  for (const dept of departments) {
+    const inDept = stakeholders.filter((s) => s.department === dept.name);
+    if (inDept.length === 0) continue;
+    dept.headStakeholderKey = inDept.reduce((a, b) => ((b.authorityLevel ?? 50) > (a.authorityLevel ?? 50) ? b : a)).key;
   }
-  const validKeys = new Set(stakeholders.map((s) => s.key));
-  const anyKey = () => stakeholders[Math.floor(Math.random() * stakeholders.length)].key;
-  const resolveKey = (k: unknown) => (typeof k === 'string' && validKeys.has(k) ? k : anyKey());
+}
 
-  const inbox: FixtureInboxMessage[] = asRecords(r.inbox)
+function sanitizeKnowledgeDocs(raw: unknown): FixtureKnowledgeDoc[] {
+  return asRecords(raw)
+    .filter((k) => typeof k.title === 'string' && typeof k.body === 'string')
+    .slice(0, CAPS.knowledgeDocs)
+    .map((k) => ({ title: String(k.title), body: String(k.body), category: typeof k.category === 'string' ? k.category : 'general' }));
+}
+
+function sanitizeInbox(raw: unknown, resolveKey: (k: unknown) => string): FixtureInboxMessage[] {
+  return asRecords(raw)
     .filter((m) => typeof m.subject === 'string' && typeof m.body === 'string')
     .slice(0, CAPS.inbox)
     .map((m) => ({
@@ -197,69 +494,52 @@ export function sanitizeFixture(raw: unknown): HyrteFixture {
       subject: String(m.subject),
       body: String(m.body),
       urgent: Boolean(m.urgent),
-      arrivesLater: Boolean(m.arrivesLater),
       ethicalDilemma: Boolean(m.ethicalDilemma),
     }));
+}
 
-  const slack: FixtureSlackMessage[] = asRecords(r.slack)
+function sanitizeSlack(raw: unknown, resolveKey: (k: unknown) => string): FixtureSlackMessage[] {
+  return asRecords(raw)
     .filter((m) => typeof m.channel === 'string' && typeof m.body === 'string')
     .slice(0, CAPS.slack)
-    .map((m) => ({
-      channel: String(m.channel),
-      fromKey: resolveKey(m.fromKey),
-      body: String(m.body),
-      arrivesLater: Boolean(m.arrivesLater),
-      ethicalDilemma: Boolean(m.ethicalDilemma),
-    }));
+    .map((m) => ({ channel: String(m.channel), fromKey: resolveKey(m.fromKey), body: String(m.body), ethicalDilemma: Boolean(m.ethicalDilemma) }));
+}
 
-  if (inbox.length === 0 && slack.length === 0) {
-    throw new Error('Generated fixture had no inbox or Slack content');
-  }
-
-  const tasks: FixtureTask[] = asRecords(r.tasks)
+function sanitizeTasks(raw: unknown): FixtureTask[] {
+  return asRecords(raw)
     .filter((t) => typeof t.title === 'string')
     .slice(0, CAPS.tasks)
     .map((t) => ({
       title: String(t.title),
-      priority: (['low', 'medium', 'high'] as const).includes(t.priority as 'low' | 'medium' | 'high')
-        ? (t.priority as 'low' | 'medium' | 'high')
-        : 'medium',
+      priority: (['low', 'medium', 'high'] as const).includes(t.priority as 'low' | 'medium' | 'high') ? (t.priority as 'low' | 'medium' | 'high') : 'medium',
       dueInHours: typeof t.dueInHours === 'number' ? t.dueInHours : 24,
     }));
+}
 
-  const calendarEvents: FixtureCalendarEvent[] = asRecords(r.calendarEvents)
+function sanitizeCalendarEvents(raw: unknown): FixtureCalendarEvent[] {
+  return asRecords(raw)
     .filter((c) => typeof c.title === 'string')
     .slice(0, CAPS.calendarEvents)
     .map((c) => ({
       title: String(c.title),
+      agenda: typeof c.agenda === 'string' ? c.agenda : undefined,
       startInHours: typeof c.startInHours === 'number' ? c.startInHours : 2,
       durationMins: typeof c.durationMins === 'number' ? c.durationMins : 30,
     }));
+}
 
-  const knowledgeDocs: FixtureKnowledgeDoc[] = asRecords(r.knowledgeDocs)
-    .filter((k) => typeof k.title === 'string' && typeof k.body === 'string')
-    .slice(0, CAPS.knowledgeDocs)
-    .map((k) => ({
-      title: String(k.title),
-      body: String(k.body),
-      category: typeof k.category === 'string' ? (k.category as string) : 'general',
+function sanitizeScheduledEvents(raw: unknown, resolveKey: (k: unknown) => string): FixtureScheduledEvent[] {
+  return asRecords(raw)
+    .filter((e) => (e.surface === 'inbox' || e.surface === 'slack') && typeof e.body === 'string')
+    .slice(0, CAPS.scheduledEvents)
+    .map((e) => ({
+      surface: e.surface as 'inbox' | 'slack',
+      fromKey: resolveKey(e.fromKey),
+      subject: typeof e.subject === 'string' ? e.subject : undefined,
+      channel: typeof e.channel === 'string' ? e.channel : undefined,
+      body: String(e.body),
+      urgent: Boolean(e.urgent),
+      ethicalDilemma: Boolean(e.ethicalDilemma),
+      fireAtOffsetSeconds: typeof e.fireAtOffsetSeconds === 'number' ? Math.max(10, Math.min(120, Math.round(e.fireAtOffsetSeconds))) : 20,
     }));
-
-  const rawState = (r.companyState ?? {}) as Record<string, unknown>;
-  const companyState = Object.fromEntries(
-    COMPANY_STATE_KEYS.map((key) => [key, clamp0to100(rawState[key])]),
-  ) as HyrteFixture['companyState'];
-
-  return {
-    companyName: typeof r.companyName === 'string' && r.companyName.trim() ? r.companyName.trim() : 'Unnamed Co',
-    companyState,
-    missionBrief: sanitizeMissionBrief(r.missionBrief),
-    baselineChallenge: sanitizeBaselineChallenge(r.baselineChallenge),
-    stakeholders,
-    inbox,
-    slack,
-    tasks,
-    calendarEvents,
-    knowledgeDocs,
-  };
 }

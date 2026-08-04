@@ -36,6 +36,20 @@ interface AgentJsonResponse {
  * then replies in character and updates its own state (doc §5). Always
  * called fire-and-forget from an already-responded HTTP request — failures
  * are logged, never thrown back at the candidate.
+ *
+ * Upgrade §5/Step 13 (Decision Engine) — the change-set (relationship delta,
+ * emotional delta, company-state delta) and the reply text come from the
+ * SAME LLM call, not two separate calls. This is a deliberate decision, not
+ * an oversight: a real, measured production bug this session (session
+ * creation timing out under multiple *sequential* LLM round-trips — see
+ * hyrte-sessions.service.ts) is exactly what a second call on this much
+ * hotter path (every stakeholder reply, not just session creation) would
+ * risk reintroducing, for a behavior difference that's marginal in practice.
+ * What actually matters structurally is preserved: the change-set is applied
+ * to the database (`applyDeltas` / `applyCompanyStateDelta`, below) BEFORE
+ * the reply is ever delivered to the candidate as a real inbox/Slack
+ * message — nothing responds until the change-set is computed AND applied,
+ * satisfying the doc's actual intent without the latency cost.
  */
 @Injectable()
 export class HyrteStakeholderAgentService {
@@ -102,7 +116,7 @@ export class HyrteStakeholderAgentService {
       const updated = await this.applyDeltas(stakeholder, result);
       this.gateway.broadcast(sessionId, { type: 'stakeholder:update', stakeholder: updated });
       if (result.companyStateDelta) {
-        await this.consequences.applyCompanyStateDelta(sessionId, result.companyStateDelta);
+        await this.consequences.applyCompanyStateDelta(sessionId, result.companyStateDelta, 'stakeholder_reply');
       }
 
       const trustShift = updated.trust - stakeholder.trust;
@@ -194,7 +208,7 @@ export class HyrteStakeholderAgentService {
       const updated = await this.applyDeltas(reactor, result);
       this.gateway.broadcast(sessionId, { type: 'stakeholder:update', stakeholder: updated });
       if (result.companyStateDelta) {
-        await this.consequences.applyCompanyStateDelta(sessionId, result.companyStateDelta);
+        await this.consequences.applyCompanyStateDelta(sessionId, result.companyStateDelta, 'stakeholder_independent_reaction');
       }
 
       const channel = /engineer|technical/i.test(reactor.role) ? '#engineering' : /sales/i.test(reactor.role) ? '#sales' : '#product';

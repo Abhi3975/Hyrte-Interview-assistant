@@ -33,6 +33,7 @@ export interface HyrteMissionBrief {
   whyItMatters: string;
   currentHealth: string;
   successMetrics: string[];
+  manager?: { name: string; role: string };
 }
 
 export interface HyrteBaselineChallengeOption {
@@ -43,6 +44,8 @@ export interface HyrteBaselineChallengeOption {
 export interface HyrteBaselineChallenge {
   scenario: string;
   options: HyrteBaselineChallengeOption[];
+  roleKnowledgeQuestion: string;
+  toolsQuestion: string;
 }
 
 export interface HyrteSession {

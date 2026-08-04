@@ -14,6 +14,8 @@ import { DigModule } from './dig/dig.module';
 import { CouncilModule } from './council/council.module';
 import { EvaluationModule } from './evaluation/evaluation.module';
 import { LearningModule } from './learning/learning.module';
+import { SimulationRequestController } from './simulation-request.controller';
+import { SimulationRequestService } from './simulation-request.service';
 
 @Module({
   // DigModule exports DecisionGraphService (the DIG write-path contract) for
@@ -22,7 +24,12 @@ import { LearningModule } from './learning/learning.module';
   // EvaluationModule exports ReportIntelligenceService (Phase 7) likewise.
   // LearningModule (Phase 9) is standalone — nothing else injects from it.
   imports: [JwtModule.register({}), DigModule, CouncilModule, EvaluationModule, LearningModule],
-  controllers: [HyrteSessionsController, HyrteWorkplaceController, HyrteInterviewController],
+  controllers: [
+    HyrteSessionsController,
+    HyrteWorkplaceController,
+    HyrteInterviewController,
+    SimulationRequestController,
+  ],
   providers: [
     HyrteSessionsService,
     HyrteWorkplaceService,
@@ -31,6 +38,7 @@ import { LearningModule } from './learning/learning.module';
     HyrteStakeholderAgentService,
     HyrteConsequenceService,
     HyrteInterviewService,
+    SimulationRequestService,
   ],
 })
 export class HyrteModule {}

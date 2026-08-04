@@ -91,4 +91,36 @@ export class LinkEvidenceDto {
 export class SubmitBaselineChallengeDto {
   @IsString() optionId!: string;
   @IsString() reasoning!: string;
+  @IsString() roleKnowledgeAnswer!: string;
+  @IsString() toolsAnswer!: string;
+}
+
+// Upgrade §1 — entry point. Preview never persists; create does, with
+// whatever the recruiter ended up with after reviewing the preview
+// (defaults or edited).
+export class PreviewSimulationRequestDto {
+  @IsString() jobDescriptionText!: string;
+  @IsOptional() @IsString() companyContext?: string;
+}
+
+class CapabilityRequirementDto {
+  @IsString() skill!: string;
+  @IsString() importance!: string;
+  @IsOptional() @IsString() depth?: string;
+}
+
+export class CreateSimulationRequestDto {
+  @IsString() jobDescriptionText!: string;
+  @IsOptional() @IsString() companyContext?: string;
+
+  @IsString() role!: string;
+  @IsArray() @IsString({ each: true }) coreOutcomes!: string[];
+  @IsArray() capabilityRequirements!: CapabilityRequirementDto[];
+  @IsArray() @IsString({ each: true }) industryProbeThemes!: string[];
+
+  @IsString() experienceLevel!: string;
+  @IsString() industry!: string;
+  @IsString() companyType!: string;
+  @IsEnum(Difficulty) difficulty!: Difficulty;
+  @IsString() culture!: string;
 }

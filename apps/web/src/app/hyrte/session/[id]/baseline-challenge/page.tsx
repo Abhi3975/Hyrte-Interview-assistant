@@ -8,14 +8,17 @@ import { api, ApiError } from '@/lib/api';
 import { HyrteSession } from '@/lib/hyrte-types';
 
 const MIN_REASONING_LENGTH = 20;
+const MIN_ANSWER_LENGTH = 5;
 
-/** UX flow §8 step 2 — a quick warm-up before the workspace unlocks. */
+/** UX flow §8 step 2 — Role Calibration ("not MCQ-only"), a quick warm-up before the workspace unlocks. */
 export default function HyrteBaselineChallenge({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
   const queryClient = useQueryClient();
   const [optionId, setOptionId] = useState('');
   const [reasoning, setReasoning] = useState('');
+  const [roleKnowledgeAnswer, setRoleKnowledgeAnswer] = useState('');
+  const [toolsAnswer, setToolsAnswer] = useState('');
   const [error, setError] = useState('');
 
   const { data: session, isLoading } = useQuery({
@@ -24,7 +27,7 @@ export default function HyrteBaselineChallenge({ params }: { params: Promise<{ i
   });
 
   const submitMutation = useMutation({
-    mutationFn: () => api.post(`/hyrte/sessions/${id}/baseline-challenge/submit`, { optionId, reasoning }),
+    mutationFn: () => api.post(`/hyrte/sessions/${id}/baseline-challenge/submit`, { optionId, reasoning, roleKnowledgeAnswer, toolsAnswer }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['hyrte', 'session', id] });
       router.push(`/hyrte/session/${id}`);
@@ -33,7 +36,11 @@ export default function HyrteBaselineChallenge({ params }: { params: Promise<{ i
   });
 
   const challenge = session?.baselineChallenge;
-  const canSubmit = optionId && reasoning.trim().length >= MIN_REASONING_LENGTH;
+  const canSubmit =
+    optionId &&
+    reasoning.trim().length >= MIN_REASONING_LENGTH &&
+    roleKnowledgeAnswer.trim().length >= MIN_ANSWER_LENGTH &&
+    toolsAnswer.trim().length >= MIN_ANSWER_LENGTH;
 
   return (
     <DashboardShell
@@ -87,6 +94,32 @@ export default function HyrteBaselineChallenge({ params }: { params: Promise<{ i
                 placeholder="Explain your reasoning…"
                 value={reasoning}
                 onChange={(e) => setReasoning(e.target.value)}
+              />
+            </div>
+
+            <p className="text-xs text-black/50 dark:text-white/50">
+              Two quick knowledge questions — unlike the scenario above, these do get scored.
+            </p>
+
+            <div className="card">
+              <p className="text-sm font-medium">{challenge.roleKnowledgeQuestion}</p>
+              <textarea
+                className="mt-2 w-full rounded-lg border border-black/10 bg-transparent px-3 py-2 text-sm dark:border-white/10"
+                rows={2}
+                placeholder="Your answer…"
+                value={roleKnowledgeAnswer}
+                onChange={(e) => setRoleKnowledgeAnswer(e.target.value)}
+              />
+            </div>
+
+            <div className="card">
+              <p className="text-sm font-medium">{challenge.toolsQuestion}</p>
+              <textarea
+                className="mt-2 w-full rounded-lg border border-black/10 bg-transparent px-3 py-2 text-sm dark:border-white/10"
+                rows={2}
+                placeholder="Your answer…"
+                value={toolsAnswer}
+                onChange={(e) => setToolsAnswer(e.target.value)}
               />
             </div>
 

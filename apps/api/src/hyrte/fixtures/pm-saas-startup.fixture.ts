@@ -8,6 +8,8 @@ import { HyrteFixture } from './hyrte-fixture.types';
 export function getPmSaasStartupFixture(): HyrteFixture {
   return {
     companyName: 'Nimbus',
+    departments: [],
+    scheduledEvents: [],
     companyState: {
       revenue: 62,
       customerSatisfaction: 71,
@@ -39,6 +41,7 @@ export function getPmSaasStartupFixture(): HyrteFixture {
         'Q3 roadmap ships on schedule',
         'Customer satisfaction recovers to 75+',
       ],
+      manager: { name: 'Priya Raman', role: 'CEO' },
     },
     baselineChallenge: {
       scenario:
@@ -50,6 +53,8 @@ export function getPmSaasStartupFixture(): HyrteFixture {
         { id: 'b', label: 'Fix the perf regression for existing customers first' },
         { id: 'c', label: 'Stick to the onboarding redesign as promised' },
       ],
+      roleKnowledgeQuestion: 'How would you typically decide whether a churn risk is worth an unplanned engineering sprint?',
+      toolsQuestion: 'What would you look at first to figure out how bad the dashboard perf regression actually is?',
     },
     stakeholders: [
       {

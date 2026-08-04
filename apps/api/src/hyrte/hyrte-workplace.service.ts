@@ -47,9 +47,9 @@ export class HyrteWorkplaceService {
     actionType: string,
     payload: Record<string, unknown>,
     evidenceText: string,
-    options?: { type?: EvidenceType; behaviorContext?: BehaviorContext },
+    options?: { type?: EvidenceType; behaviorContext?: BehaviorContext; recoveryOfId?: string },
   ) {
-    const entry = await this.decisionGraph.recordDecision({ sessionId, actor: candidateId, actionType, payload });
+    const entry = await this.decisionGraph.recordDecision({ sessionId, actor: candidateId, actionType, payload, recoveryOfId: options?.recoveryOfId });
     this.evidence
       .createEvidence({
         hyrteSessionId: sessionId,
@@ -83,6 +83,21 @@ export class HyrteWorkplaceService {
     if (!message) throw new NotFoundException('Message not found');
 
     await this.prisma.hyrteInboxMessage.update({ where: { id: messageId }, data: { readAt: new Date() } });
+
+    // Upgrade §5/Step 19 — Recovery Phase. If this message IS an escalation
+    // (created by HyrteConsequenceService.escalateIgnoredMessage after an
+    // earlier ignored message), replying to it is a real recovery attempt:
+    // link this decision node back to the original "inbox.message_ignored"
+    // node via recoveryOfId, built in Phase 1 but never populated until now.
+    let recoveryOfId: string | undefined;
+    if (message.escalatesMessageId) {
+      const originalMistake = await this.prisma.hyrteDecisionLogEntry.findFirst({
+        where: { sessionId, actionType: 'inbox.message_ignored', payload: { path: ['messageId'], equals: message.escalatesMessageId } },
+        select: { id: true },
+      });
+      recoveryOfId = originalMistake?.id;
+    }
+
     // §4.20 Ethical Gray Zones: a message flagged at generation time gets its
     // own evidence type instead of a generic action, never a "correct"/"wrong"
     // tag — only that it happened. §4.18: otherwise infer peer/manager context.
@@ -91,10 +106,10 @@ export class HyrteWorkplaceService {
       candidateId,
       'email.reply',
       { messageId, body: dto.body },
-      `Replied to an email ("${message.subject}"): "${dto.body}"`,
+      `Replied to an email ("${message.subject}"): "${dto.body}"${recoveryOfId ? ' — a recovery attempt after an earlier ignored message' : ''}`,
       message.ethicalDilemma
-        ? { type: 'ETHICAL_DECISION', behaviorContext: 'PRESSURE' }
-        : { behaviorContext: message.fromStakeholder ? inferContextFromRole(message.fromStakeholder.role) : undefined },
+        ? { type: 'ETHICAL_DECISION', behaviorContext: 'PRESSURE', recoveryOfId }
+        : { behaviorContext: message.fromStakeholder ? inferContextFromRole(message.fromStakeholder.role) : undefined, recoveryOfId },
     );
 
     if (message.fromStakeholderId) {
