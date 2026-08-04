@@ -31,6 +31,7 @@ const NAV: Record<'candidate' | 'recruiter' | 'admin' | 'hyrte', NavItem[]> = {
     { href: '/recruiter/questions', label: 'Question Bank' },
     { href: '/recruiter/proctoring', label: 'Live Proctoring' },
     { href: '/recruiter/hyrte-council', label: 'HYRTE Council' },
+    { href: '/recruiter/hyrte-live', label: 'HYRTE Live Console' },
     { href: '/recruiter/hyrte-sessions/new', label: 'New HYRTE Session' },
   ],
   admin: [
@@ -50,6 +51,7 @@ export function DashboardShell({
   sidebarExtra,
   backHref,
   backLabel = 'Back',
+  variant = 'default',
 }: {
   area: 'candidate' | 'recruiter' | 'admin' | 'hyrte';
   title: string;
@@ -61,6 +63,14 @@ export function DashboardShell({
   /** Shows a back button in the header when set. */
   backHref?: string;
   backLabel?: string;
+  /**
+   * 'hyrte-os' rolls out the G0-approved dark "agentic OS" mockup — the
+   * candidate workspace and the Recruiter Live Console both opt in (Part
+   * E3: "same design system"), everything else stays on the default
+   * brand-blue shell. Forces dark mode locally (see globals.css) since the
+   * reference has no light variant.
+   */
+  variant?: 'default' | 'hyrte-os';
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -82,10 +92,12 @@ export function DashboardShell({
     else if (requiredRoles && !requiredRoles.includes(user.role)) router.replace('/');
   }, [hydrated, user, requiredRoles, router]);
 
+  const osClass = variant === 'hyrte-os' ? 'hyrte-os dark' : '';
+
   // Avoid flashing protected content before the auth check resolves.
   if (!hydrated || !user) {
     return (
-      <div className="flex h-screen items-center justify-center text-sm text-black/50 dark:text-white/50">
+      <div className={`flex h-screen items-center justify-center text-sm text-black/50 dark:text-white/50 ${osClass}`}>
         Loading…
       </div>
     );
@@ -94,7 +106,7 @@ export function DashboardShell({
   const items = navOverride ?? NAV[area];
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className={`flex h-screen overflow-hidden ${osClass}`}>
       <aside className="hidden w-64 shrink-0 flex-col overflow-y-auto border-r border-black/5 p-4 dark:border-white/10 md:flex">
         <Link href="/" className="mb-6 block text-lg font-bold">
           Interview<span className="text-brand-500">AI</span>
@@ -139,7 +151,7 @@ export function DashboardShell({
           </div>
           <div className="flex items-center gap-3">
             <span className="hidden text-sm text-black/50 dark:text-white/50 sm:inline">{user?.fullName}</span>
-            <ThemeToggle />
+            {variant !== 'hyrte-os' && <ThemeToggle />}
             <button onClick={logout} className="btn-ghost text-sm">Log out</button>
           </div>
         </header>

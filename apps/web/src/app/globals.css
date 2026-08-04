@@ -31,3 +31,104 @@ body {
     @apply rounded-xl border border-black/5 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-white/[0.03];
   }
 }
+
+/*
+ * HYRTE "agentic OS" design language — rollout of the G0-approved mockup
+ * into the real workspace. Deliberately unlayered (not @layer components),
+ * so it wins over Tailwind's own @layer utilities regardless of selector
+ * specificity — CSS layers rank by declaration order among layers first,
+ * specificity only within a layer, so a layered .bg-brand-500 would beat a
+ * layered .hyrte-os .bg-brand-500 even though the latter is more specific.
+ * Scoped entirely under .hyrte-os so no other product surface is touched.
+ * Always dark — DashboardShell pairs this class with `dark` on the same
+ * element, forcing every existing dark: variant in HYRTE pages active
+ * regardless of the site-wide theme toggle, since the reference has no
+ * light variant to fall back to.
+ */
+.hyrte-os {
+  --hos-accent: #22d3ee;
+  --hos-accent-glow: rgba(34, 211, 238, 0.14);
+  --hos-accent-glow-strong: rgba(34, 211, 238, 0.22);
+  --hos-border: rgba(255, 255, 255, 0.08);
+  --hos-border-hover: rgba(255, 255, 255, 0.16);
+  --hos-card-bg: rgba(255, 255, 255, 0.03);
+  --hos-card-bg-hover: rgba(255, 255, 255, 0.05);
+  --hos-working: #34d399;
+  --hos-waiting: #fbbf24;
+  --hos-escalating: #f87171;
+  background: #0a0f14;
+  color: #f1f5f9;
+}
+
+.hyrte-os .card {
+  border-radius: 12px;
+  border-color: var(--hos-border);
+  background: var(--hos-card-bg);
+  backdrop-filter: blur(12px);
+  transition: border-color 200ms ease, background 200ms ease;
+}
+.hyrte-os .card:hover {
+  border-color: var(--hos-border-hover);
+  background: var(--hos-card-bg-hover);
+}
+
+.hyrte-os .btn-primary {
+  background: var(--hos-accent-glow);
+  color: var(--hos-accent);
+}
+.hyrte-os .btn-primary:hover {
+  background: var(--hos-accent-glow-strong);
+}
+
+.hyrte-os .bg-brand-500,
+.hyrte-os .bg-brand-600 {
+  background-color: var(--hos-accent);
+  color: #06222b;
+}
+.hyrte-os .bg-brand-500\/5,
+.hyrte-os .bg-brand-500\/10,
+.hyrte-os .bg-brand-500\/15 {
+  background-color: var(--hos-accent-glow);
+}
+.hyrte-os .text-brand-400,
+.hyrte-os .text-brand-500,
+.hyrte-os .text-brand-600,
+.hyrte-os .text-brand-700 {
+  color: var(--hos-accent);
+}
+.hyrte-os .border-brand-500,
+.hyrte-os .border-brand-500\/30 {
+  border-color: var(--hos-accent);
+}
+
+/* Typography scale from the G0 mockup, for pages that opt in explicitly. */
+.hos-micro-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.hos-counter {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+.hos-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--hos-border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: rgba(241, 245, 249, 0.5);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hyrte-os * {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

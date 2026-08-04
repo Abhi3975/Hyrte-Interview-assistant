@@ -188,12 +188,26 @@ export class HyrteInterviewService {
       this.prisma.hyrteCompanyState.findUnique({ where: { sessionId } }),
     ]);
 
-    // Most recent first, capped — keeps the prompt bounded on long sessions.
-    const capped = evidenceObjects.slice(-MAX_EVIDENCE_IN_BRIEF);
+    // Master Build Prompt Part F9 — "workflow signals (delegation quality,
+    // review behavior, follow-through, authority handling)" must actually
+    // reach the report, not just exist in the DB. A flat most-recent-only cap
+    // let a long, escalation-heavy session (many SIMULATION_ACTION rows from
+    // chaos waves/inbox chains) silently crowd out the sparser
+    // SIMULATION_DECISION rows (command-bar delegations, work-item review
+    // decisions, authority overreach) that carry those specific signals — so
+    // decision-type evidence is now guaranteed a slot, filled out to the cap
+    // with the most recent of everything else, rather than pure recency.
+    const decisionType = evidenceObjects.filter((e) => e.type === 'SIMULATION_DECISION');
+    const rest = evidenceObjects.filter((e) => e.type !== 'SIMULATION_DECISION');
+    const capped = [...decisionType, ...rest.slice(-Math.max(0, MAX_EVIDENCE_IN_BRIEF - decisionType.length))].slice(-MAX_EVIDENCE_IN_BRIEF);
     const refs = capped.map((e, i) => ({ label: `EV${i + 1}`, id: e.id }));
     const evidenceLines = capped.length
       ? capped
-          .map((e, i) => `${refs[i].label} [${e.type}${e.behaviorContext ? `/${e.behaviorContext}` : ''}] ${e.rawText}`)
+          .map((e, i) => {
+            const hasMetadata = e.metadata && typeof e.metadata === 'object' && Object.keys(e.metadata as object).length > 0;
+            const metadata = hasMetadata ? ` {${JSON.stringify(e.metadata)}}` : '';
+            return `${refs[i].label} [${e.type}${e.behaviorContext ? `/${e.behaviorContext}` : ''}] ${e.rawText}${metadata}`;
+          })
           .join('\n')
       : '(no evidence recorded yet)';
 

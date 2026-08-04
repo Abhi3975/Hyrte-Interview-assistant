@@ -19,6 +19,7 @@ export default function HyrteCalendar({ params }: { params: Promise<{ id: string
   return (
     <DashboardShell
       area="hyrte"
+      variant="hyrte-os"
       title="Calendar"
       requiredRoles={['CANDIDATE']}
       navOverride={hyrteNav(id)}

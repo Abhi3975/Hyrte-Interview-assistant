@@ -1,14 +1,16 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import type { BehaviorContext, EvidenceType } from '@prisma/client';
+import type { BehaviorContext, EvidenceType, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { HyrteGateway } from './hyrte.gateway';
-import { ReplyInboxDto, SendSlackMessageDto, UpdateTaskDto } from './dto/hyrte.dto';
+import { CommandBarDto, ReplyInboxDto, SendSlackMessageDto, UpdateWorkItemDto, WorkItemReviewDto } from './dto/hyrte.dto';
 import { HyrteStakeholderAgentService } from './agents/stakeholder-agent.service';
 import { HyrteConsequenceService } from './consequences/consequence.service';
 import { DecisionGraphService } from './dig/decision-graph.service';
 import { EvidenceGraphService } from './dig/evidence-graph.service';
 import { inferContextFromRole } from './dig/behavior-context.util';
-import { OMIT_HIDDEN_INTENTION } from './dig/hidden-intention.util';
+import { OMIT_CANDIDATE_INTERNALS } from './dig/hidden-intention.util';
+import { HyrteWorkTickService } from './work/work-tick.service';
+import { HyrteCommandBarService, CommandBarResult } from './work/command-bar.service';
 
 /** §4.12 Layers 5/9/11 — chance a stakeholder NOT party to an exchange independently reacts to it. Not 100%: constant chatter reads as noise, not signal. */
 const INDEPENDENT_REACTION_PROBABILITY = 0.5;
@@ -24,6 +26,8 @@ export class HyrteWorkplaceService {
     private readonly consequences: HyrteConsequenceService,
     private readonly decisionGraph: DecisionGraphService,
     private readonly evidence: EvidenceGraphService,
+    private readonly workTicks: HyrteWorkTickService,
+    private readonly commandBar: HyrteCommandBarService,
   ) {}
 
   private async assertOwnership(sessionId: string, candidateId: string): Promise<void> {
@@ -69,7 +73,7 @@ export class HyrteWorkplaceService {
     await this.assertOwnership(sessionId, candidateId);
     return this.prisma.hyrteInboxMessage.findMany({
       where: { sessionId },
-      include: { fromStakeholder: { omit: OMIT_HIDDEN_INTENTION } },
+      include: { fromStakeholder: { omit: OMIT_CANDIDATE_INTERNALS } },
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -140,7 +144,7 @@ export class HyrteWorkplaceService {
     await this.assertOwnership(sessionId, candidateId);
     return this.prisma.hyrteSlackMessage.findMany({
       where: { sessionId, ...(channel ? { channel } : {}) },
-      include: { fromStakeholder: { omit: OMIT_HIDDEN_INTENTION } },
+      include: { fromStakeholder: { omit: OMIT_CANDIDATE_INTERNALS } },
       orderBy: { createdAt: 'asc' },
     });
   }
@@ -187,34 +191,50 @@ export class HyrteWorkplaceService {
     return created;
   }
 
-  // ── Tasks ──
+  // ── Tasks (Work Items — Part C3) ──
 
   async listTasks(sessionId: string, candidateId: string) {
     await this.assertOwnership(sessionId, candidateId);
-    return this.prisma.hyrteTask.findMany({ where: { sessionId }, orderBy: { createdAt: 'asc' } });
+    return this.prisma.hyrteWorkItem.findMany({ where: { sessionId }, orderBy: { createdAt: 'asc' } });
   }
 
-  async updateTask(sessionId: string, taskId: string, dto: UpdateTaskDto, candidateId: string) {
+  async updateTask(sessionId: string, taskId: string, dto: UpdateWorkItemDto, candidateId: string) {
     await this.assertOwnership(sessionId, candidateId);
-    const task = await this.prisma.hyrteTask.findFirst({ where: { id: taskId, sessionId } });
+    const task = await this.prisma.hyrteWorkItem.findFirst({ where: { id: taskId, sessionId } });
     if (!task) throw new NotFoundException('Task not found');
 
-    const updated = await this.prisma.hyrteTask.update({
+    const history = Array.isArray(task.history) ? task.history : [];
+    const updated = await this.prisma.hyrteWorkItem.update({
       where: { id: taskId },
-      data: { status: dto.status ?? task.status },
+      data: {
+        stage: dto.stage ?? task.stage,
+        ...(dto.stage && dto.stage !== task.stage
+          ? {
+              history: [
+                ...history,
+                { at: new Date().toISOString(), actor: candidateId, action: 'stage_change', note: `${task.stage} → ${dto.stage}` },
+              ] as unknown as Prisma.InputJsonValue,
+            }
+          : {}),
+      },
     });
     this.gateway.broadcast(sessionId, { type: 'task:update', task: updated });
     let decisionEntry: { id: string } | undefined;
-    if (dto.status) {
+    if (dto.stage) {
+      // Part F7 Recovery — if this item was spawned by a rejection and is now
+      // done, link this decision back to that rejection via recoveryOfId, the
+      // same DIG chain replyInbox uses for escalation follow-ups.
+      const recoveryOfEntry = (history as { action?: string; note?: string }[]).find((h) => h.action === 'recovery_of');
       decisionEntry = await this.logDecision(
         sessionId,
         candidateId,
-        'task.status_change',
-        { taskId, status: dto.status },
-        `Changed task "${task.title}" status to "${dto.status}"`,
+        'task.stage_change',
+        { taskId, stage: dto.stage },
+        `Changed task "${task.title}" stage to "${dto.stage}"${dto.stage === 'DONE' && recoveryOfEntry ? ' — a recovery attempt after an earlier rejection' : ''}`,
+        recoveryOfEntry && dto.stage === 'DONE' ? { recoveryOfId: recoveryOfEntry.note } : undefined,
       );
     }
-    if (dto.status === 'done' && task.status !== 'done') {
+    if (dto.stage === 'DONE' && task.stage !== 'DONE') {
       this.consequences
         .reasonTaskConsequence(sessionId, updated, candidateId, decisionEntry?.id)
         .catch((e) => this.logger.warn(e));
@@ -222,11 +242,162 @@ export class HyrteWorkplaceService {
     return updated;
   }
 
+  // ── Needs Review (Part F5) ──
+
+  async listNeedsReview(sessionId: string, candidateId: string) {
+    await this.assertOwnership(sessionId, candidateId);
+    const items = await this.prisma.hyrteWorkItem.findMany({
+      where: { sessionId, stage: 'WAITING_REVIEW' },
+      include: { ownerStakeholder: { omit: OMIT_CANDIDATE_INTERNALS } },
+      orderBy: { updatedAt: 'asc' },
+    });
+    // review is a Json field (requiredFrom/requestedAt/decidedAt/decision) —
+    // filtered in application code rather than a Prisma JSON path query,
+    // deliberately: the row count per session is small (single digits), and
+    // an in-memory filter is simpler and more portable than DB-specific JSON
+    // predicate syntax for "decidedAt is null".
+    return items.filter((i) => {
+      const review = i.review as { decidedAt?: string | null } | null;
+      return review && !review.decidedAt;
+    });
+  }
+
+  async submitWorkItemReview(sessionId: string, workItemId: string, dto: WorkItemReviewDto, candidateId: string) {
+    await this.assertOwnership(sessionId, candidateId);
+    const item = await this.prisma.hyrteWorkItem.findFirst({ where: { id: workItemId, sessionId }, include: { ownerStakeholder: true } });
+    if (!item) throw new NotFoundException('Work item not found');
+    if (item.stage !== 'WAITING_REVIEW') throw new NotFoundException('This work item is not awaiting review');
+
+    const review = (item.review ?? {}) as { requiredFrom?: string; requestedAt?: string; decidedAt?: string | null; decision?: string | null };
+    const latencyMs = review.requestedAt ? Date.now() - new Date(review.requestedAt).getTime() : null;
+    const history = Array.isArray(item.history) ? item.history : [];
+    const decidedReview = { ...review, decidedAt: new Date().toISOString(), decision: dto.decision, note: dto.note ?? null };
+
+    let stage: 'DONE' | 'IN_PROGRESS' | 'BLOCKED' | 'NEW' = item.stage as never;
+    let nextOwnerId: string | null | undefined;
+    let nextOwnerIsCandidate: boolean | undefined;
+    let clearReview = false;
+
+    switch (dto.decision) {
+      case 'approve':
+        stage = 'DONE';
+        break;
+      case 'request_changes':
+        stage = 'IN_PROGRESS';
+        break;
+      case 'reject':
+        stage = 'BLOCKED';
+        break;
+      case 'reassign': {
+        stage = 'NEW';
+        clearReview = true;
+        const alt = item.ownerStakeholder?.department
+          ? await this.prisma.hyrteStakeholder.findFirst({
+              where: { sessionId, department: item.ownerStakeholder.department, id: { not: item.ownerStakeholderId ?? undefined } },
+            })
+          : null;
+        if (alt) {
+          nextOwnerId = alt.id;
+          nextOwnerIsCandidate = false;
+        } else {
+          nextOwnerId = null;
+          nextOwnerIsCandidate = true;
+        }
+        break;
+      }
+    }
+
+    const updated = await this.prisma.hyrteWorkItem.update({
+      where: { id: workItemId },
+      data: {
+        stage,
+        ...(nextOwnerId !== undefined ? { ownerStakeholderId: nextOwnerId } : {}),
+        ...(nextOwnerIsCandidate !== undefined ? { ownerIsCandidate: nextOwnerIsCandidate } : {}),
+        review: (clearReview ? null : decidedReview) as unknown as Prisma.InputJsonValue,
+        history: [
+          ...history,
+          { at: new Date().toISOString(), actor: candidateId, action: `review_${dto.decision}`, note: dto.note },
+        ] as unknown as Prisma.InputJsonValue,
+      },
+    });
+    this.gateway.broadcast(sessionId, { type: 'task:update', task: updated });
+
+    const decisionEntry = await this.logDecision(
+      sessionId,
+      candidateId,
+      `work_item.review_${dto.decision}`,
+      { workItemId, decision: dto.decision, note: dto.note, latencyMs },
+      `Reviewed "${item.title}" — ${dto.decision}${dto.note ? `: "${dto.note}"` : ''}`,
+    );
+    this.evidence
+      .createEvidence({
+        hyrteSessionId: sessionId,
+        candidateId,
+        source: 'SIMULATION',
+        type: 'SIMULATION_DECISION',
+        rawText: `Review decision on "${item.title}": ${dto.decision}${dto.note ? ` — note: "${dto.note}"` : ' — no note'}. Latency: ${latencyMs ? Math.round(latencyMs / 1000) : '?'}s.`,
+        metadata: { latencyMs, hadNote: !!dto.note?.trim() },
+      })
+      .catch((e) => this.logger.warn(e));
+
+    if (dto.decision === 'approve') {
+      this.consequences.reasonTaskConsequence(sessionId, updated, candidateId, decisionEntry.id).catch((e) => this.logger.warn(e));
+      // Part F7 — approving a customer-facing commitment can land on a
+      // different department later (cross-functional cascade chains).
+      this.consequences.scheduleCascadeCheck(sessionId, updated);
+    } else if (dto.decision === 'request_changes') {
+      this.workTicks.scheduleRevision(workItemId, dto.note ?? 'Please revise.');
+    } else if (dto.decision === 'reassign' && nextOwnerId) {
+      this.workTicks.scheduleStart(workItemId);
+    } else if (dto.decision === 'reject') {
+      // Part F7 — "mistakes never end the session; they spawn recovery work,
+      // and recovery quality is its own evaluated dimension." A rejected item
+      // otherwise dead-ends at BLOCKED with nothing to do about it — this is
+      // the candidate's own recovery attempt, not another auto-tick, so it's
+      // theirs to own. `recovery_of` in history is how completing it later
+      // (in updateTask, below) finds its way back to this decision via
+      // recoveryOfId — the exact same DIG chain replyInbox already uses for
+      // escalation follow-ups.
+      const recovery = await this.prisma.hyrteWorkItem.create({
+        data: {
+          sessionId,
+          title: `Recover: ${item.title}`,
+          type: item.type,
+          priority: item.priority,
+          origin: 'EVENT',
+          ownerIsCandidate: true,
+          history: [
+            { at: new Date().toISOString(), actor: 'system', action: 'recovery_of', note: decisionEntry.id },
+          ] as unknown as Prisma.InputJsonValue,
+        },
+      });
+      this.gateway.broadcast(sessionId, { type: 'task:update', task: recovery });
+    }
+
+    return updated;
+  }
+
+  // ── Command bar (Part F6) ──
+
+  async submitCommand(sessionId: string, candidateId: string, dto: CommandBarDto): Promise<CommandBarResult> {
+    await this.assertOwnership(sessionId, candidateId);
+    return this.commandBar.submit(sessionId, candidateId, dto.instruction);
+  }
+
   // ── Calendar ──
 
   async listCalendar(sessionId: string, candidateId: string) {
     await this.assertOwnership(sessionId, candidateId);
     return this.prisma.hyrteCalendarEvent.findMany({ where: { sessionId }, orderBy: { startAt: 'asc' } });
+  }
+
+  /** Part E2 Meetings — "join" is a real logged action, same pattern as listKnowledgeBase's KB-consultation evidence. */
+  async attendMeeting(sessionId: string, eventId: string, candidateId: string) {
+    await this.assertOwnership(sessionId, candidateId);
+    const event = await this.prisma.hyrteCalendarEvent.findFirst({ where: { id: eventId, sessionId } });
+    if (!event) throw new NotFoundException('Meeting not found');
+    await this.logDecision(sessionId, candidateId, 'meeting.attend', { eventId }, `Attended the meeting "${event.title}"`);
+    return { attended: true };
   }
 
   // ── Knowledge base ──
@@ -243,7 +414,47 @@ export class HyrteWorkplaceService {
 
   async listStakeholders(sessionId: string, candidateId: string) {
     await this.assertOwnership(sessionId, candidateId);
-    return this.prisma.hyrteStakeholder.findMany({ where: { sessionId }, orderBy: { name: 'asc' }, omit: OMIT_HIDDEN_INTENTION });
+    return this.prisma.hyrteStakeholder.findMany({ where: { sessionId }, orderBy: { name: 'asc' }, omit: OMIT_CANDIDATE_INTERNALS });
+  }
+
+  /**
+   * Part E2 Command Center "System Map" — real department clusters, each
+   * with a deterministic head (highest authorityLevel, same derivation as
+   * the Mission Brief's manager, never LLM-guessed) and a real message-
+   * volume count. Deliberately does NOT invent cross-department
+   * relationship edges — there's no real data behind those yet, and a fake
+   * graph would violate "no placeholder content anywhere."
+   */
+  async getSystemMap(sessionId: string, candidateId: string) {
+    await this.assertOwnership(sessionId, candidateId);
+    const [companyState, stakeholders, inbox, slack] = await Promise.all([
+      this.prisma.hyrteCompanyState.findUnique({ where: { sessionId }, select: { departments: true } }),
+      this.prisma.hyrteStakeholder.findMany({ where: { sessionId }, omit: OMIT_CANDIDATE_INTERNALS }),
+      this.prisma.hyrteInboxMessage.findMany({ where: { sessionId }, select: { fromStakeholderId: true } }),
+      this.prisma.hyrteSlackMessage.findMany({ where: { sessionId }, select: { fromStakeholderId: true } }),
+    ]);
+    const departments = Array.isArray(companyState?.departments) ? (companyState!.departments as { name?: string }[]) : [];
+    const messageCountByStakeholder = new Map<string, number>();
+    for (const m of [...inbox, ...slack]) {
+      if (!m.fromStakeholderId) continue;
+      messageCountByStakeholder.set(m.fromStakeholderId, (messageCountByStakeholder.get(m.fromStakeholderId) ?? 0) + 1);
+    }
+
+    return departments
+      .filter((d): d is { name: string } => typeof d.name === 'string')
+      .map((d) => {
+        const members = stakeholders.filter((s) => s.department === d.name);
+        const head = members.reduce<(typeof members)[number] | null>(
+          (a, b) => (!a || (b.authorityLevel ?? 50) > (a.authorityLevel ?? 50) ? b : a),
+          null,
+        );
+        return {
+          name: d.name,
+          headStakeholderId: head?.id ?? null,
+          messageCount: members.reduce((sum, s) => sum + (messageCountByStakeholder.get(s.id) ?? 0), 0),
+          stakeholders: members.map((s) => ({ id: s.id, name: s.name, role: s.role })),
+        };
+      });
   }
 
   // ── Decision log ──

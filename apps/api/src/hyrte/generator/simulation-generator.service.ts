@@ -6,6 +6,7 @@ import { ValidationReport, WorldStabilizationError, validateWorld } from './worl
 import {
   FixtureCalendarEvent,
   FixtureDepartment,
+  FixtureEvaluationPlanItem,
   FixtureInboxMessage,
   FixtureKnowledgeDoc,
   FixtureMissionBrief,
@@ -48,7 +49,7 @@ export interface JobSuccessModelGrounding {
 
 /** One row per pipeline step — persisted by the caller (HyrteSessionsService) once the session exists. */
 export interface WorldGenerationArtifact {
-  step: 'company_org' | 'stakeholders' | 'knowledge' | 'workplace_assets' | 'event_queue' | 'stabilization_gate';
+  step: 'company_org' | 'stakeholders' | 'knowledge' | 'workplace_assets' | 'event_queue' | 'evaluation_plan' | 'stabilization_gate';
   status: 'OK' | 'FAILED_FELL_BACK';
   payload: unknown;
 }
@@ -85,15 +86,21 @@ interface EventQueueResult {
   scheduledEvents?: Record<string, unknown>[];
 }
 
+interface EvaluationPlanResult {
+  evaluationPlan?: Record<string, unknown>[];
+}
+
 /**
- * Upgrade §2/§6 — the generation pipeline, restructured into 5 ordered steps
+ * Upgrade §2/§6 — the generation pipeline, restructured into 6 ordered steps
  * (was: one mega-call producing the entire fixture as a single JSON blob).
  * Each step is its own LLM call, informed by the REAL output of the steps
  * before it (stakeholders see the real department list; knowledge/workplace
  * assets/event-queue see the real stakeholder roster) — this is what actually
  * cuts down on dangling references, not just post-hoc repair. Each step's raw
  * + sanitized output is returned as a WorldGenerationArtifact for the caller
- * to persist (doc's "persisted intermediate artifacts per step").
+ * to persist (doc's "persisted intermediate artifacts per step"). Step 7 —
+ * D7 Evaluation Plan — runs last, since it maps observation targets onto the
+ * real tasks/inbox/slack/events steps 5-6 already produced.
  */
 @Injectable()
 export class HyrteSimulationGeneratorService {
@@ -226,9 +233,28 @@ export class HyrteSimulationGeneratorService {
     const inbox = sanitizeInbox(assetsRaw.inbox, resolveKey);
     const slack = sanitizeSlack(assetsRaw.slack, resolveKey);
     const tasks = sanitizeTasks(assetsRaw.tasks);
-    const calendarEvents = sanitizeCalendarEvents(assetsRaw.calendarEvents);
+    const calendarEvents = sanitizeCalendarEvents(assetsRaw.calendarEvents, validKeys);
     if (inbox.length === 0 && slack.length === 0) throw new Error('Generated fixture had no inbox or Slack content');
     const scheduledEvents = sanitizeScheduledEvents(eventQueueRaw.scheduledEvents, resolveKey);
+
+    // Step 7 — D7 Evaluation Plan. Runs last and is given the real generated
+    // content (not just role/industry labels) so "which events surface each
+    // signal" points at things that actually exist in this world.
+    const contentSummary = JSON.stringify({
+      tasks: tasks.map((t) => t.title),
+      inbox: inbox.map((m) => m.subject),
+      slack: slack.map((m) => m.body.slice(0, 80)),
+      scheduledEvents: scheduledEvents.map((e) => e.body.slice(0, 80)),
+    });
+    const evaluationPlanRaw = await this.step<EvaluationPlanResult>(
+      'evaluation_plan',
+      artifacts,
+      EVALUATION_PLAN_SYSTEM,
+      `Role: ${dto.experienceLevel} ${dto.role}. Company: ${companyName}. This world's real generated ` +
+        `content (tasks/inbox/slack/scheduled events): ${contentSummary}.`,
+      () => ({ evaluationPlan: [] }),
+    );
+    const evaluationPlan = sanitizeEvaluationPlan(evaluationPlanRaw.evaluationPlan);
 
     return {
       fixture: {
@@ -244,6 +270,7 @@ export class HyrteSimulationGeneratorService {
         calendarEvents,
         knowledgeDocs,
         scheduledEvents,
+        evaluationPlan,
       },
       artifacts,
     };
@@ -330,9 +357,14 @@ const STAKEHOLDERS_SYSTEM =
   'phrases, what they are actively working on right now), "avatarSeed": string (slug of name), ' +
   '"personality": { "traits": string[], "goals": string[] }, "hiddenIntention": string (1 sentence — ' +
   'something this stakeholder privately wants or is hiding, never told to the candidate directly, only ' +
-  'surfaces through investigation), "stress": int, "urgency": int, "patience": int, "motivation": int ' +
+  'surfaces through investigation), "privateKnowledge": string[] (1-2 short facts ONLY this specific person ' +
+  'individually knows — not something everyone in their department would know, a genuinely distinct piece of ' +
+  'information, e.g. something they overheard, were told in confidence, or discovered themselves — never ' +
+  'volunteered upfront, only surfaces if the candidate specifically asks the right person the right question), ' +
+  '"stress": int, "urgency": int, "patience": int, "motivation": int ' +
   '(each 0-100) }] (4-6 entries, distinct roles across the given departments that would realistically work ' +
-  'with the candidate\'s role). No prose outside the JSON.';
+  'with the candidate\'s role — vary WHO knows WHAT so no two stakeholders\' privateKnowledge overlaps). No ' +
+  'prose outside the JSON.';
 
 const KNOWLEDGE_SYSTEM =
   'You are generating Step 4 (Knowledge Generation) of a living-workplace simulation, given the real ' +
@@ -355,7 +387,8 @@ const WORKPLACE_ASSETS_SYSTEM =
   '}] (2-3 entries, at least one dm: channel),\n' +
   '  "tasks": [{ "title": string, "priority": "low"|"medium"|"high", "dueInHours": int }] (3-4 entries),\n' +
   '  "calendarEvents": [{ "title": string, "agenda": string (1 sentence, what this meeting is actually ' +
-  'about), "startInHours": number, "durationMins": int }] (2-3 entries)\n' +
+  'about), "startInHours": number, "durationMins": int, "attendeeKeys": string[] (1-3 roster keys who are ' +
+  'actually in this meeting, plausible for the topic) }] (2-3 entries)\n' +
   '}\nExactly ONE message across inbox+slack combined must have "ethicalDilemma": true — a real ' +
   'integrity-pressure situation with no clean answer (asking the candidate to ship untested work, mislead ' +
   'a customer, hide a mistake, or bend a policy under time pressure) — never mark a normal work request as ' +
@@ -369,6 +402,16 @@ const EVENT_QUEUE_SYSTEM =
   'only), "channel": string (slack only, same format as workplace assets), "body": string, "urgent": ' +
   'boolean, "ethicalDilemma": boolean, "fireAtOffsetSeconds": int (15-90, how soon after the workspace ' +
   'unlocks this arrives) }]} (2-4 entries). No prose outside the JSON.';
+
+const EVALUATION_PLAN_SYSTEM =
+  'You are generating Step 7 (D7 Evaluation Plan) of a living-workplace simulation, given the real ' +
+  'generated content (tasks, inbox, Slack, scheduled events) already in this world. This plan describes ' +
+  'WHAT to observe, never scores. Return ONLY JSON: {"evaluationPlan": [{ "dimension": one of ' +
+  '"role_skills"|"communication"|"leadership"|"integrity"|"prioritization"|"adaptability"|"recovery", ' +
+  '"whatToObserve": string (1 sentence, concrete and behavioral, not generic), "signalSources": string[] ' +
+  '(1-3 short excerpts COPIED VERBATIM from the given task/inbox/slack/event content — never invent new ' +
+  'content here) }]} (exactly 7 entries, one per dimension, each grounded in real content from this ' +
+  'specific world). No prose outside the JSON.';
 
 // ── Sanitizers — LLM JSON is untrusted input feeding straight into Prisma
 // writes; clamp ranges, cap array sizes, drop malformed entries, repair
@@ -462,6 +505,7 @@ function sanitizeStakeholders(raw: unknown, departments: FixtureDepartment[]): F
       currentTasks: Array.isArray(s.currentTasks) ? s.currentTasks.filter((t): t is string => typeof t === 'string').slice(0, 3) : [],
       personality: s.personality && typeof s.personality === 'object' ? (s.personality as Record<string, unknown>) : {},
       hiddenIntention: typeof s.hiddenIntention === 'string' && s.hiddenIntention.trim() ? s.hiddenIntention.trim() : undefined,
+      privateKnowledge: Array.isArray(s.privateKnowledge) ? s.privateKnowledge.filter((k): k is string => typeof k === 'string' && k.trim().length > 0).slice(0, 2) : [],
       stress: clamp0to100(s.stress),
       urgency: clamp0to100(s.urgency),
       patience: clamp0to100(s.patience),
@@ -516,7 +560,20 @@ function sanitizeTasks(raw: unknown): FixtureTask[] {
     }));
 }
 
-function sanitizeCalendarEvents(raw: unknown): FixtureCalendarEvent[] {
+const EVALUATION_DIMENSIONS = ['role_skills', 'communication', 'leadership', 'integrity', 'prioritization', 'adaptability', 'recovery'] as const;
+
+function sanitizeEvaluationPlan(raw: unknown): FixtureEvaluationPlanItem[] {
+  return asRecords(raw)
+    .filter((e) => (EVALUATION_DIMENSIONS as readonly string[]).includes(e.dimension as string) && typeof e.whatToObserve === 'string')
+    .slice(0, EVALUATION_DIMENSIONS.length)
+    .map((e) => ({
+      dimension: e.dimension as FixtureEvaluationPlanItem['dimension'],
+      whatToObserve: String(e.whatToObserve),
+      signalSources: Array.isArray(e.signalSources) ? e.signalSources.filter((s): s is string => typeof s === 'string').slice(0, 3) : [],
+    }));
+}
+
+function sanitizeCalendarEvents(raw: unknown, validKeys: Set<string>): FixtureCalendarEvent[] {
   return asRecords(raw)
     .filter((c) => typeof c.title === 'string')
     .slice(0, CAPS.calendarEvents)
@@ -525,6 +582,7 @@ function sanitizeCalendarEvents(raw: unknown): FixtureCalendarEvent[] {
       agenda: typeof c.agenda === 'string' ? c.agenda : undefined,
       startInHours: typeof c.startInHours === 'number' ? c.startInHours : 2,
       durationMins: typeof c.durationMins === 'number' ? c.durationMins : 30,
+      attendeeKeys: Array.isArray(c.attendeeKeys) ? c.attendeeKeys.filter((k): k is string => typeof k === 'string' && validKeys.has(k)) : [],
     }));
 }
 

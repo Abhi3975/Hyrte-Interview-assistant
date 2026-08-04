@@ -61,12 +61,16 @@ export class ReportIntelligenceService {
     if (!session) return { predictions: [] };
 
     const decisionNodes = await this.decisionGraph.getGraph(sessionId);
+    // Part F9 workflow signals — `payload` carries the structured bits
+    // (workItemId, latencyMs, note, decision) for the newer
+    // command_bar.*/work_item.review_* action types; rendering only
+    // actionType/reasoning/outcome silently dropped them.
     const decisionSummary = decisionNodes.length
       ? decisionNodes
-          .map(
-            (n) =>
-              `- ${n.actionType}${n.reasoning ? ` (reasoning: ${n.reasoning})` : ''}${n.outcome ? ` → outcome: ${n.outcome}` : ''}`,
-          )
+          .map((n) => {
+            const payload = n.payload && typeof n.payload === 'object' && Object.keys(n.payload as object).length > 0 ? ` [${JSON.stringify(n.payload)}]` : '';
+            return `- ${n.actionType}${payload}${n.reasoning ? ` (reasoning: ${n.reasoning})` : ''}${n.outcome ? ` → outcome: ${n.outcome}` : ''}`;
+          })
           .join('\n')
       : '(no decision graph nodes recorded)';
 

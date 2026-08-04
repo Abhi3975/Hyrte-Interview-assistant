@@ -20,6 +20,8 @@ export interface FixtureStakeholder {
   personality: Record<string, unknown>;
   /** §4.12 Layer 10 — never returned to the candidate, only read by the stakeholder-agent prompt. */
   hiddenIntention?: string;
+  /** §4.13 Hidden Information System — this stakeholder's own distinct facts, same never-returned-to-candidate treatment as hiddenIntention. */
+  privateKnowledge?: string[];
   /** 0-100, shaped by difficulty. Omitted values default to 50 (see sanitizeFixture/db default). */
   stress?: number;
   urgency?: number;
@@ -63,6 +65,8 @@ export interface FixtureCalendarEvent {
   agenda?: string;
   startInHours: number;
   durationMins: number;
+  /** Part E2 Meetings — roster keys, resolved to real stakeholder ids at persistence time. */
+  attendeeKeys?: string[];
 }
 
 /**
@@ -88,6 +92,18 @@ export interface FixtureKnowledgeDoc {
   title: string;
   body: string;
   category: string;
+}
+
+/**
+ * Master Build Prompt Part D7 — Evaluation Plan. WHAT to observe (not
+ * scores), mapped to which already-generated event(s) actually surface that
+ * signal — grounds the plan in the real world instead of a generic rubric.
+ */
+export interface FixtureEvaluationPlanItem {
+  dimension: 'role_skills' | 'communication' | 'leadership' | 'integrity' | 'prioritization' | 'adaptability' | 'recovery';
+  whatToObserve: string;
+  /** Free-text pointers into this world's real content — a task title, inbox subject, or event description. */
+  signalSources: string[];
 }
 
 export interface FixtureBaselineChallengeOption {
@@ -154,4 +170,6 @@ export interface HyrteFixture {
   knowledgeDocs: FixtureKnowledgeDoc[];
   /** Upgrade §6 — Event Queue (SCHEDULED content only; see FixtureScheduledEvent). */
   scheduledEvents: FixtureScheduledEvent[];
+  /** Master Build Prompt Part D7 — optional: empty for the static fallback fixture (pre-upgrade shape). */
+  evaluationPlan?: FixtureEvaluationPlanItem[];
 }

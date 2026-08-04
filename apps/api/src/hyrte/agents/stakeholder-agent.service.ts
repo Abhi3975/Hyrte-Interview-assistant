@@ -7,7 +7,7 @@ import { EvidenceGraphService } from '../dig/evidence-graph.service';
 import { DecisionGraphService } from '../dig/decision-graph.service';
 import { inferContextFromRole } from '../dig/behavior-context.util';
 import { getVisibleStateKeys } from '../dig/info-scope.util';
-import { OMIT_HIDDEN_INTENTION } from '../dig/hidden-intention.util';
+import { OMIT_HIDDEN_INTENTION, toCandidateStakeholder } from '../dig/hidden-intention.util';
 
 /** §4.17 Decision Cost — a relationship shift this negative reframes the exchange as conflict, not routine peer/manager chat. */
 const CONFLICT_TRUST_SHIFT_THRESHOLD = -5;
@@ -92,7 +92,7 @@ export class HyrteStakeholderAgentService {
 
       const result = await this.ai.completeJson<AgentJsonResponse>(
         [
-          { role: 'system', content: this.buildSystemPrompt(stakeholder, companyState, session.companyName, stakeholder.hiddenIntention) },
+          { role: 'system', content: this.buildSystemPrompt(stakeholder, companyState, session.companyName, stakeholder.hiddenIntention, stakeholder.privateKnowledge) },
           {
             role: 'user',
             content:
@@ -114,7 +114,8 @@ export class HyrteStakeholderAgentService {
       });
 
       const updated = await this.applyDeltas(stakeholder, result);
-      this.gateway.broadcast(sessionId, { type: 'stakeholder:update', stakeholder: updated });
+      this.gateway.broadcast(sessionId, { type: 'stakeholder:update', stakeholder: toCandidateStakeholder(updated) });
+      this.gateway.broadcastRecruiter(sessionId, { type: 'stakeholder:update', stakeholder: updated });
       if (result.companyStateDelta) {
         await this.consequences.applyCompanyStateDelta(sessionId, result.companyStateDelta, 'stakeholder_reply');
       }
@@ -189,7 +190,7 @@ export class HyrteStakeholderAgentService {
 
       const result = await this.ai.completeJson<AgentJsonResponse>(
         [
-          { role: 'system', content: this.buildSystemPrompt(reactor, companyState, session.companyName, reactor.hiddenIntention) },
+          { role: 'system', content: this.buildSystemPrompt(reactor, companyState, session.companyName, reactor.hiddenIntention, reactor.privateKnowledge) },
           {
             role: 'user',
             content:
@@ -206,7 +207,8 @@ export class HyrteStakeholderAgentService {
       if (!reply) return;
 
       const updated = await this.applyDeltas(reactor, result);
-      this.gateway.broadcast(sessionId, { type: 'stakeholder:update', stakeholder: updated });
+      this.gateway.broadcast(sessionId, { type: 'stakeholder:update', stakeholder: toCandidateStakeholder(updated) });
+      this.gateway.broadcastRecruiter(sessionId, { type: 'stakeholder:update', stakeholder: updated });
       if (result.companyStateDelta) {
         await this.consequences.applyCompanyStateDelta(sessionId, result.companyStateDelta, 'stakeholder_independent_reaction');
       }
@@ -250,6 +252,7 @@ export class HyrteStakeholderAgentService {
     companyState: Record<string, unknown> | null,
     companyName: string,
     hiddenIntention: string | null,
+    privateKnowledge: string[],
   ): string {
     const personality = JSON.stringify(stakeholder.personality ?? {});
     // §4.13 Hidden Information System / §4.12 Layer 2 — scoped: each
@@ -267,9 +270,17 @@ export class HyrteStakeholderAgentService {
         `you choose to volunteer vs. withhold, and could surface if the candidate specifically investigates ` +
         `or presses on it): ${hiddenIntention}.`
       : '';
+    // §4.13 Hidden Information System — facts only THIS stakeholder knows,
+    // distinct from the hiddenIntention above (that's what they WANT, this
+    // is what they KNOW). Same never-volunteer-upfront treatment.
+    const privateKnowledgeClause =
+      privateKnowledge.length > 0
+        ? ` THINGS ONLY YOU KNOW (never volunteer these unprompted — only share if the candidate asks something ` +
+          `that would realistically surface it): ${privateKnowledge.join(' | ')}.`
+        : '';
     return (
       `You are ${stakeholder.name}, ${stakeholder.role} at ${companyName}, messaging with a candidate ` +
-      `in a workplace simulation. Your traits/goals: ${personality}.${hiddenIntentionClause} ` +
+      `in a workplace simulation. Your traits/goals: ${personality}.${hiddenIntentionClause}${privateKnowledgeClause} ` +
       `Your current emotional state (0-100): stress ${stakeholder.stress}, urgency ${stakeholder.urgency}, ` +
       `patience ${stakeholder.patience}, motivation ${stakeholder.motivation}. ` +
       `Your relationship with this candidate (0-100): trust ${stakeholder.trust}, respect ${stakeholder.respect}, ` +

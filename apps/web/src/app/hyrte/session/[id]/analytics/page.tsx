@@ -16,6 +16,12 @@ import {
   getAnalyticsKeysForRole,
 } from '@/lib/hyrte-types';
 
+interface WhatChangedCard {
+  at: string;
+  headline: string;
+  cause: string;
+}
+
 export default function HyrteAnalytics({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { companyStateVersion } = useHyrteStore();
@@ -29,6 +35,10 @@ export default function HyrteAnalytics({ params }: { params: Promise<{ id: strin
     queryKey: ['hyrte', 'session', id],
     queryFn: () => api.get<HyrteSession>(`/hyrte/sessions/${id}`),
   });
+  const { data: whatChanged } = useQuery({
+    queryKey: ['hyrte', 'what-changed', id, companyStateVersion],
+    queryFn: () => api.get<WhatChangedCard[]>(`/hyrte/sessions/${id}/what-changed`),
+  });
 
   // §4.1 — role-scoped dashboard: a PM sees product/customer/growth signals,
   // an Engineer sees engineering health, etc., instead of every role seeing
@@ -38,6 +48,7 @@ export default function HyrteAnalytics({ params }: { params: Promise<{ id: strin
   return (
     <DashboardShell
       area="hyrte"
+      variant="hyrte-os"
       title="Company Analytics"
       requiredRoles={['CANDIDATE']}
       navOverride={hyrteNav(id)}
@@ -53,6 +64,25 @@ export default function HyrteAnalytics({ params }: { params: Promise<{ id: strin
           keys.map((key) => (
             <Meter key={key} label={COMPANY_STATE_LABELS[key]} value={companyState[key]} invert={INVERTED_COMPANY_STATE_KEYS.has(key)} />
           ))}
+      </div>
+
+      <div className="mt-6 card">
+        <h3 className="font-semibold">What changed</h3>
+        <p className="mt-1 text-xs text-black/50 dark:text-white/50">Every real state change this session, traced to its cause.</p>
+        <div className="mt-3 space-y-2">
+          {whatChanged?.map((c, i) => (
+            <div key={i} className="flex items-center justify-between rounded-lg border border-black/5 p-3 text-sm dark:border-white/10">
+              <div>
+                <div className="font-medium">{c.headline}</div>
+                <div className="text-xs text-black/50 dark:text-white/50">{c.cause}</div>
+              </div>
+              <span className="shrink-0 text-xs text-black/40 dark:text-white/40">
+                {new Date(c.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            </div>
+          ))}
+          {!whatChanged?.length && <p className="text-sm text-black/50 dark:text-white/50">Nothing has changed yet.</p>}
+        </div>
       </div>
     </DashboardShell>
   );

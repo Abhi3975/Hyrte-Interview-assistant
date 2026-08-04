@@ -20,6 +20,7 @@ export default function HyrteKnowledgeBase({ params }: { params: Promise<{ id: s
   return (
     <DashboardShell
       area="hyrte"
+      variant="hyrte-os"
       title="Knowledge Base"
       requiredRoles={['CANDIDATE']}
       navOverride={hyrteNav(id)}

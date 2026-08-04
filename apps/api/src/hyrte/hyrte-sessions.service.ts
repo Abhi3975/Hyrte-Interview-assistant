@@ -10,6 +10,7 @@ import { WorldStabilizationError } from './generator/world-stabilization';
 import { HyrteConsequenceService, randomIgnoredWindow } from './consequences/consequence.service';
 import { DecisionGraphService } from './dig/decision-graph.service';
 import { EvidenceGraphService } from './dig/evidence-graph.service';
+import { HyrteWorkTickService } from './work/work-tick.service';
 
 // Random spread for messages marked `arrivesLater` by the generator/fixture —
 // "messages start arriving on their own" (doc §8 step 4).
@@ -17,6 +18,22 @@ const MIN_ARRIVAL_DELAY_MS = 12_000;
 const MAX_ARRIVAL_DELAY_MS = 35_000;
 const randomArrivalDelay = () =>
   MIN_ARRIVAL_DELAY_MS + Math.floor(Math.random() * (MAX_ARRIVAL_DELAY_MS - MIN_ARRIVAL_DELAY_MS));
+
+/** Part F8 What-Changed — camelCase KPI key → readable label. */
+function humanizeKey(key: string): string {
+  return key.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase());
+}
+
+/** Part F8 What-Changed — maps HyrteConsequenceService's applyCompanyStateDelta `reason` strings to readable causes. */
+const REASON_LABEL: Record<string, string> = {
+  task_completion: 'a work item was completed',
+  chaos_wave: 'a wave of simultaneous demands hit',
+  stakeholder_reply: 'a conversation with a colleague',
+  stakeholder_independent_reaction: 'a colleague reacting to something they observed',
+  escalation_hop_1: 'an ignored message escalating (1st follow-up)',
+  escalation_hop_2: 'an ignored message escalating (2nd follow-up)',
+  escalation_hop_3: 'an ignored message escalating to management',
+};
 
 @Injectable()
 export class HyrteSessionsService {
@@ -30,6 +47,7 @@ export class HyrteSessionsService {
     private readonly decisionGraph: DecisionGraphService,
     private readonly evidence: EvidenceGraphService,
     private readonly ai: AIService,
+    private readonly workTicks: HyrteWorkTickService,
   ) {}
 
   /**
@@ -173,6 +191,7 @@ export class HyrteSessionsService {
             currentTasks: s.currentTasks ?? [],
             personality: s.personality as Prisma.InputJsonValue,
             hiddenIntention: s.hiddenIntention,
+            privateKnowledge: s.privateKnowledge ?? [],
             ...(s.stress !== undefined && { stress: s.stress }),
             ...(s.urgency !== undefined && { urgency: s.urgency }),
             ...(s.patience !== undefined && { patience: s.patience }),
@@ -183,12 +202,18 @@ export class HyrteSessionsService {
     );
     const keyToId = new Map(fixture.stakeholders.map((s, i) => [s.key, stakeholders[i].id]));
 
-    await this.prisma.hyrteTask.createMany({
+    await this.prisma.hyrteWorkItem.createMany({
       data: fixture.tasks.map((t) => ({
         sessionId: session.id,
         title: t.title,
-        priority: t.priority,
+        priority: t.priority.toUpperCase() as 'LOW' | 'MEDIUM' | 'HIGH',
         dueAt: t.dueInHours ? new Date(Date.now() + t.dueInHours * 3_600_000) : null,
+        // Generation-seeded work — the candidate's own starting workload
+        // (Part C3: origin=EVENT, owner=candidate). Stakeholder-owned and
+        // orchestrator-routed work items arrive later, from G4/G5.
+        origin: 'EVENT' as const,
+        ownerIsCandidate: true,
+        history: [{ at: new Date().toISOString(), actor: 'system', action: 'created', note: 'Seeded at world generation' }] as unknown as Prisma.InputJsonValue,
       })),
     });
 
@@ -199,6 +224,7 @@ export class HyrteSessionsService {
         agenda: c.agenda,
         startAt: new Date(Date.now() + c.startInHours * 3_600_000),
         endAt: new Date(Date.now() + c.startInHours * 3_600_000 + c.durationMins * 60_000),
+        attendeeStakeholderIds: (c.attendeeKeys ?? []).map((k) => keyToId.get(k)).filter((v): v is string => !!v),
       })),
     });
 
@@ -353,6 +379,38 @@ export class HyrteSessionsService {
     return this.prisma.hyrteCompanyStateHistory.findMany({ where: { sessionId: id }, orderBy: { createdAt: 'asc' } });
   }
 
+  /**
+   * Master Build Prompt Part F8 — What-Changed. Deliberately deterministic,
+   * not an LLM synthesis: this is meant to read as a factual account of real
+   * deltas, and an LLM narrating "what changed" risks paraphrasing its way
+   * into a claim the actual numbers don't support. Every card traces to one
+   * real HyrteCompanyStateHistory row.
+   */
+  async getWhatChanged(id: string, candidateId: string) {
+    await this.getById(id, candidateId);
+    return this.computeWhatChanged(id);
+  }
+
+  /** Ownership-unchecked core, also used by HyrteRecruiterService (Part G7 — recruiter isn't the candidate). */
+  async computeWhatChanged(sessionId: string) {
+    const rows = await this.prisma.hyrteCompanyStateHistory.findMany({
+      where: { sessionId },
+      orderBy: { createdAt: 'desc' },
+      take: 15,
+    });
+    return rows.map((r) => {
+      const delta = (r.delta ?? {}) as Record<string, number>;
+      const parts = Object.entries(delta)
+        .filter(([, v]) => typeof v === 'number' && v !== 0)
+        .map(([k, v]) => `${humanizeKey(k)} ${v > 0 ? '+' : ''}${v}`);
+      return {
+        at: r.createdAt,
+        headline: parts.length > 0 ? parts.join(', ') : 'No measurable change',
+        cause: REASON_LABEL[r.reason ?? ''] ?? r.reason ?? 'unknown cause',
+      };
+    });
+  }
+
   /** Upgrade §6 — the Event Queue, made queryable ("what's coming / what already fired") rather than a black box. */
   async getWorldEvents(id: string, candidateId: string) {
     await this.getById(id, candidateId);
@@ -445,6 +503,10 @@ export class HyrteSessionsService {
     // Mission Brief/Baseline screens and hasn't started working yet), scaled
     // by the calibration score (§4/Step 9's "adjust event difficulty weights").
     this.consequences.scheduleChaosWave(id, calibrationScore);
+
+    // Part F3 Orchestrator — periodic Manager/CEO context reviews, timed
+    // from the same workspace-unlock moment as the chaos wave.
+    this.workTicks.scheduleOrchestratorReview(id);
 
     return updated;
   }

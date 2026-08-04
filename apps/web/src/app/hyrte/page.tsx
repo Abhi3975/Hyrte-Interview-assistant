@@ -71,6 +71,7 @@ export default function HyrteEntry() {
   return (
     <DashboardShell
       area="hyrte"
+      variant="hyrte-os"
       title="HYRTE — Living Workplace Simulation"
       requiredRoles={['CANDIDATE']}
       navOverride={[]}

@@ -7,7 +7,23 @@ import { HyrteSessionInfoCard } from '@/components/hyrte/session-info-card';
 import { hyrteNav } from '@/lib/hyrte-nav';
 import { api } from '@/lib/api';
 import { useHyrteStore } from '@/store/hyrte';
-import { HyrteInboxMessage } from '@/lib/hyrte-types';
+import { HyrteInboxMessage, HyrteWorldEvent } from '@/lib/hyrte-types';
+
+/**
+ * Part E2 — "ignored high-priority threads visually escalate (normal → amber
+ * → red edge) on the ENGINE's trigger clock." Driven entirely by real,
+ * persisted HyrteWorldEvent rows (the actual escalation-check the backend
+ * scheduled), never a client-side countdown guessing at the engine's timing.
+ */
+function escalationEdge(message: HyrteInboxMessage, allMessages: HyrteInboxMessage[], worldEvents: HyrteWorldEvent[] | undefined): string {
+  const hasEscalated = allMessages.some((m) => m.escalatesMessageId === message.id);
+  if (hasEscalated) return 'border-l-4 border-l-red-500';
+  const onTheClock = (worldEvents ?? []).some(
+    (e) => e.status === 'PENDING' && e.triggerCondition === `message_unread:${message.id}`,
+  );
+  if (onTheClock && !message.readAt) return 'border-l-4 border-l-amber-500';
+  return '';
+}
 
 export default function HyrteInbox({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -20,6 +36,13 @@ export default function HyrteInbox({ params }: { params: Promise<{ id: string }>
   const { data: inbox } = useQuery({
     queryKey: ['hyrte', 'inbox', id, inboxVersion],
     queryFn: () => api.get<HyrteInboxMessage[]>(`/hyrte/sessions/${id}/inbox`),
+  });
+  // No dedicated websocket event for the escalation clock ticking — it's a
+  // silent backend timer until it fires or cancels — so this one query polls.
+  const { data: worldEvents } = useQuery({
+    queryKey: ['hyrte', 'world-events', id],
+    queryFn: () => api.get<HyrteWorldEvent[]>(`/hyrte/sessions/${id}/world-events`),
+    refetchInterval: 15_000,
   });
 
   async function sendReply(messageId: string) {
@@ -39,6 +62,7 @@ export default function HyrteInbox({ params }: { params: Promise<{ id: string }>
   return (
     <DashboardShell
       area="hyrte"
+      variant="hyrte-os"
       title="Inbox"
       requiredRoles={['CANDIDATE']}
       navOverride={hyrteNav(id)}
@@ -48,12 +72,13 @@ export default function HyrteInbox({ params }: { params: Promise<{ id: string }>
     >
       <div className="space-y-3">
         {inbox?.map((m) => (
-          <div key={m.id} className="card">
+          <div key={m.id} className={`card ${escalationEdge(m, inbox, worldEvents)}`}>
             <button className="flex w-full items-start justify-between text-left" onClick={() => setOpenId(openId === m.id ? null : m.id)}>
               <div>
                 <div className="flex items-center gap-2">
                   {!m.readAt && <span className="h-2 w-2 rounded-full bg-brand-500" />}
                   {m.urgent && <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-xs text-red-600">Urgent</span>}
+                  {m.escalatesMessageId && <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs text-amber-600">Follow-up</span>}
                   <span className="font-medium">{m.subject}</span>
                 </div>
                 <div className="mt-0.5 text-xs text-black/50 dark:text-white/50">

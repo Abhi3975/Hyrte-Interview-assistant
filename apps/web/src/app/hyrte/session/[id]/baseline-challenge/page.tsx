@@ -45,6 +45,7 @@ export default function HyrteBaselineChallenge({ params }: { params: Promise<{ i
   return (
     <DashboardShell
       area="hyrte"
+      variant="hyrte-os"
       title="Quick Warm-Up"
       requiredRoles={['CANDIDATE']}
       navOverride={[]}

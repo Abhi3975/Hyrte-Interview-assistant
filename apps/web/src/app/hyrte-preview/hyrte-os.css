@@ -1,0 +1,105 @@
+/**
+ * HYRTE "agentic OS" design tokens — G0 deliverable.
+ * Scoped under .hyrte-os so it never leaks into the existing brand-blue
+ * DashboardShell design system used elsewhere in the app.
+ */
+
+.hyrte-os {
+  --hos-bg: #0a0f14;
+  --hos-bg-elevated: #0d1520;
+  --hos-card-bg: rgba(255, 255, 255, 0.03);
+  --hos-card-bg-hover: rgba(255, 255, 255, 0.05);
+  --hos-border: rgba(255, 255, 255, 0.08);
+  --hos-border-hover: rgba(255, 255, 255, 0.16);
+  --hos-radius: 10px;
+  --hos-radius-lg: 12px;
+
+  --hos-text: #f1f5f9;
+  --hos-text-muted: rgba(241, 245, 249, 0.5);
+  --hos-text-dim: rgba(241, 245, 249, 0.32);
+
+  --hos-accent: #22d3ee;
+  --hos-accent-glow: rgba(34, 211, 238, 0.16);
+
+  --hos-purple: #a78bfa;
+  --hos-cyan: #22d3ee;
+  --hos-green: #34d399;
+  --hos-pink: #f472b6;
+  --hos-orange: #fb923c;
+
+  --hos-working: #34d399;
+  --hos-waiting: #fbbf24;
+  --hos-idle: #9ca3af;
+  --hos-escalating: #f87171;
+
+  --hos-motion: 200ms;
+  --hos-motion-ease: cubic-bezier(0.4, 0, 0.2, 1);
+
+  background: var(--hos-bg);
+  color: var(--hos-text);
+  min-height: 100vh;
+  font-feature-settings: 'tnum' 1;
+}
+
+.hyrte-os * {
+  border-color: var(--hos-border);
+}
+
+.hos-card {
+  background: var(--hos-card-bg);
+  border: 1px solid var(--hos-border);
+  border-radius: var(--hos-radius-lg);
+  backdrop-filter: blur(12px);
+  transition: border-color var(--hos-motion) var(--hos-motion-ease),
+    background var(--hos-motion) var(--hos-motion-ease);
+}
+
+.hos-card:hover {
+  border-color: var(--hos-border-hover);
+  background: var(--hos-card-bg-hover);
+}
+
+.hos-micro-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.hos-counter {
+  font-size: 30px;
+  font-weight: 600;
+  color: var(--hos-text);
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.hos-card-title {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--hos-text);
+}
+
+.hos-body {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--hos-text-muted);
+}
+
+.hos-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--hos-border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--hos-text-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hyrte-os * {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

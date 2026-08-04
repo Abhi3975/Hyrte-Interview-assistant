@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { HyrteWorkplaceService } from './hyrte-workplace.service';
-import { ReplyInboxDto, SendSlackMessageDto, UpdateTaskDto } from './dto/hyrte.dto';
+import { CommandBarDto, ReplyInboxDto, SendSlackMessageDto, UpdateWorkItemDto, WorkItemReviewDto } from './dto/hyrte.dto';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
@@ -65,15 +65,48 @@ export class HyrteWorkplaceController {
   updateTask(
     @Param('sessionId') sessionId: string,
     @Param('taskId') taskId: string,
-    @Body() dto: UpdateTaskDto,
+    @Body() dto: UpdateWorkItemDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.workplace.updateTask(sessionId, taskId, dto, user.id);
   }
 
+  @Get('needs-review')
+  listNeedsReview(@Param('sessionId') sessionId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.workplace.listNeedsReview(sessionId, user.id);
+  }
+
+  @Post('work-items/:workItemId/review')
+  submitWorkItemReview(
+    @Param('sessionId') sessionId: string,
+    @Param('workItemId') workItemId: string,
+    @Body() dto: WorkItemReviewDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.workplace.submitWorkItemReview(sessionId, workItemId, dto, user.id);
+  }
+
+  @Post('command')
+  submitCommand(
+    @Param('sessionId') sessionId: string,
+    @Body() dto: CommandBarDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.workplace.submitCommand(sessionId, user.id, dto);
+  }
+
   @Get('calendar')
   listCalendar(@Param('sessionId') sessionId: string, @CurrentUser() user: AuthenticatedUser) {
     return this.workplace.listCalendar(sessionId, user.id);
+  }
+
+  @Post('calendar/:eventId/attend')
+  attendMeeting(
+    @Param('sessionId') sessionId: string,
+    @Param('eventId') eventId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.workplace.attendMeeting(sessionId, eventId, user.id);
   }
 
   @Get('knowledge-base')
@@ -84,6 +117,11 @@ export class HyrteWorkplaceController {
   @Get('stakeholders')
   listStakeholders(@Param('sessionId') sessionId: string, @CurrentUser() user: AuthenticatedUser) {
     return this.workplace.listStakeholders(sessionId, user.id);
+  }
+
+  @Get('system-map')
+  getSystemMap(@Param('sessionId') sessionId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.workplace.getSystemMap(sessionId, user.id);
   }
 
   @Get('decision-log')

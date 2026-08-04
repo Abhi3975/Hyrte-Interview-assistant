@@ -1,4 +1,4 @@
-import { IsArray, IsBoolean, IsDateString, IsEnum, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsBoolean, IsDateString, IsEnum, IsIn, IsOptional, IsString } from 'class-validator';
 import {
   Difficulty,
   EvidenceLinkKind,
@@ -7,6 +7,7 @@ import {
   HiringOutcomeEventType,
   HyrteSessionType,
   PerformanceRating,
+  WorkItemStage,
 } from '@prisma/client';
 
 export class CreateHyrteSessionDto {
@@ -28,8 +29,19 @@ export class SendSlackMessageDto {
   @IsString() body!: string;
 }
 
-export class UpdateTaskDto {
-  @IsOptional() @IsString() status?: string;
+export class UpdateWorkItemDto {
+  @IsOptional() @IsEnum(WorkItemStage) stage?: WorkItemStage;
+}
+
+// Master Build Prompt Part F6 — Command bar pipeline.
+export class CommandBarDto {
+  @IsString() instruction!: string;
+}
+
+// Master Build Prompt Part F5 — Needs Review, both directions.
+export class WorkItemReviewDto {
+  @IsIn(['approve', 'request_changes', 'reject', 'reassign']) decision!: 'approve' | 'request_changes' | 'reject' | 'reassign';
+  @IsOptional() @IsString() note?: string;
 }
 
 export class MarkInboxReadDto {

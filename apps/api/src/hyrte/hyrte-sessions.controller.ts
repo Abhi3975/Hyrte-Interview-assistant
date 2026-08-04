@@ -34,6 +34,11 @@ export class HyrteSessionsController {
     return this.sessions.getCompanyStateHistory(id, user.id);
   }
 
+  @Get(':id/what-changed')
+  whatChanged(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.sessions.getWhatChanged(id, user.id);
+  }
+
   @Get(':id/world-events')
   worldEvents(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.sessions.getWorldEvents(id, user.id);

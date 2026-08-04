@@ -32,6 +32,12 @@ function baseFixture(): HyrteFixture {
     calendarEvents: [],
     knowledgeDocs: [],
     scheduledEvents: [{ surface: 'inbox', fromKey: 'eng1', subject: 'Follow-up', body: 'ping', fireAtOffsetSeconds: 30, urgent: false, ethicalDilemma: false }],
+    evaluationPlan: [
+      { dimension: 'role_skills', whatToObserve: 'Does the candidate diagnose the onboarding churn correctly?', signalSources: ['Investigate onboarding churn'] },
+      { dimension: 'communication', whatToObserve: 'How clearly do they explain the issue to Jane?', signalSources: ['Onboarding churn'] },
+      { dimension: 'prioritization', whatToObserve: 'Do they treat the urgent inbox item as urgent?', signalSources: ['Onboarding churn'] },
+      { dimension: 'recovery', whatToObserve: 'If they miss the follow-up, do they recover well?', signalSources: ['Follow-up'] },
+    ],
   };
 }
 
@@ -103,5 +109,13 @@ describe('World Stabilization Gate (§2)', () => {
     const report = validateWorld(fixture, baseArtifacts(fixture), 1);
     expect(report.passed).toBe(false);
     expect(report.checks.find((c) => c.name === 'event_queue_consistent')?.passed).toBe(false);
+  });
+
+  it('fails an evaluation plan covering fewer than 4 dimensions', () => {
+    const fixture = baseFixture();
+    fixture.evaluationPlan = fixture.evaluationPlan!.slice(0, 2);
+    const report = validateWorld(fixture, baseArtifacts(fixture), 1);
+    expect(report.passed).toBe(false);
+    expect(report.checks.find((c) => c.name === 'evaluation_plan_covers_dimensions')?.passed).toBe(false);
   });
 });

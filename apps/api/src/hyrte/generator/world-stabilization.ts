@@ -161,6 +161,23 @@ function checkEventQueue(fixture: HyrteFixture, stakeholderKeys: Set<string>): V
   };
 }
 
+/**
+ * D7 Evaluation Plan — at least half the 7 dimensions covered with a
+ * non-empty observation. Lenient by design (not "all 7"): checkCompanyContext
+ * below already learned live that an over-strict content-grounding threshold
+ * causes real false-positive gate failures for no quality signal: this is the
+ * same LLM-completeness class of check, so it starts at the same lenient bar.
+ */
+function checkEvaluationPlan(fixture: HyrteFixture): ValidationCheckResult {
+  const plan = fixture.evaluationPlan ?? [];
+  const covered = plan.filter((p) => p.whatToObserve?.trim()).length;
+  return {
+    name: 'evaluation_plan_covers_dimensions',
+    passed: covered >= 4,
+    detail: `${covered}/7 evaluation dimensions have a concrete observation target.`,
+  };
+}
+
 export function validateWorld(fixture: HyrteFixture, artifacts: WorldGenerationArtifact[], attempt: number): ValidationReport {
   const stakeholderKeys = new Set(fixture.stakeholders.map((s) => s.key));
   const checks = [
@@ -169,6 +186,7 @@ export function validateWorld(fixture: HyrteFixture, artifacts: WorldGenerationA
     checkCompanyContext(fixture),
     checkNoOrphanReferences(artifacts, stakeholderKeys),
     checkEventQueue(fixture, stakeholderKeys),
+    checkEvaluationPlan(fixture),
   ];
   return { passed: checks.every((c) => c.passed), attempt, checks };
 }

@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { DashboardShell } from '@/components/dashboard-shell';
 import { api } from '@/lib/api';
-import { HyrteSession } from '@/lib/hyrte-types';
+import { HyrteSession, PLANNED_DURATION_MINUTES } from '@/lib/hyrte-types';
 
 /** UX flow §8 step 1 — shown once, before the workspace unlocks. */
 export default function HyrteMissionBrief({ params }: { params: Promise<{ id: string }> }) {
@@ -40,6 +40,7 @@ export default function HyrteMissionBrief({ params }: { params: Promise<{ id: st
   return (
     <DashboardShell
       area="hyrte"
+      variant="hyrte-os"
       title="Mission Brief"
       requiredRoles={['CANDIDATE']}
       navOverride={[]}
@@ -67,6 +68,9 @@ export default function HyrteMissionBrief({ params }: { params: Promise<{ id: st
                   Reporting to <span className="font-medium text-black/70 dark:text-white/70">{brief.manager.name}</span> ({brief.manager.role})
                 </p>
               )}
+              <p className="mt-1 text-xs text-black/50 dark:text-white/50">
+                Planned duration: {PLANNED_DURATION_MINUTES[session.difficulty] ?? 20} minutes
+              </p>
             </div>
 
             <div className="card">

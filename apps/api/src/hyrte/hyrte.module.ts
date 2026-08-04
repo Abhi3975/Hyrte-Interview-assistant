@@ -16,6 +16,10 @@ import { EvaluationModule } from './evaluation/evaluation.module';
 import { LearningModule } from './learning/learning.module';
 import { SimulationRequestController } from './simulation-request.controller';
 import { SimulationRequestService } from './simulation-request.service';
+import { HyrteWorkTickService } from './work/work-tick.service';
+import { HyrteCommandBarService } from './work/command-bar.service';
+import { HyrteRecruiterController } from './recruiter/hyrte-recruiter.controller';
+import { HyrteRecruiterService } from './recruiter/hyrte-recruiter.service';
 
 @Module({
   // DigModule exports DecisionGraphService (the DIG write-path contract) for
@@ -29,6 +33,7 @@ import { SimulationRequestService } from './simulation-request.service';
     HyrteWorkplaceController,
     HyrteInterviewController,
     SimulationRequestController,
+    HyrteRecruiterController,
   ],
   providers: [
     HyrteSessionsService,
@@ -39,6 +44,9 @@ import { SimulationRequestService } from './simulation-request.service';
     HyrteConsequenceService,
     HyrteInterviewService,
     SimulationRequestService,
+    HyrteWorkTickService,
+    HyrteCommandBarService,
+    HyrteRecruiterService,
   ],
 })
 export class HyrteModule {}

@@ -233,6 +233,7 @@ export default function HyrteInterview({ params }: { params: Promise<{ id: strin
   return (
     <DashboardShell
       area="hyrte"
+      variant="hyrte-os"
       title="Reflection Interview"
       requiredRoles={['CANDIDATE']}
       navOverride={hyrteNav(id)}

@@ -6,15 +6,7 @@ import { DashboardShell } from '@/components/dashboard-shell';
 import { HyrteSessionInfoCard } from '@/components/hyrte/session-info-card';
 import { hyrteNav } from '@/lib/hyrte-nav';
 import { api } from '@/lib/api';
-import { HyrteDecisionLogEntry } from '@/lib/hyrte-types';
-
-const ACTION_LABELS: Record<string, string> = {
-  'email.reply': 'Replied to an email',
-  'slack.send': 'Sent a Slack message',
-  'task.status_change': 'Changed a task status',
-  'knowledge_base.view': 'Consulted the knowledge base',
-  'baseline_challenge.submit': 'Answered the warm-up challenge',
-};
+import { ACTION_LABELS, HyrteDecisionLogEntry } from '@/lib/hyrte-types';
 
 export default function HyrteDecisionLog({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -27,6 +19,7 @@ export default function HyrteDecisionLog({ params }: { params: Promise<{ id: str
   return (
     <DashboardShell
       area="hyrte"
+      variant="hyrte-os"
       title="Decision Log"
       requiredRoles={['CANDIDATE']}
       navOverride={hyrteNav(id)}

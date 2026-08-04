@@ -5,7 +5,7 @@ import { AIService } from '../../ai/ai.service';
 import { HyrteGateway } from '../hyrte.gateway';
 import { EvidenceGraphService } from '../dig/evidence-graph.service';
 import { DecisionGraphService } from '../dig/decision-graph.service';
-import { OMIT_HIDDEN_INTENTION } from '../dig/hidden-intention.util';
+import { toCandidateStakeholder } from '../dig/hidden-intention.util';
 
 export const COMPANY_STATE_KEYS = [
   'revenue',
@@ -33,8 +33,16 @@ export type CompanyStateDelta = Partial<Record<CompanyStateKey, number>>;
 const MAX_DELTA = 10;
 const MIN_IGNORED_WINDOW_MS = 45_000;
 const MAX_IGNORED_WINDOW_MS = 75_000;
-/** §4.5 Chaos Engine — a single wave, timed from workspace unlock, not from random ticks. */
+/** §4.5 Chaos Engine — wave 1, timed from workspace unlock, not from random ticks. */
 const CHAOS_WAVE_DELAY_MS = 100_000;
+/** Part F7 — wave 2's own delay after wave 1 actually fires (not calibration-adjusted — that grace period was about first-contact onboarding, not a second hit). */
+const SECOND_WAVE_DELAY_MS = 120_000;
+/** Part F7 — "difficulty-scaled bursts of 3-5 simultaneous demands." */
+const BURST_SIZE_BY_DIFFICULTY: Record<string, number> = { EASY: 2, MEDIUM: 3, HARD: 4, EXPERT: 5 };
+/** Part F7 cross-functional cascade chains. */
+const CASCADE_DELAY_MS = 75_000;
+const COMMITMENT_DEPARTMENT = /sales|marketing|account executive|business development|\bbd\b/i;
+const CAPACITY_DEPARTMENT = /engineer|technical|product|\bqa\b|infra/i;
 /**
  * Multi-hop escalation chain (doc's own worked example: sales follow-up →
  * customer escalation → manager question), each hop spaced over time via the
@@ -402,9 +410,9 @@ export class HyrteConsequenceService {
             cooperation: clamp(originalSender.cooperation + clampDelta(rd.cooperation ?? 0, relationshipCap)),
             influence: clamp(originalSender.influence + clampDelta(rd.influence ?? 0, relationshipCap)),
           },
-          omit: OMIT_HIDDEN_INTENTION,
         });
-        this.gateway.broadcast(sessionId, { type: 'stakeholder:update', stakeholder: updated });
+        this.gateway.broadcast(sessionId, { type: 'stakeholder:update', stakeholder: toCandidateStakeholder(updated) });
+        this.gateway.broadcastRecruiter(sessionId, { type: 'stakeholder:update', stakeholder: updated });
       }
 
       // Chain continues only if this hop also gets ignored — the whole
@@ -417,6 +425,168 @@ export class HyrteConsequenceService {
     } catch (e) {
       this.logger.warn(`escalateIgnoredMessage failed (session ${sessionId}): ${errMsg(e)}`);
     }
+  }
+
+  /**
+   * Master Build Prompt Part F5 — "ignored critical reviews fire escalation
+   * chains." Mirrors scheduleIgnoredCheck/checkAndEscalate's exact shape
+   * (persisted CONDITIONAL HyrteWorldEvent, PENDING → FIRED/CANCELLED) but
+   * checks a Work Item's review state instead of a message's readAt, and is
+   * deliberately single-hop rather than the inbox chain's 3 hops — a
+   * distinct, smaller consequence, not a second full escalation ladder.
+   */
+  scheduleReviewIgnoredCheck(sessionId: string, workItemId: string, delayMs: number): void {
+    this.prisma.hyrteWorldEvent
+      .create({
+        data: {
+          sessionId,
+          kind: 'CONDITIONAL',
+          surface: 'inbox',
+          triggerCondition: `work_item_review:${workItemId}`,
+          payload: {} as unknown as Prisma.InputJsonValue,
+        },
+      })
+      .then((event) => {
+        setTimeout(() => {
+          this.checkAndEscalateReview(sessionId, workItemId, event.id).catch((e) => this.logger.warn(errMsg(e)));
+        }, delayMs);
+      })
+      .catch((e) => this.logger.warn(errMsg(e)));
+  }
+
+  private async checkAndEscalateReview(sessionId: string, workItemId: string, eventId: string): Promise<void> {
+    const item = await this.prisma.hyrteWorkItem.findUnique({ where: { id: workItemId }, include: { ownerStakeholder: true } });
+    const review = item?.review as { decidedAt?: string | null } | null;
+    if (!item || !item.ownerStakeholder || review?.decidedAt) {
+      await this.prisma.hyrteWorldEvent.update({ where: { id: eventId }, data: { status: 'CANCELLED' } }).catch(() => {});
+      return; // reviewed in time — no consequence
+    }
+
+    const stakeholder = item.ownerStakeholder;
+    const created = await this.prisma.hyrteInboxMessage.create({
+      data: {
+        sessionId,
+        fromStakeholderId: stakeholder.id,
+        subject: `Re: ${item.title} — still waiting on your review`,
+        body:
+          `Hi — I finished "${item.title}" a while ago and it's still sitting in review. Can you take a look ` +
+          `when you get a chance? It's blocking me from moving on to the next thing.`,
+        urgent: true,
+      },
+    });
+    this.gateway.broadcast(sessionId, { type: 'inbox:new', message: created });
+
+    const clamp = (n: number) => Math.max(0, Math.min(100, n));
+    const updated = await this.prisma.hyrteStakeholder.update({
+      where: { id: stakeholder.id },
+      data: { trust: clamp(stakeholder.trust - 5), patience: clamp(stakeholder.patience - 8) },
+    });
+    this.gateway.broadcast(sessionId, { type: 'stakeholder:update', stakeholder: toCandidateStakeholder(updated) });
+    this.gateway.broadcastRecruiter(sessionId, { type: 'stakeholder:update', stakeholder: updated });
+
+    await this.prisma.hyrteWorldEvent.update({ where: { id: eventId }, data: { status: 'FIRED', firedAt: new Date() } }).catch(() => {});
+  }
+
+  /**
+   * Master Build Prompt Part F7 — cross-functional cascade chains, the doc's
+   * own worked example ("Sales overpromises → Engineering overload → bugs →
+   * churn → budget cuts"). Approving a HIGH/CRITICAL commitment from a
+   * customer-facing department is the trigger; the consequence lands on a
+   * DIFFERENT (capacity-constrained) department after a delay — a real,
+   * connected story beat, not a second generic escalation. Same
+   * setTimeout+LLM+applyCompanyStateDelta shape as every other delayed
+   * mechanic here, just a new triggering condition.
+   */
+  scheduleCascadeCheck(sessionId: string, workItem: { id: string; title: string; priority: string; ownerStakeholderId: string | null }): void {
+    if (workItem.priority !== 'HIGH' && workItem.priority !== 'CRITICAL') return;
+    if (!workItem.ownerStakeholderId) return;
+    this.prisma.hyrteStakeholder
+      .findUnique({ where: { id: workItem.ownerStakeholderId } })
+      .then((owner) => {
+        if (!owner?.department) return;
+        const isCommitmentMaker = COMMITMENT_DEPARTMENT.test(owner.department) || COMMITMENT_DEPARTMENT.test(owner.role);
+        if (!isCommitmentMaker) return;
+        setTimeout(() => {
+          this.triggerCascade(sessionId, workItem.id, owner.id).catch((e) => this.logger.warn(errMsg(e)));
+        }, CASCADE_DELAY_MS);
+      })
+      .catch((e) => this.logger.warn(errMsg(e)));
+  }
+
+  private async triggerCascade(sessionId: string, workItemId: string, originStakeholderId: string): Promise<void> {
+    const [session, workItem, origin, stakeholders, companyState] = await Promise.all([
+      this.prisma.hyrteSession.findUnique({ where: { id: sessionId } }),
+      this.prisma.hyrteWorkItem.findUnique({ where: { id: workItemId } }),
+      this.prisma.hyrteStakeholder.findUnique({ where: { id: originStakeholderId } }),
+      this.prisma.hyrteStakeholder.findMany({ where: { sessionId } }),
+      this.prisma.hyrteCompanyState.findUnique({ where: { sessionId } }),
+    ]);
+    if (!session || !workItem || !origin || !companyState || stakeholders.length === 0) return;
+    // Only cascade while the world it's about is still live and the item is
+    // still on track — if it got blocked/reassigned since, the commitment
+    // this cascade is about may no longer even be real.
+    if (session.phase !== 'WORKSPACE_ACTIVE' || workItem.stage === 'BLOCKED') return;
+
+    const downstream = stakeholders.filter((s) => s.id !== origin.id && (s.department ? CAPACITY_DEPARTMENT.test(s.department) : false));
+    const candidates = downstream.length > 0 ? downstream : stakeholders.filter((s) => s.id !== origin.id);
+    if (candidates.length === 0) return;
+    const roster = candidates.map((s) => ({ key: s.id, name: s.name, role: s.role, department: s.department }));
+
+    const result = await this.ai.completeJson<EscalationResponse>(
+      [
+        {
+          role: 'system',
+          content:
+            'You are generating a cross-functional cascade consequence for a workplace simulation: the ' +
+            `candidate just approved "${workItem.title}" — a commitment made by ${origin.name} (${origin.role}). ` +
+            'A DIFFERENT stakeholder, from a DIFFERENT (capacity-constrained) department, is now dealing with the ' +
+            'downstream strain of that commitment — a realistic knock-on effect (overloaded capacity, a quality ' +
+            'shortcut, a missed deadline elsewhere), not a repeat of the same issue. Pick ONE stakeholder from the ' +
+            'given roster (by "key"). Return ONLY JSON: {"stakeholderKey": string (must match a roster key), ' +
+            '"message": string (2-3 sentences, concrete, naming the specific strain this commitment caused), ' +
+            `"companyStateDelta": {<at most 2 of: ${COMPANY_STATE_KEYS.join(', ')}, each -${MAX_DELTA}..${MAX_DELTA}>}}.`,
+        },
+        {
+          role: 'user',
+          content:
+            `Company: ${session.companyName}. Approved commitment: "${workItem.title}" (priority ${workItem.priority}), ` +
+            `owned by ${origin.name} (${origin.department}). Roster: ${JSON.stringify(roster)}. ` +
+            `Current company state: ${JSON.stringify(omitMeta(companyState))}.`,
+        },
+      ],
+      { temperature: 0.8, maxTokens: 400 },
+    );
+
+    const target = candidates.find((s) => s.id === result.stakeholderKey) ?? candidates[0];
+    const text = result.message?.trim();
+    if (!text) return;
+
+    const created = await this.prisma.hyrteInboxMessage.create({
+      data: { sessionId, fromStakeholderId: target.id, subject: `Re: ${workItem.title} — downstream impact`, body: text, urgent: workItem.priority === 'CRITICAL' },
+    });
+    this.gateway.broadcast(sessionId, { type: 'inbox:new', message: created });
+    if (created.urgent) this.scheduleIgnoredCheck(sessionId, created.id, randomIgnoredWindow());
+
+    await this.applyCompanyStateDelta(sessionId, result.companyStateDelta ?? {}, 'cascade_consequence');
+
+    await this.decisionGraph.recordDecision({
+      sessionId,
+      actor: target.id,
+      actionType: 'cascade.downstream_impact',
+      payload: { workItemId, originStakeholderId: origin.id },
+      outcome: `${target.name} flagged downstream impact from "${workItem.title}": "${text}"`,
+    });
+    this.evidence
+      .createEvidence({
+        hyrteSessionId: sessionId,
+        candidateId: session.candidateId,
+        source: 'SIMULATION',
+        type: 'SIMULATION_ACTION',
+        rawText: `Cross-functional cascade: approving "${workItem.title}" (${origin.name}, ${origin.department}) landed on ${target.name} (${target.department}) — "${text}"`,
+        behaviorContext: 'PRESSURE',
+        metadata: { workItemId, cascadeFrom: origin.department, cascadeTo: target.department },
+      })
+      .catch((e) => this.logger.warn(e));
   }
 
   /**
@@ -435,21 +605,29 @@ export class HyrteConsequenceService {
    * means more runway to get oriented first. This is the concrete "adjust
    * event difficulty weights" the doc asks Role Calibration results to do.
    */
-  scheduleChaosWave(sessionId: string, calibrationScore?: number): void {
-    const delayMs = chaosWaveDelayFor(calibrationScore);
+  /**
+   * Master Build Prompt Part F7 — "difficulty-scaled bursts... at intelligent
+   * intervals" (own §4.5 gap-list item: previously only a single wave ever
+   * fired). `wave` defaults to 1 for every external caller; wave 2 is
+   * self-scheduled by triggerChaosWave once wave 1 actually fires — capped at
+   * 2 waves total, a deliberate scope decision, not the doc's open-ended
+   * "multiple waves."
+   */
+  scheduleChaosWave(sessionId: string, calibrationScore?: number, wave = 1): void {
+    const delayMs = wave === 1 ? chaosWaveDelayFor(calibrationScore) : SECOND_WAVE_DELAY_MS;
     this.prisma.hyrteWorldEvent
       .create({
-        data: { sessionId, kind: 'SCHEDULED', surface: 'chaos_wave', fireAtOffsetSeconds: Math.round(delayMs / 1000) },
+        data: { sessionId, kind: 'SCHEDULED', surface: 'chaos_wave', fireAtOffsetSeconds: Math.round(delayMs / 1000), payload: { wave } as unknown as Prisma.InputJsonValue },
       })
       .then((event) => {
         setTimeout(() => {
-          this.triggerChaosWave(sessionId, event.id).catch((e) => this.logger.warn(errMsg(e)));
+          this.triggerChaosWave(sessionId, event.id, calibrationScore, wave).catch((e) => this.logger.warn(errMsg(e)));
         }, delayMs);
       })
       .catch((e) => this.logger.warn(errMsg(e)));
   }
 
-  private async triggerChaosWave(sessionId: string, eventId: string): Promise<void> {
+  private async triggerChaosWave(sessionId: string, eventId: string, calibrationScore?: number, wave = 1): Promise<void> {
     const [session, companyState, stakeholders] = await Promise.all([
       this.prisma.hyrteSession.findUnique({ where: { id: sessionId } }),
       this.prisma.hyrteCompanyState.findUnique({ where: { sessionId } }),
@@ -462,22 +640,28 @@ export class HyrteConsequenceService {
     }
 
     const roster = stakeholders.map((s) => ({ key: s.id, name: s.name, role: s.role }));
+    // Part F7 — burst size scales with difficulty, not a fixed 2-3 regardless
+    // of how hard the session was configured.
+    const burstSize = BURST_SIZE_BY_DIFFICULTY[session.difficulty] ?? 3;
 
     const result = await this.ai.completeJson<ChaosWaveResponse>(
       [
         {
           role: 'system',
           content:
-            'You are the Chaos Engine for a workplace simulation (§4.5): fire 2-3 near-simultaneous ' +
+            `You are the Chaos Engine for a workplace simulation (§4.5): fire ${burstSize} near-simultaneous ` +
             'demands across different channels, all triggered by whichever part of the current company ' +
             'state looks worst — this should feel like several things going wrong at once, not one ' +
-            'isolated event. Return ONLY JSON: {"events": [{"channel": "inbox"|"slack", "stakeholderKey": ' +
+            'isolated event. At least ONE pair of these events MUST be a genuine no-right-answer conflict — ' +
+            'two different stakeholders wanting incompatible things from the SAME scarce resource (the ' +
+            "candidate's time, a shared engineering slot, a single budget line) — not two unrelated asks. " +
+            'Return ONLY JSON: {"events": [{"channel": "inbox"|"slack", "stakeholderKey": ' +
             'string (must match a roster key), "subject": string (inbox only), "slackChannel": string ' +
             '("#product"|"#engineering"|"#sales"|"#leadership"|"dm:<stakeholderKey>", slack only), ' +
-            '"body": string (2-3 sentences, concrete stakes)}] (exactly 2-3 entries, mix of inbox and ' +
-            'slack, from at least 2 different stakeholders), "companyStateDelta": {<at most 2 of: ' +
-            `${COMPANY_STATE_KEYS.join(', ')}, each -${MAX_DELTA}..${MAX_DELTA}>} (the ambient cost of ` +
-            'this wave happening, independent of how the candidate responds)}.',
+            '"body": string (2-3 sentences, concrete stakes)}] (exactly ' +
+            `${burstSize} entries, mix of inbox and slack, from at least 2 different stakeholders), ` +
+            `"companyStateDelta": {<at most 2 of: ${COMPANY_STATE_KEYS.join(', ')}, each -${MAX_DELTA}..${MAX_DELTA}>} ` +
+            '(the ambient cost of this wave happening, independent of how the candidate responds)}.',
         },
         {
           role: 'user',
@@ -486,12 +670,13 @@ export class HyrteConsequenceService {
             `${JSON.stringify(omitMeta(companyState))}. Roster: ${JSON.stringify(roster)}.`,
         },
       ],
-      { temperature: 0.9, maxTokens: 700 },
+      { temperature: 0.9, maxTokens: 900 },
     );
 
-    const events = (result.events ?? []).filter((e) => stakeholders.some((s) => s.id === e.stakeholderKey)).slice(0, 3);
+    const events = (result.events ?? []).filter((e) => stakeholders.some((s) => s.id === e.stakeholderKey)).slice(0, burstSize);
     if (events.length === 0) {
       await this.prisma.hyrteWorldEvent.update({ where: { id: eventId }, data: { status: 'CANCELLED' } }).catch(() => {});
+      if (wave === 1) this.scheduleChaosWave(sessionId, calibrationScore, 2);
       return;
     }
 
@@ -524,13 +709,15 @@ export class HyrteConsequenceService {
         candidateId: session.candidateId,
         source: 'SIMULATION',
         type: 'SIMULATION_ACTION',
-        rawText: `A wave of ${events.length} near-simultaneous demands hit at once: ${events.map((e) => `"${e.body}"`).join(' / ')}`,
+        rawText: `Chaos wave ${wave} — ${events.length} near-simultaneous demands hit at once: ${events.map((e) => `"${e.body}"`).join(' / ')}`,
         behaviorContext: 'PRESSURE',
-        metadata: { chaosWave: true },
+        metadata: { chaosWave: true, wave },
       })
       .catch((e) => this.logger.warn(e));
 
     await this.prisma.hyrteWorldEvent.update({ where: { id: eventId }, data: { status: 'FIRED', firedAt: new Date() } }).catch(() => {});
+
+    if (wave === 1) this.scheduleChaosWave(sessionId, calibrationScore, 2);
   }
 }
 

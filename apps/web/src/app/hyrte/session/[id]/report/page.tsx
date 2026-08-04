@@ -35,6 +35,7 @@ export default function HyrteReport({ params }: { params: Promise<{ id: string }
   return (
     <DashboardShell
       area="hyrte"
+      variant="hyrte-os"
       title="Decision Intelligence Report"
       requiredRoles={['CANDIDATE']}
       navOverride={hyrteNav(id)}

@@ -3,10 +3,27 @@ export interface HyrteStakeholder {
   name: string;
   role: string;
   avatarSeed: string;
+  department: string | null;
+  experienceLevel: string | null;
+  currentTasks: string[];
+  // Trust/respect/cooperation/influence/stress/urgency/patience/motivation are
+  // intentionally absent — Hard Rule #5 (Master Build Prompt): candidate-facing
+  // payloads physically exclude trust/emotion numerics. The API omits these
+  // fields via OMIT_CANDIDATE_INTERNALS before the row ever reaches this type.
+}
+
+/** Part E3/G7 — Recruiter Live Console only. Full-fidelity row, "internals allowed" by design. Never use this type on a candidate-facing page. */
+export interface HyrteStakeholderInternal extends HyrteStakeholder {
+  hiddenIntention: string | null;
+  privateKnowledge: string[];
   trust: number;
   respect: number;
   cooperation: number;
   influence: number;
+  stress: number;
+  urgency: number;
+  patience: number;
+  motivation: number;
 }
 
 export interface HyrteCompanyState {
@@ -53,9 +70,19 @@ export interface HyrteSession {
   companyName: string;
   role: string;
   phase: string;
+  difficulty: 'EASY' | 'MEDIUM' | 'HARD' | 'EXPERT';
+  startedAt: string;
   missionBrief: HyrteMissionBrief | null;
   baselineChallenge: HyrteBaselineChallenge | null;
 }
+
+/** Part E1 Mission Brief "duration" field — informational only, no enforcement/auto-submit. */
+export const PLANNED_DURATION_MINUTES: Record<HyrteSession['difficulty'], number> = {
+  EASY: 15,
+  MEDIUM: 20,
+  HARD: 25,
+  EXPERT: 30,
+};
 
 export interface HyrteInboxMessage {
   id: string;
@@ -65,6 +92,18 @@ export interface HyrteInboxMessage {
   readAt: string | null;
   createdAt: string;
   fromStakeholder?: HyrteStakeholder | null;
+  /** Set only on the auto-generated follow-up an ignored urgent message escalates into. */
+  escalatesMessageId: string | null;
+}
+
+export interface HyrteWorldEvent {
+  id: string;
+  kind: 'IMMEDIATE' | 'SCHEDULED' | 'CONDITIONAL';
+  status: 'PENDING' | 'FIRED' | 'CANCELLED';
+  surface: string;
+  triggerCondition: string | null;
+  firedAt: string | null;
+  createdAt: string;
 }
 
 export interface HyrteSlackMessage {
@@ -75,19 +114,47 @@ export interface HyrteSlackMessage {
   fromStakeholder?: HyrteStakeholder | null;
 }
 
-export interface HyrteTask {
+export type WorkItemStage = 'NEW' | 'IN_PROGRESS' | 'WAITING_REVIEW' | 'BLOCKED' | 'DONE';
+export type WorkItemPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+
+export interface HyrteWorkItemReview {
+  requiredFrom?: string;
+  requestedAt?: string;
+  decidedAt?: string | null;
+  decision?: 'approve' | 'request_changes' | 'reject' | 'reassign' | null;
+  note?: string | null;
+}
+
+export interface HyrteWorkItemHistoryEntry {
+  at: string;
+  actor: string;
+  action: string;
+  note?: string;
+}
+
+export interface HyrteWorkItem {
   id: string;
   title: string;
-  priority: string;
-  status: string;
+  type: string;
+  origin: 'ORCHESTRATOR' | 'STAKEHOLDER' | 'CANDIDATE_DELEGATION' | 'EVENT';
+  priority: WorkItemPriority;
+  stage: WorkItemStage;
   dueAt: string | null;
+  ownerStakeholderId: string | null;
+  ownerIsCandidate: boolean;
+  ownerStakeholder?: HyrteStakeholder | null;
+  artifacts: { type: string; content: string }[];
+  review: HyrteWorkItemReview | null;
+  history: HyrteWorkItemHistoryEntry[];
 }
 
 export interface HyrteCalendarEvent {
   id: string;
   title: string;
+  agenda: string | null;
   startAt: string;
   endAt: string;
+  attendeeStakeholderIds: string[];
 }
 
 export interface HyrteKnowledgeDoc {
@@ -96,6 +163,21 @@ export interface HyrteKnowledgeDoc {
   body: string;
   category: string;
 }
+
+export const ACTION_LABELS: Record<string, string> = {
+  'email.reply': 'Replied to an email',
+  'slack.send': 'Sent a Slack message',
+  'task.stage_change': 'Changed a task stage',
+  'knowledge_base.view': 'Consulted the knowledge base',
+  'baseline_challenge.submit': 'Answered the warm-up challenge',
+  'command_bar.overreach': 'Attempted an out-of-authority command',
+  'command_bar.delegate': 'Delegated work via the command bar',
+  'work_item.review_approve': 'Approved a work item',
+  'work_item.review_request_changes': 'Requested changes on a work item',
+  'work_item.review_reject': 'Rejected a work item',
+  'work_item.review_reassign': 'Reassigned a work item',
+  'meeting.attend': 'Joined a meeting',
+};
 
 export interface HyrteDecisionLogEntry {
   id: string;

@@ -791,7 +791,7 @@ model HyrteSession {
   stakeholders             HyrteStakeholder[]
   inboxMessages            HyrteInboxMessage[]
   slackMessages            HyrteSlackMessage[]
-  tasks                    HyrteTask[]
+  workItems                HyrteWorkItem[]
   calendarEvents           HyrteCalendarEvent[]
   knowledgeDocs            HyrteKnowledgeDoc[]
   decisionLog              HyrteDecisionLogEntry[]
@@ -998,6 +998,13 @@ model HyrteStakeholder {
   // HyrteStakeholderAgentService's prompt; every API response that returns a
   // stakeholder row MUST select fields explicitly and omit this one.
   hiddenIntention String?
+  // §4.13 Hidden Information System — genuinely distinct per-stakeholder
+  // facts (what they individually KNOW), not the same role-scoped company-
+  // state subset every stakeholder in that role-category already gets via
+  // getVisibleStateKeys (info-scope.util.ts). Same candidate-facing
+  // treatment as hiddenIntention: never returned directly, only read by the
+  // agent prompt, surfaces only if volunteered in character or investigated.
+  privateKnowledge String[]     @default([])
   // Relationship toward this specific candidate — updated after every agent interaction.
   trust           Int          @default(50)
   respect         Int          @default(50)
@@ -1012,6 +1019,7 @@ model HyrteStakeholder {
   inboxMessages HyrteInboxMessage[]
   slackMessages HyrteSlackMessage[]
   memory        HyrteStakeholderMemory[]
+  ownedWorkItems HyrteWorkItem[]
 
   @@index([sessionId])
 }
@@ -1070,17 +1078,78 @@ model HyrteSlackMessage {
   @@index([sessionId, channel])
 }
 
-model HyrteTask {
+// Master Build Prompt Part C3 — Work Item, "backbone of the workflow layer".
+// Every unit of work in the simulation (candidate's own tasks, stakeholder
+// work-in-progress, orchestrator-routed items, command-bar delegations) is
+// one of these, not a bespoke type per origin. Model kept named HyrteWorkItem
+// with @@map("HyrteTask") to preserve the existing physical table/data
+// instead of a rename+copy migration — purely a Prisma-side naming change.
+enum WorkItemStage {
+  NEW
+  IN_PROGRESS
+  WAITING_REVIEW
+  BLOCKED
+  DONE
+}
+
+enum WorkItemPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum WorkItemType {
+  DOCUMENT
+  REPLY
+  DECISION
+  APPROVAL
+  BUILD
+  ANALYSIS
+  MEETING_OUTCOME
+}
+
+enum WorkItemOrigin {
+  ORCHESTRATOR
+  STAKEHOLDER
+  CANDIDATE_DELEGATION
+  EVENT
+}
+
+model HyrteWorkItem {
   id        String       @id @default(cuid())
   sessionId String
   session   HyrteSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   title     String
-  priority  String
-  status    String       @default("open")
-  dueAt     DateTime?
-  createdAt DateTime     @default(now())
+  type      WorkItemType   @default(DOCUMENT)
+  origin    WorkItemOrigin @default(EVENT)
+
+  // owner: "stakeholder_id | candidate" per the spec's JSON shape, modeled as
+  // a nullable FK + a discriminator flag rather than a polymorphic string —
+  // query-able either way, and candidate ownership needs no join.
+  ownerStakeholderId String?
+  ownerStakeholder   HyrteStakeholder? @relation(fields: [ownerStakeholderId], references: [id], onDelete: SetNull)
+  ownerIsCandidate   Boolean           @default(false)
+  watchers           String[]          @default([]) // stakeholder ids
+
+  stage    WorkItemStage    @default(NEW)
+  priority WorkItemPriority @default(MEDIUM)
+  dueAt    DateTime?
+
+  // [{ type: "draft_email"|"doc"|"spec"|"report", contentRef: string }]
+  artifacts Json @default("[]")
+  // { requiredFrom, requestedAt, decidedAt, decision } | null
+  review    Json?
+  // [{ at, actor, action, note }] append-only, mirrors HyrteDecisionLogEntry's
+  // shape but scoped to this one item's own lifecycle.
+  history   Json @default("[]")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([sessionId])
+  @@index([sessionId, stage])
+  @@map("HyrteTask")
 }
 
 model HyrteCalendarEvent {
@@ -1091,6 +1160,8 @@ model HyrteCalendarEvent {
   agenda    String?
   startAt   DateTime
   endAt     DateTime
+  // Part E2 Meetings — stakeholder ids invited to this meeting.
+  attendeeStakeholderIds String[] @default([])
 
   @@index([sessionId])
 }
