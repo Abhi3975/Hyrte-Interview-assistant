@@ -252,10 +252,19 @@ export class HyrteConsequenceService {
   }
 
   private async checkAndEscalate(sessionId: string, messageId: string, eventId: string, hop: number, rootMessageId: string): Promise<void> {
-    const message = await this.prisma.hyrteInboxMessage.findUnique({ where: { id: messageId } });
-    if (!message || message.readAt) {
+    const [message, session] = await Promise.all([
+      this.prisma.hyrteInboxMessage.findUnique({ where: { id: messageId } }),
+      this.prisma.hyrteSession.findUnique({ where: { id: sessionId }, select: { phase: true } }),
+    ]);
+    // Same guard as triggerCascade/triggerChaosWave/runOrchestratorReview,
+    // which already stop quietly once the session has moved past
+    // WORKSPACE_ACTIVE (interview started / report locked in) — this one was
+    // missing it, so an in-flight escalation timer would keep firing straight
+    // into an already-finished session (the "19 open escalations after the
+    // report" bug).
+    if (!message || message.readAt || !session || session.phase !== 'WORKSPACE_ACTIVE') {
       await this.prisma.hyrteWorldEvent.update({ where: { id: eventId }, data: { status: 'CANCELLED' } }).catch(() => {});
-      return; // acted on in time — no consequence
+      return; // acted on in time, or the world has moved on — no consequence
     }
     await this.escalateIgnoredMessage(sessionId, message, hop, rootMessageId);
     await this.prisma.hyrteWorldEvent.update({ where: { id: eventId }, data: { status: 'FIRED', firedAt: new Date() } }).catch(() => {});
@@ -455,11 +464,16 @@ export class HyrteConsequenceService {
   }
 
   private async checkAndEscalateReview(sessionId: string, workItemId: string, eventId: string): Promise<void> {
-    const item = await this.prisma.hyrteWorkItem.findUnique({ where: { id: workItemId }, include: { ownerStakeholder: true } });
+    const [item, session] = await Promise.all([
+      this.prisma.hyrteWorkItem.findUnique({ where: { id: workItemId }, include: { ownerStakeholder: true } }),
+      this.prisma.hyrteSession.findUnique({ where: { id: sessionId }, select: { phase: true } }),
+    ]);
     const review = item?.review as { decidedAt?: string | null } | null;
-    if (!item || !item.ownerStakeholder || review?.decidedAt) {
+    // Same session-has-moved-on guard as checkAndEscalate/triggerCascade/
+    // triggerChaosWave/runOrchestratorReview — this one was missing it too.
+    if (!item || !item.ownerStakeholder || review?.decidedAt || !session || session.phase !== 'WORKSPACE_ACTIVE') {
       await this.prisma.hyrteWorldEvent.update({ where: { id: eventId }, data: { status: 'CANCELLED' } }).catch(() => {});
-      return; // reviewed in time — no consequence
+      return; // reviewed in time, or the world has moved on — no consequence
     }
 
     const stakeholder = item.ownerStakeholder;
