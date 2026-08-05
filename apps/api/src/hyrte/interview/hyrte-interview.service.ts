@@ -273,6 +273,46 @@ export class HyrteInterviewService {
     );
   }
 
+  /**
+   * §5.8 Conversation Memory — turns a deterministically-chosen verbatim
+   * candidate snippet (from pickCallbackSnippet) into a short paraphrased
+   * gist, e.g. "I would run user interviews and analyze drop-off funnels" ->
+   * "wanting to run user interviews to look at drop-off". Deliberately its
+   * own isolated call rather than a field bolted onto the main turn-response
+   * JSON — the main call already carries tone/company-voice/candidate-signal/
+   * boss-mode/repetition/contradiction directives, which is exactly why a
+   * prompt-only callback instruction there proved unreliable before (see the
+   * call site). This call has nothing to compete with: given the exact text,
+   * just reword it — a narrow, mechanical task LLMs are consistent at, not a
+   * "notice and decide" judgment call. No canned-string fallback on failure —
+   * returns null so the caller skips the callback for this turn rather than
+   * ever falling back to quoting the candidate verbatim.
+   */
+  private async paraphraseCallback(snippet: string): Promise<string | null> {
+    try {
+      const result = await this.ai.completeJson<{ phrase?: string }>(
+        [
+          {
+            role: 'system',
+            content:
+              'Paraphrase the given sentence in your own words as a short phrase (6-12 words) that could ' +
+              'complete the sentence "Earlier you mentioned ___". Capture only the gist — do NOT reuse the ' +
+              'original wording verbatim, do NOT use quotation marks. Example: input "I would run user ' +
+              'interviews and analyze drop-off funnels" -> {"phrase": "wanting to run user interviews and ' +
+              'look at drop-off"}. Return ONLY JSON: {"phrase": string}.',
+          },
+          { role: 'user', content: snippet },
+        ],
+        { temperature: 0.5, maxTokens: 60 },
+      );
+      const phrase = result.phrase?.trim();
+      return phrase && phrase.length > 0 ? phrase : null;
+    } catch (e) {
+      this.logger.warn(`paraphraseCallback failed: ${e instanceof Error ? e.message : String(e)}`);
+      return null;
+    }
+  }
+
   async startInterview(sessionId: string, candidateId: string, bossMode = false) {
     const session = await this.assertOwnership(sessionId, candidateId);
     const { text: brief } = await this.buildEvidenceBrief(sessionId);
@@ -438,13 +478,21 @@ export class HyrteInterviewService {
     const llmReplyRaw = stripEvidenceLabels(result.reply ?? 'Thanks for walking me through that.');
     const done = Boolean(result.done) || willEnd;
 
-    // §5.8 Conversation Memory — deterministic callback to a specific earlier
-    // (non-contradictory) detail, injected once per interview rather than
-    // hoping the LLM volunteers it (see note above on why the prompt-only
-    // version didn't hold up). Never on the closing turn, which has its own
-    // fixed acknowledgement-only shape.
-    const llmReply =
-      callbackSnippet && !done ? `Earlier you mentioned "${callbackSnippet}" — ${llmReplyRaw}` : llmReplyRaw;
+    // §5.8 Conversation Memory — WHEN to call back stays fully deterministic
+    // (pickCallbackSnippet above), same reliability guarantee as before.
+    // HOW it got phrased was the actual bug (flagged live, 2026-08-05
+    // run-through): quoting the candidate's own words back verbatim
+    // (`Earlier you mentioned "<12 words>"`) reads as a scripted insert, not
+    // something a human interviewer does — a real "this is AI" tell. Fixed
+    // by paraphrasing the already-chosen snippet through a narrow,
+    // single-purpose call — a much safer bet than the original open-ended
+    // "remember and call back" prompt instruction that got drowned out by
+    // this file's other directives, because this one has nothing to compete
+    // with: given the exact snippet, just reword it, no judgment call about
+    // whether/when to use it. Falls back to no callback (not the verbatim
+    // quote) if the paraphrase call fails.
+    const callbackGist = callbackSnippet && !done ? await this.paraphraseCallback(callbackSnippet) : null;
+    const llmReply = callbackGist ? `Earlier you mentioned ${callbackGist} — ${llmReplyRaw}` : llmReplyRaw;
 
     // §5.4 — deterministic variation banks instead of trusting the LLM to
     // vary its own closing/filler phrasing, which tends to converge on the
