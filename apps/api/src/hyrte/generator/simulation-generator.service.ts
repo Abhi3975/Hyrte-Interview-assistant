@@ -30,7 +30,28 @@ const CAPS = {
   successMetrics: 4,
   baselineOptions: 4,
   departments: 5,
-  scheduledEvents: 4,
+};
+
+/**
+ * Upgrade — Event Queue full-session coverage. Previously a fixed 2-4 entries
+ * clamped to a 10-120s offset regardless of session length — a "starter"
+ * queue covering only the first ~75s of even a 30-minute EXPERT session, with
+ * everything else past that left to the purely-reactive mechanisms (Chaos
+ * Engine, escalations, Orchestrator). Now scales with difficulty the same way
+ * BURST_SIZE_BY_DIFFICULTY does elsewhere (consequence.service.ts) — more
+ * events, spread across more of the session, for harder difficulties. The max
+ * offset is capped below the full planned duration (matches
+ * PLANNED_DURATION_MINUTES on the frontend, hyrte-types.ts) rather than 100%
+ * of it, deliberately: the last stretch of a session is for wrapping up
+ * work-in-progress and transitioning to the reflection interview, not for
+ * fresh demands landing with no time left to act on them.
+ */
+export const EVENT_QUEUE_SIZE_BY_DIFFICULTY: Record<string, number> = { EASY: 4, MEDIUM: 6, HARD: 8, EXPERT: 10 };
+export const EVENT_QUEUE_MAX_OFFSET_SECONDS_BY_DIFFICULTY: Record<string, number> = {
+  EASY: 600, // 15-min planned session, queue reaches to the 10-min mark
+  MEDIUM: 840, // 20-min session, 14-min mark
+  HARD: 1080, // 25-min session, 18-min mark
+  EXPERT: 1320, // 30-min session, 22-min mark
 };
 
 /**
@@ -128,7 +149,7 @@ export class HyrteSimulationGeneratorService {
     for (let attempt = 1; attempt <= MAX_REPAIR_LOOPS; attempt++) {
       try {
         const { fixture, artifacts } = await this.generateOnce(dto, grounding);
-        const report = validateWorld(fixture, artifacts, attempt);
+        const report = validateWorld(fixture, artifacts, attempt, dto.difficulty);
         artifacts.push({ step: 'stabilization_gate', status: report.passed ? 'OK' : 'FAILED_FELL_BACK', payload: report });
         if (report.passed) return { fixture, artifacts };
         lastReport = report;
@@ -227,7 +248,7 @@ export class HyrteSimulationGeneratorService {
       this.step<EventQueueResult>(
         'event_queue',
         artifacts,
-        EVENT_QUEUE_SYSTEM,
+        eventQueueSystem(dto.difficulty),
         `Company: ${companyName}. Roster: ${JSON.stringify(roster)}.`,
         () => ({ scheduledEvents: [] }),
       ),
@@ -240,7 +261,12 @@ export class HyrteSimulationGeneratorService {
     const tasks = sanitizeTasks(assetsRaw.tasks);
     const calendarEvents = sanitizeCalendarEvents(assetsRaw.calendarEvents, validKeys);
     if (inbox.length === 0 && slack.length === 0) throw new Error('Generated fixture had no inbox or Slack content');
-    const scheduledEvents = sanitizeScheduledEvents(eventQueueRaw.scheduledEvents, resolveKey);
+    const scheduledEvents = sanitizeScheduledEvents(
+      eventQueueRaw.scheduledEvents,
+      resolveKey,
+      EVENT_QUEUE_SIZE_BY_DIFFICULTY[dto.difficulty] ?? EVENT_QUEUE_SIZE_BY_DIFFICULTY.MEDIUM,
+      EVENT_QUEUE_MAX_OFFSET_SECONDS_BY_DIFFICULTY[dto.difficulty] ?? EVENT_QUEUE_MAX_OFFSET_SECONDS_BY_DIFFICULTY.MEDIUM,
+    );
 
     // Step 7 — D7 Evaluation Plan. Runs last and is given the real generated
     // content (not just role/industry labels) so "which events surface each
@@ -399,14 +425,22 @@ const WORKPLACE_ASSETS_SYSTEM =
   'a customer, hide a mistake, or bend a policy under time pressure) — never mark a normal work request as ' +
   'an ethical dilemma. No prose outside the JSON.';
 
-const EVENT_QUEUE_SYSTEM =
-  'You are generating Step 6 (Event Queue) of a living-workplace simulation, given the real company and ' +
-  'stakeholder roster. These are messages that arrive a short while AFTER the candidate has already ' +
-  'started working — not present when they open the workspace. Return ONLY JSON: {"scheduledEvents": [{ ' +
-  '"surface": "inbox"|"slack", "fromKey": string (must match a roster key), "subject": string (inbox ' +
-  'only), "channel": string (slack only, same format as workplace assets), "body": string, "urgent": ' +
-  'boolean, "ethicalDilemma": boolean, "fireAtOffsetSeconds": int (15-90, how soon after the workspace ' +
-  'unlocks this arrives) }]} (2-4 entries). No prose outside the JSON.';
+/** Upgrade — full-session coverage; count and offset range now scale with difficulty (see the maps above), not a fixed 2-4 entries / 15-90s window regardless of how long the session actually runs. */
+function eventQueueSystem(difficulty: string): string {
+  const count = EVENT_QUEUE_SIZE_BY_DIFFICULTY[difficulty] ?? EVENT_QUEUE_SIZE_BY_DIFFICULTY.MEDIUM;
+  const maxOffset = EVENT_QUEUE_MAX_OFFSET_SECONDS_BY_DIFFICULTY[difficulty] ?? EVENT_QUEUE_MAX_OFFSET_SECONDS_BY_DIFFICULTY.MEDIUM;
+  return (
+    'You are generating Step 6 (Event Queue) of a living-workplace simulation, given the real company and ' +
+    'stakeholder roster. These are messages that arrive at various points AFTER the candidate has already ' +
+    'started working — not present when they open the workspace. Spread them out to feel like a realistic ' +
+    `workday's pace across the WHOLE session, not clustered near the start — offsets should vary widely ` +
+    `between entries, not be evenly spaced like a metronome. Return ONLY JSON: {"scheduledEvents": [{ ` +
+    '"surface": "inbox"|"slack", "fromKey": string (must match a roster key), "subject": string (inbox ' +
+    'only), "channel": string (slack only, same format as workplace assets), "body": string, "urgent": ' +
+    `boolean, "ethicalDilemma": boolean, "fireAtOffsetSeconds": int (15-${maxOffset}, how soon after the ` +
+    `workspace unlocks this arrives) }]} (exactly ${count} entries). No prose outside the JSON.`
+  );
+}
 
 const EVALUATION_PLAN_SYSTEM =
   'You are generating Step 7 (D7 Evaluation Plan) of a living-workplace simulation, given the real ' +
@@ -591,10 +625,15 @@ function sanitizeCalendarEvents(raw: unknown, validKeys: Set<string>): FixtureCa
     }));
 }
 
-function sanitizeScheduledEvents(raw: unknown, resolveKey: (k: unknown) => string): FixtureScheduledEvent[] {
+function sanitizeScheduledEvents(
+  raw: unknown,
+  resolveKey: (k: unknown) => string,
+  maxCount: number,
+  maxOffsetSeconds: number,
+): FixtureScheduledEvent[] {
   return asRecords(raw)
     .filter((e) => (e.surface === 'inbox' || e.surface === 'slack') && typeof e.body === 'string')
-    .slice(0, CAPS.scheduledEvents)
+    .slice(0, maxCount)
     .map((e) => ({
       surface: e.surface as 'inbox' | 'slack',
       fromKey: resolveKey(e.fromKey),
@@ -603,6 +642,7 @@ function sanitizeScheduledEvents(raw: unknown, resolveKey: (k: unknown) => strin
       body: String(e.body),
       urgent: Boolean(e.urgent),
       ethicalDilemma: Boolean(e.ethicalDilemma),
-      fireAtOffsetSeconds: typeof e.fireAtOffsetSeconds === 'number' ? Math.max(10, Math.min(120, Math.round(e.fireAtOffsetSeconds))) : 20,
+      fireAtOffsetSeconds:
+        typeof e.fireAtOffsetSeconds === 'number' ? Math.max(10, Math.min(maxOffsetSeconds, Math.round(e.fireAtOffsetSeconds))) : 20,
     }));
 }

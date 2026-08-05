@@ -1,6 +1,6 @@
 import { FixtureDepartment, FixtureStakeholder, HyrteFixture } from '../fixtures/hyrte-fixture.types';
 import { COMPANY_STATE_KEYS } from '../consequences/consequence.service';
-import { WorldGenerationArtifact } from './simulation-generator.service';
+import { EVENT_QUEUE_MAX_OFFSET_SECONDS_BY_DIFFICULTY, WorldGenerationArtifact } from './simulation-generator.service';
 
 /**
  * Upgrade §2 — the World Stabilization Gate. Real code assertions, not an
@@ -149,10 +149,15 @@ function checkNoOrphanReferences(artifacts: WorldGenerationArtifact[], validKeys
   };
 }
 
-/** Event queue internally consistent: in-range offsets, non-empty content, resolves to a real (sanitized) stakeholder. */
-function checkEventQueue(fixture: HyrteFixture, stakeholderKeys: Set<string>): ValidationCheckResult {
+/**
+ * Event queue internally consistent: in-range offsets, non-empty content,
+ * resolves to a real (sanitized) stakeholder. `maxOffsetSeconds` scales with
+ * difficulty (see EVENT_QUEUE_MAX_OFFSET_SECONDS_BY_DIFFICULTY) — the queue
+ * now spans most of the session, not a fixed 120s regardless of length.
+ */
+function checkEventQueue(fixture: HyrteFixture, stakeholderKeys: Set<string>, maxOffsetSeconds: number): ValidationCheckResult {
   const bad = fixture.scheduledEvents.filter(
-    (e) => !e.body?.trim() || e.fireAtOffsetSeconds < 10 || e.fireAtOffsetSeconds > 120 || !stakeholderKeys.has(e.fromKey),
+    (e) => !e.body?.trim() || e.fireAtOffsetSeconds < 10 || e.fireAtOffsetSeconds > maxOffsetSeconds || !stakeholderKeys.has(e.fromKey),
   );
   return {
     name: 'event_queue_consistent',
@@ -178,14 +183,20 @@ function checkEvaluationPlan(fixture: HyrteFixture): ValidationCheckResult {
   };
 }
 
-export function validateWorld(fixture: HyrteFixture, artifacts: WorldGenerationArtifact[], attempt: number): ValidationReport {
+export function validateWorld(
+  fixture: HyrteFixture,
+  artifacts: WorldGenerationArtifact[],
+  attempt: number,
+  difficulty: string = 'MEDIUM',
+): ValidationReport {
   const stakeholderKeys = new Set(fixture.stakeholders.map((s) => s.key));
+  const maxOffsetSeconds = EVENT_QUEUE_MAX_OFFSET_SECONDS_BY_DIFFICULTY[difficulty] ?? EVENT_QUEUE_MAX_OFFSET_SECONDS_BY_DIFFICULTY.MEDIUM;
   const checks = [
     checkStakeholders(fixture.stakeholders),
     checkDepartmentsHaveWork(fixture.departments, fixture.stakeholders),
     checkCompanyContext(fixture),
     checkNoOrphanReferences(artifacts, stakeholderKeys),
-    checkEventQueue(fixture, stakeholderKeys),
+    checkEventQueue(fixture, stakeholderKeys, maxOffsetSeconds),
     checkEvaluationPlan(fixture),
   ];
   return { passed: checks.every((c) => c.passed), attempt, checks };

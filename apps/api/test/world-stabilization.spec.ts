@@ -111,6 +111,17 @@ describe('World Stabilization Gate (§2)', () => {
     expect(report.checks.find((c) => c.name === 'event_queue_consistent')?.passed).toBe(false);
   });
 
+  it('event queue offset range scales with difficulty — full-session coverage, not a fixed 120s cap', () => {
+    const fixture = baseFixture();
+    // Well beyond the old fixed 120s cap, but within MEDIUM's 840s full-session window.
+    fixture.scheduledEvents[0].fireAtOffsetSeconds = 700;
+    const reportMedium = validateWorld(fixture, baseArtifacts(fixture), 1, 'MEDIUM');
+    expect(reportMedium.checks.find((c) => c.name === 'event_queue_consistent')?.passed).toBe(true);
+    // Same offset exceeds EASY's shorter 600s window — same event, different difficulty, different verdict.
+    const reportEasy = validateWorld(fixture, baseArtifacts(fixture), 1, 'EASY');
+    expect(reportEasy.checks.find((c) => c.name === 'event_queue_consistent')?.passed).toBe(false);
+  });
+
   it('fails an evaluation plan covering fewer than 4 dimensions', () => {
     const fixture = baseFixture();
     fixture.evaluationPlan = fixture.evaluationPlan!.slice(0, 2);
