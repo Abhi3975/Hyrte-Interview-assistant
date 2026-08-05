@@ -57,6 +57,31 @@ export default function HyrteMissionBrief({ params }: { params: Promise<{ id: st
             </p>
           </div>
         )}
+        {session?.phase === 'GENERATION_FAILED' && (
+          <div className="flex flex-col items-center gap-4 py-16 text-center">
+            <div className="rounded-full bg-red-500/10 p-3 text-red-500">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M12 8v4M12 16h.01" strokeLinecap="round" />
+              </svg>
+            </div>
+            <div>
+              <p className="font-semibold">We couldn&apos;t build this workplace</p>
+              <p className="mt-1 max-w-sm text-sm text-black/60 dark:text-white/60">
+                Something went wrong generating a workplace grounded in this role — rather than show you a
+                generic one that wouldn&apos;t reflect it accurately, we stopped. This is on us, not
+                something you did.
+              </p>
+            </div>
+            {session.simulationRequest?.code ? (
+              <a href={`/hyrte/start/${session.simulationRequest.code}`} className="btn-primary">
+                Try again
+              </a>
+            ) : (
+              <p className="text-xs text-black/50 dark:text-white/50">Ask whoever sent you this link for a new one.</p>
+            )}
+          </div>
+        )}
         {brief && session && session.phase !== 'GENERATING' && (
           <div className="space-y-6">
             <div>

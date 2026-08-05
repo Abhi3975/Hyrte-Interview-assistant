@@ -9,6 +9,9 @@ import { HyrteSession } from '@/lib/hyrte-types';
 /** Which screen a given pre-workspace phase must be on. */
 const PHASE_SCREENS: Record<string, string> = {
   GENERATING: 'mission-brief',
+  // World Stabilization Gate hard-blocked (ASSESSMENT sessions only) — stays
+  // on the mission-brief screen, which renders the failure state for it.
+  GENERATION_FAILED: 'mission-brief',
   MISSION_BRIEF: 'mission-brief',
   BASELINE_SKILL_CHECK: 'baseline-challenge',
 };

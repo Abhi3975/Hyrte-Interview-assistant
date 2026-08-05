@@ -5,7 +5,7 @@ import { AIService } from '../ai/ai.service';
 import { HyrteGateway } from './hyrte.gateway';
 import { CreateHyrteSessionDto, SubmitBaselineChallengeDto } from './dto/hyrte.dto';
 import { getPmSaasStartupFixture } from './fixtures/pm-saas-startup.fixture';
-import { HyrteSimulationGeneratorService, JobSuccessModelGrounding } from './generator/simulation-generator.service';
+import { GeneratedWorld, HyrteSimulationGeneratorService, JobSuccessModelGrounding } from './generator/simulation-generator.service';
 import { WorldStabilizationError } from './generator/world-stabilization';
 import { HyrteConsequenceService, randomIgnoredWindow } from './consequences/consequence.service';
 import { DecisionGraphService } from './dig/decision-graph.service';
@@ -134,14 +134,38 @@ export class HyrteSessionsService {
     candidateId: string,
     options: { grounding?: JobSuccessModelGrounding },
   ) {
-    const world = await this.generator.generate(dto, options.grounding).catch((e) => {
+    let world: GeneratedWorld;
+    try {
+      world = await this.generator.generate(dto, options.grounding);
+    } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      if (dto.sessionType === 'ASSESSMENT') {
+        // Upgrade — World Stabilization Gate is now a REAL hard blocker here:
+        // an ASSESSMENT session is tied to a specific recruiter-configured JD,
+        // so silently substituting the generic static fixture (PRACTICE's
+        // fallback below) would hand back a workplace that has nothing to do
+        // with the role actually being evaluated — actively misleading for a
+        // real hiring decision, not a harmless demo degradation. The
+        // candidate/recruiter get an honest GENERATION_FAILED phase instead
+        // of a world that LOOKS complete but isn't what it claims to be.
+        this.logger.error(`World generation failed for ASSESSMENT session ${sessionId}, blocking rather than falling back: ${msg}`);
+        await this.prisma.hyrteSession.update({ where: { id: sessionId }, data: { phase: 'GENERATION_FAILED' } });
+        await this.prisma.hyrteWorldGenerationArtifact.create({
+          data: {
+            sessionId,
+            step: 'stabilization_gate',
+            status: 'FAILED_BLOCKED',
+            payload: (e instanceof WorldStabilizationError ? e.report : { error: msg }) as Prisma.InputJsonValue,
+          },
+        });
+        return;
+      }
       this.logger.warn(`Simulation generation failed, using fallback fixture: ${msg}`);
       // §2 — never lose the Stabilization Gate's failure report just because
       // we're falling back; it's persisted below once the session exists.
       const failureArtifact = e instanceof WorldStabilizationError ? [{ step: 'stabilization_gate' as const, status: 'FAILED_FELL_BACK' as const, payload: e.report }] : [];
-      return { fixture: getPmSaasStartupFixture(), artifacts: failureArtifact };
-    });
+      world = { fixture: getPmSaasStartupFixture(), artifacts: failureArtifact };
+    }
     const fixture = world.fixture;
 
     // UX flow §8: candidate sees the Mission Brief (step 1) and Baseline
@@ -360,7 +384,11 @@ export class HyrteSessionsService {
   async getById(id: string, candidateId: string) {
     const session = await this.prisma.hyrteSession.findFirst({
       where: { id, candidateId },
-      include: { companyState: true },
+      // simulationRequest.code — only populated for GENERATION_FAILED
+      // sessions' benefit, so the candidate-facing UI can link straight back
+      // to a fresh attempt at the same recruiter-configured link rather than
+      // just showing a dead end.
+      include: { companyState: true, simulationRequest: { select: { code: true } } },
     });
     if (!session) throw new NotFoundException('Session not found');
     return session;

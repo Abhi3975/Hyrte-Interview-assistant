@@ -50,7 +50,12 @@ export interface JobSuccessModelGrounding {
 /** One row per pipeline step — persisted by the caller (HyrteSessionsService) once the session exists. */
 export interface WorldGenerationArtifact {
   step: 'company_org' | 'stakeholders' | 'knowledge' | 'workplace_assets' | 'event_queue' | 'evaluation_plan' | 'stabilization_gate';
-  status: 'OK' | 'FAILED_FELL_BACK';
+  // FAILED_FELL_BACK — validation never passed, caller substituted the static
+  // fallback fixture (PRACTICE sessions only). FAILED_BLOCKED — validation
+  // never passed and the caller declined to substitute anything (ASSESSMENT
+  // sessions — see HyrteSessionsService.populateWorld's GENERATION_FAILED
+  // branch).
+  status: 'OK' | 'FAILED_FELL_BACK' | 'FAILED_BLOCKED';
   payload: unknown;
 }
 

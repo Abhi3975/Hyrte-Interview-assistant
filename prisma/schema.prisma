@@ -737,6 +737,15 @@ enum HyrteSessionPhase {
   // immediately in this phase and the candidate's client polls until it
   // flips to MISSION_BRIEF.
   GENERATING
+  // Upgrade — World Stabilization Gate is now a real hard blocker for
+  // recruiter-owned ASSESSMENT sessions (see HyrteSessionsService.populateWorld):
+  // if generation never produces a validated world, an ASSESSMENT session
+  // lands here instead of silently getting a generic, JD-unrelated static
+  // fixture — a fallback that would be actively misleading for an actual
+  // hiring decision. PRACTICE sessions never reach this phase; they keep the
+  // existing graceful fallback (self-serve, no hiring stakes, never leave a
+  // demo candidate stuck).
+  GENERATION_FAILED
   MISSION_BRIEF
   BASELINE_SKILL_CHECK
   WORKSPACE_ACTIVE

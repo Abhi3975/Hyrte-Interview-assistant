@@ -74,6 +74,9 @@ export interface HyrteSession {
   startedAt: string;
   missionBrief: HyrteMissionBrief | null;
   baselineChallenge: HyrteBaselineChallenge | null;
+  // Only present for sessions launched from a recruiter's simulation link —
+  // lets a GENERATION_FAILED session link back to a fresh attempt.
+  simulationRequest?: { code: string } | null;
 }
 
 /** Part E1 Mission Brief "duration" field — informational only, no enforcement/auto-submit. */
