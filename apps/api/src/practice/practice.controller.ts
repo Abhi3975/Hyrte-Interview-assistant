@@ -32,6 +32,10 @@ class StartSessionDto {
   @IsOptional() @IsString() topic?: string;
   @IsOptional() @IsString() jobRole?: string;
   @IsOptional() @IsString() interviewId?: string;
+  // P3 §7 — consent screen is mandatory and logged. Required, not optional:
+  // the DTO enforces the backend never silently accepts a session with no
+  // consent record, even if a client bug ever tried to skip the checkbox.
+  @IsString() consentedAt!: string;
 }
 
 class CompleteSessionDto {

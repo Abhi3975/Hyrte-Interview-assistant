@@ -146,6 +146,8 @@ function computeRoundSequence(wType: string, codeEligible: boolean): { type: Rou
   return seq;
 }
 const ROUND_INTRO_RESERVE_SEC = 90; // matches INTRO_CAP_MS below
+/** P3 — silence during the candidate's own turn beyond this, without "give me a second" active, is flagged. */
+const LONG_PAUSE_MS = 20_000;
 const WIZARD_STEPS = ['Category', 'Topic', 'Type', 'Level', 'Company', 'Duration', 'Language', 'Review'];
 const PERSONALITIES: { id: string; label: string }[] = [
   { id: 'friendly', label: 'Friendly' },
@@ -170,8 +172,36 @@ interface Evaluation {
   perQuestion?: { score: number; max: number; notes: string }[];
 }
 type Phase = 'setup' | 'lobby' | 'live' | 'evaluating' | 'result';
-interface Flags { tabSwitch: number; eyeShift: number; multiFace: number; aiAssist: number; secondVoice: number; screen: number }
-const ZERO_FLAGS: Flags = { tabSwitch: 0, eyeShift: 0, multiFace: 0, aiAssist: 0, secondVoice: 0, screen: 0 };
+interface Flags {
+  tabSwitch: number; eyeShift: number; multiFace: number; aiAssist: number; secondVoice: number; screen: number;
+  // P3 — new detector modules.
+  cameraOff: number; backgroundNoise: number; longPause: number; rapidAnswer: number; styleShift: number; devtools: number;
+}
+const ZERO_FLAGS: Flags = {
+  tabSwitch: 0, eyeShift: 0, multiFace: 0, aiAssist: 0, secondVoice: 0, screen: 0,
+  cameraOff: 0, backgroundNoise: 0, longPause: 0, rapidAnswer: 0, styleShift: 0, devtools: 0,
+};
+/**
+ * P3 — mirrors the ProctorEventType enum (prisma/schema.prisma) for the
+ * subset this room actually detects. Kept as a plain string union rather
+ * than importing the Prisma enum (web app doesn't depend on @prisma/client)
+ * — the backend DTO validates against the real enum, so a typo here would
+ * fail loudly (400), not silently miscategorize.
+ */
+const FLAG_EVENT_MAP: Record<keyof Flags, { type: string; severity: 'LOW' | 'MEDIUM' | 'HIGH' }> = {
+  tabSwitch: { type: 'TAB_SWITCH', severity: 'MEDIUM' },
+  eyeShift: { type: 'LOOKING_AWAY', severity: 'LOW' },
+  multiFace: { type: 'MULTIPLE_FACES', severity: 'HIGH' },
+  aiAssist: { type: 'COPY_PASTE', severity: 'HIGH' },
+  secondVoice: { type: 'AUDIO_ADDITIONAL_VOICE', severity: 'MEDIUM' },
+  screen: { type: 'FULLSCREEN_EXIT', severity: 'HIGH' },
+  cameraOff: { type: 'CAMERA_OFF', severity: 'HIGH' },
+  backgroundNoise: { type: 'AUDIO_ANOMALY', severity: 'LOW' },
+  longPause: { type: 'LONG_PAUSE', severity: 'LOW' },
+  rapidAnswer: { type: 'RAPID_ANSWER', severity: 'MEDIUM' },
+  styleShift: { type: 'STYLE_SHIFT', severity: 'LOW' },
+  devtools: { type: 'DEVTOOLS_OPEN', severity: 'MEDIUM' },
+};
 // The intro/small-talk phase gets a hard wall-clock cap — after this many ms
 // we force Ally to wrap it up (deterministically, not just via prompt wording)
 // and unlock the Coding tab regardless of what she says next.
@@ -246,6 +276,19 @@ function InterviewRoomInner() {
   const [report, setReport] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  // P3 §7 — consent is mandatory: gates the Start button, and the exact
+  // moment it was checked is what gets logged server-side (consentedAt).
+  const [consented, setConsented] = useState(false);
+  const consentedAtRef = useRef<string | null>(null);
+  // P3 §4 — camera-off specifically PAUSES (not just flags) per the spec's
+  // own example: "interview pauses with a warning if camera turns off."
+  const [cameraPaused, setCameraPaused] = useState(false);
+  // P3 — real-time violation stream surfaces server-issued warnings back to
+  // the candidate (the same messages ProctoringService.issueWarning already
+  // has, now actually reaching this room instead of only existing for the
+  // recruiter-assessment room).
+  const [proctorNotice, setProctorNotice] = useState<string | null>(null);
+  const lastWarningLevelRef = useRef(0);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -263,6 +306,12 @@ function InterviewRoomInner() {
   const voiceStateRef = useRef(voiceState);
   const flagCooldown = useRef<Record<string, number>>({});
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // P3 — longPause: last time the candidate's own turn produced real speech
+  // input, reset on every candidate turn sent; styleShift: a rolling
+  // baseline of the candidate's own answer complexity, established from
+  // their first few real answers, compared against later ones.
+  const lastSpeechAtRef = useRef<number>(0);
+  const answerComplexityBaselineRef = useRef<number[]>([]);
   const sendTurnRef = useRef<((t?: string, o?: { end?: boolean; behaviorSummary?: string }) => void) | null>(null);
   const sendingRef = useRef(false);
   const micOnRef = useRef(micOn);
@@ -288,6 +337,8 @@ function InterviewRoomInner() {
   useEffect(() => { sendingRef.current = sending; }, [sending]);
   useEffect(() => { micOnRef.current = micOn; }, [micOn]);
   useEffect(() => { thinkingRef.current = thinking; }, [thinking]);
+  const cameraPausedRef = useRef(false);
+  useEffect(() => { cameraPausedRef.current = cameraPaused; }, [cameraPaused]);
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, sending]);
 
   useEffect(() => {
@@ -326,6 +377,40 @@ function InterviewRoomInner() {
     if (now - (flagCooldown.current[key] ?? 0) < cooldownMs) return;
     flagCooldown.current[key] = now;
     setFlags((f) => ({ ...f, [key]: f[key] + 1 }));
+
+    // P3 — real-time violation event stream: previously every flag only
+    // lived in this React state until the session completed (or was lost
+    // entirely if the tab closed first) — completeSession then wrote one
+    // aggregate ProctorEvent per type. Now each violation is persisted +
+    // risk-scored the moment it happens, via the same ProctoringService
+    // that already backs the recruiter-assessment room; a failed POST here
+    // never disrupts the interview itself (candidate-facing UX always wins
+    // over telemetry delivery).
+    const sid = sessionIdRef.current;
+    const map = FLAG_EVENT_MAP[key];
+    if (!sid || !map) return;
+    api
+      .post<{ warningLevel: number; terminated: boolean; policy: string }>('/proctoring/events', {
+        sessionId: sid,
+        type: map.type,
+        severity: map.severity,
+      })
+      .then((res) => {
+        if (res.terminated) {
+          setProctorNotice('Your session has been ended due to repeated integrity violations.');
+          endInterview();
+          return;
+        }
+        if (res.warningLevel > 0 && res.warningLevel > lastWarningLevelRef.current) {
+          lastWarningLevelRef.current = res.warningLevel;
+          setProctorNotice(
+            res.warningLevel >= 2
+              ? 'Final warning — further violations may pause or end your session.'
+              : 'We noticed unusual activity. Please stay focused on the interview.',
+          );
+        }
+      })
+      .catch(() => {});
   }
 
   const speak = useCallback((text: string) => {
@@ -346,8 +431,8 @@ function InterviewRoomInner() {
     if (pick) u.voice = pick;
     u.rate = 1.0;
     u.pitch = 1.2; // slightly higher = more feminine even on a default voice
-    u.onend = () => setVoiceState('listening');
-    u.onerror = () => setVoiceState('listening');
+    u.onend = () => { lastSpeechAtRef.current = Date.now(); setVoiceState('listening'); };
+    u.onerror = () => { lastSpeechAtRef.current = Date.now(); setVoiceState('listening'); };
     try { synth.resume(); } catch {}
     synth.cancel();
     // Small delay avoids the Chrome bug where speak() right after cancel() is dropped.
@@ -370,6 +455,7 @@ function InterviewRoomInner() {
       const text = (finalChunk + interim).trim();
       const words = text.split(/\s+/).filter(Boolean).length;
       setInput(text);
+      if (text) lastSpeechAtRef.current = Date.now();
       // P2 — patient listening: "give me a second" (thinkingRef) suppresses
       // the ~1s VAD auto-send entirely, no penalty — the candidate resumes
       // it explicitly (see the toggle button) rather than a timeout deciding
@@ -410,7 +496,11 @@ function InterviewRoomInner() {
   useEffect(() => {
     if (phase !== 'live') return;
     const iv = setInterval(() => {
-      setRemaining((r) => { if (r <= 1) { clearInterval(iv); endInterview(); return 0; } return r - 1; });
+      // P3 §4 — camera-off genuinely PAUSES: the countdown itself stops
+      // ticking while the camera is off, not just a flag in the background.
+      if (!cameraPausedRef.current) {
+        setRemaining((r) => { if (r <= 1) { clearInterval(iv); endInterview(); return 0; } return r - 1; });
+      }
       if (introStartedAtRef.current && !introForceSentRef.current && Date.now() - introStartedAtRef.current >= INTRO_CAP_MS) {
         introForceSentRef.current = true;
         setIntroForced(true);
@@ -425,6 +515,12 @@ function InterviewRoomInner() {
           roundForceSentRef.current = true;
           setRoundForced(true);
         }
+      }
+      // P3 — long unnatural pause: only during the candidate's own turn, and
+      // only when they haven't opted into "give me a second" (P2's
+      // thinkingRef) — using that affordance is explicitly never penalized.
+      if (voiceStateRef.current === 'listening' && !thinkingRef.current && lastSpeechAtRef.current && Date.now() - lastSpeechAtRef.current >= LONG_PAUSE_MS) {
+        bumpFlag('longPause', LONG_PAUSE_MS);
       }
     }, 1000);
     return () => clearInterval(iv);
@@ -467,8 +563,48 @@ function InterviewRoomInner() {
     return () => { stop = true; };
   }, [phase]);
 
+  // P3 §4 — camera-off detector. Distinct from FaceDetector's "no face in
+  // frame" above (eyeShift) — this watches the actual hardware TRACK state
+  // (disabled/muted/ended), which is what the spec's own example means by
+  // "interview pauses with a warning if camera turns off." Polling + event
+  // listeners together because `track.enabled` toggling doesn't reliably
+  // fire mute/unmute across browsers.
+  useEffect(() => {
+    if (phase !== 'live') return;
+    const track = streamRef.current?.getVideoTracks()?.[0];
+    if (!track) return;
+    const check = () => {
+      const off = !track.enabled || track.readyState === 'ended' || (track as any).muted;
+      setCameraPaused(off);
+      if (off) bumpFlag('cameraOff', 3000);
+    };
+    track.addEventListener('ended', check);
+    track.addEventListener('mute', check);
+    track.addEventListener('unmute', check);
+    const iv = setInterval(check, 2000);
+    return () => { track.removeEventListener('ended', check); track.removeEventListener('mute', check); track.removeEventListener('unmute', check); clearInterval(iv); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
+
+  // P3 — devtools-open heuristic: a real, documented (if imperfect) window-
+  // size-delta technique — an open devtools panel measurably shrinks
+  // inner vs outer window dimensions. Not claimed to be foolproof (spec's
+  // own "signal, never verdict" framing applies here too).
+  useEffect(() => {
+    if (phase !== 'live') return;
+    const THRESHOLD = 160;
+    const iv = setInterval(() => {
+      const widthDelta = window.outerWidth - window.innerWidth;
+      const heightDelta = window.outerHeight - window.innerHeight;
+      if (widthDelta > THRESHOLD || heightDelta > THRESHOLD) bumpFlag('devtools', 10_000);
+    }, 2000);
+    return () => clearInterval(iv);
+  }, [phase]);
+
   const integrity = useMemo(() => {
-    const p = flags.tabSwitch * 6 + flags.eyeShift * 3 + flags.multiFace * 12 + flags.aiAssist * 10 + flags.secondVoice * 8 + flags.screen * 10;
+    const p =
+      flags.tabSwitch * 6 + flags.eyeShift * 3 + flags.multiFace * 12 + flags.aiAssist * 10 + flags.secondVoice * 8 + flags.screen * 10 +
+      flags.cameraOff * 10 + flags.backgroundNoise * 3 + flags.longPause * 2 + flags.rapidAnswer * 6 + flags.styleShift * 4 + flags.devtools * 8;
     return Math.max(0, 100 - p);
   }, [flags]);
 
@@ -489,13 +625,42 @@ function InterviewRoomInner() {
   const sendTurn = useCallback(async (candidateText?: string, opts?: { end?: boolean; behaviorSummary?: string }) => {
     const base = messagesRef.current.slice();
     if (candidateText && candidateText.trim()) {
-      base.push({ role: 'you', text: candidateText.trim() });
+      const trimmed = candidateText.trim();
+      base.push({ role: 'you', text: trimmed });
       // Behavior signals: thinking time (since the AI finished) + answer length.
       const thinkingMs = lastAiTsRef.current ? Date.now() - lastAiTsRef.current : 0;
-      const words = candidateText.trim().split(/\s+/).filter(Boolean).length;
+      const words = trimmed.split(/\s+/).filter(Boolean).length;
       behaviorRef.current.turns.push({ thinkingMs, words });
       // P2 — hint usage is now a server-authoritative signal (see hintLevel
       // below), not a client-side guess from the CANDIDATE's own wording.
+
+      // P3 — rapid answer: a real, honestly-scoped latency-implausibility
+      // heuristic (not claiming to read "perplexity" — that needs an LLM
+      // call per turn this pass doesn't add). A long answer arriving far
+      // faster than a human could genuinely compose/speak it, distinct from
+      // (and complementary to) the existing paste-event detector, which
+      // only fires on an actual clipboard paste — this catches content that
+      // arrived implausibly fast some other way (e.g. read aloud from a
+      // second screen).
+      if (words >= 30 && thinkingMs > 0 && thinkingMs < 3000) bumpFlag('rapidAnswer', 10_000);
+
+      // P3 — style shift: a coarse, text-only proxy (average word length)
+      // for a sudden shift in the candidate's own answer complexity vs
+      // their own established baseline. Deliberately NOT claiming to detect
+      // accent or genuine "read-like" audio delivery — that needs real
+      // audio prosody analysis, not feasible client-side with available
+      // browser APIs, so it's honestly not attempted here (see the
+      // STYLE_SHIFT schema comment).
+      if (words >= 5) {
+        const letters = trimmed.replace(/[^\w\s]/g, '').split(/\s+/).filter(Boolean);
+        const avgWordLen = letters.length ? letters.reduce((s, w) => s + w.length, 0) / letters.length : 0;
+        const baseline = answerComplexityBaselineRef.current;
+        if (baseline.length >= 2) {
+          const baseAvg = baseline.reduce((a, b) => a + b, 0) / baseline.length;
+          if (baseAvg > 0 && Math.abs(avgWordLen - baseAvg) / baseAvg > 0.6) bumpFlag('styleShift', 10_000);
+        }
+        if (baseline.length < 6) baseline.push(avgWordLen);
+      }
     }
     setMessages(base);
     setInput('');
@@ -568,6 +733,15 @@ function InterviewRoomInner() {
   }
 
   async function start() {
+    // P3 §7 — consent is mandatory, enforced here (not just a disabled
+    // button — a defensive re-check in case anything ever calls start()
+    // directly). consentedAtRef is set the moment the checkbox is checked,
+    // not "now", so it's the real moment consent was given, not the moment
+    // the room happened to finish loading camera/mic.
+    if (!consented || !consentedAtRef.current) {
+      setError('Please confirm you consent to monitoring before starting.');
+      return;
+    }
     // Unlock speech synthesis inside the click gesture — otherwise the first
     // spoken line (which fires after async awaits) is blocked and stays silent.
     try {
@@ -581,6 +755,12 @@ function InterviewRoomInner() {
     introForceSentRef.current = false;
     forceAdvanceConsumedRef.current = false;
     setIntroForced(false);
+    // P3 — reset detector state for a fresh session.
+    answerComplexityBaselineRef.current = [];
+    lastSpeechAtRef.current = 0;
+    lastWarningLevelRef.current = 0;
+    setProctorNotice(null);
+    setCameraPaused(false);
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
         throw new Error(window.isSecureContext ? 'Camera/microphone are not available in this browser.' : 'Camera & mic need a secure (HTTPS) connection. Open this site over https:// and allow permissions.');
@@ -614,20 +794,24 @@ function InterviewRoomInner() {
         const ctx: AudioContext = new Ctx(); audioCtxRef.current = ctx;
         const src = ctx.createMediaStreamSource(stream); const analyser = ctx.createAnalyser();
         analyser.fftSize = 512; src.connect(analyser);
-        const buf = new Uint8Array(analyser.frequencyBinCount); let loud = 0;
+        const buf = new Uint8Array(analyser.frequencyBinCount); let loud = 0; let ambientHigh = 0;
         const meter = () => {
           if (endedRef.current) return;
           analyser.getByteTimeDomainData(buf);
           let sum = 0; for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v; }
           const rms = Math.sqrt(sum / buf.length);
           if (voiceStateRef.current === 'speaking' && rms > 0.14) { loud++; if (loud > 25) { bumpFlag('secondVoice', 6000); loud = 0; } } else loud = Math.max(0, loud - 1);
+          // P3 — background noise: a lower, longer-SUSTAINED threshold than
+          // secondVoice's short loud burst — a fan, traffic, or room chatter
+          // during the candidate's own turn, not a discrete second speaker.
+          if (voiceStateRef.current === 'listening' && rms > 0.06 && rms <= 0.14) { ambientHigh++; if (ambientHigh > 150) { bumpFlag('backgroundNoise', 15_000); ambientHigh = 0; } } else ambientHigh = Math.max(0, ambientHigh - 1);
           requestAnimationFrame(meter);
         };
         meter();
       } catch {}
 
       try {
-        const s = await api.post<{ sessionId: string }>('/practice/session', { category: topic.category, difficulty, topic: topic.topic, jobRole: topic.label, interviewId: assessmentId ?? undefined });
+        const s = await api.post<{ sessionId: string }>('/practice/session', { category: topic.category, difficulty, topic: topic.topic, jobRole: topic.label, interviewId: assessmentId ?? undefined, consentedAt: consentedAtRef.current });
         sessionIdRef.current = s.sessionId;
       } catch { sessionIdRef.current = null; }
 
@@ -845,11 +1029,25 @@ function InterviewRoomInner() {
               <ul className="mt-1 space-y-0.5">
                 <li>• You&apos;ll be asked to <b>share your entire screen</b> and the app goes <b>fullscreen</b>.</li>
                 <li>• <b>Close all other tabs and apps</b> — switching away is flagged.</li>
-                <li>• Camera, microphone, screen and focus are monitored throughout.</li>
+                <li>• Camera, microphone, screen and focus are monitored throughout, including background noise, long pauses, and answer-pattern shifts.</li>
+                <li>• If your camera turns off, the interview pauses until it&apos;s back on.</li>
               </ul>
             </div>
+            {/* P3 §7 — a real, required consent gate, not just informational text. */}
+            <label className="mt-3 flex items-start gap-2 text-xs text-white/70">
+              <input
+                type="checkbox"
+                checked={consented}
+                onChange={(e) => {
+                  setConsented(e.target.checked);
+                  consentedAtRef.current = e.target.checked ? new Date().toISOString() : null;
+                }}
+                className="mt-0.5 h-4 w-4 rounded border-white/30 bg-transparent"
+              />
+              I understand and consent to being monitored as described above.
+            </label>
             {error && <p className="mt-3 rounded-lg bg-red-500/10 p-3 text-sm text-red-400">{error}</p>}
-            <button onClick={start} disabled={loading} className="btn-primary mt-5 justify-center">{loading ? 'Requesting camera & mic…' : 'Start interview'}</button>
+            <button onClick={start} disabled={loading || !consented} title={!consented ? 'Please consent to monitoring first' : undefined} className="btn-primary mt-5 justify-center disabled:cursor-not-allowed disabled:opacity-50">{loading ? 'Requesting camera & mic…' : 'Start interview'}</button>
             <button onClick={() => setPhase('setup')} className="mt-2 text-center text-xs text-white/50">← Change role or difficulty</button>
           </div>
         </div>
@@ -935,6 +1133,22 @@ function InterviewRoomInner() {
   // ───────── LIVE ─────────
   return (
     <div className="flex min-h-[100dvh] flex-col bg-neutral-950 text-white lg:h-screen">
+      {/* P3 §4 — camera-off genuinely pauses the interview (timer stopped in
+          the effect above), not just a background flag. Blocks interaction
+          until the camera track is back on. */}
+      {cameraPaused && (
+        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/90 p-6 text-center backdrop-blur-sm">
+          <ShieldIcon width={40} height={40} className="text-amber-400" />
+          <h2 className="text-xl font-bold">Camera required</h2>
+          <p className="max-w-sm text-sm text-white/70">Your interview is paused because your camera appears to be off or unavailable. Turn it back on to continue — the timer isn&apos;t running while paused.</p>
+        </div>
+      )}
+      {proctorNotice && (
+        <div className="flex items-center justify-between gap-3 bg-amber-500/15 px-4 py-2 text-sm text-amber-300">
+          <span className="flex items-center gap-1.5"><ShieldIcon width={14} height={14} /> {proctorNotice}</span>
+          <button onClick={() => setProctorNotice(null)} className="text-xs underline">Dismiss</button>
+        </div>
+      )}
       <div className="flex items-center justify-between border-b border-white/10 px-4 py-2.5">
         <div className="flex items-center gap-3">
           <span className="font-semibold">{topic.label} · Interview</span>

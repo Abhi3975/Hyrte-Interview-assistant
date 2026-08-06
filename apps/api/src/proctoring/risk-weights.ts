@@ -46,6 +46,9 @@ export const RISK_WEIGHTS: Partial<Record<ProctorEventType, RiskWeight>> = {
   GAZE_OFF_SCREEN: { weight: 6, decayHalfLifeSec: 40, minOccurrences: 4, category: 'vision' },
   MULTIPLE_FACES: { weight: 50, decayHalfLifeSec: 600, minOccurrences: 1, category: 'vision' },
   SUSPICIOUS_BEHAVIOR: { weight: 12, decayHalfLifeSec: 180, minOccurrences: 2, category: 'vision' },
+  // P3 — the camera track being off is more deliberate than a face
+  // temporarily out of frame, hence a higher weight than FACE_NOT_DETECTED.
+  CAMERA_OFF: { weight: 25, decayHalfLifeSec: 300, minOccurrences: 1, category: 'vision' },
 
   // ── Object detection: strong signals of external aids ──
   OBJECT_PHONE: { weight: 45, decayHalfLifeSec: 600, minOccurrences: 1, category: 'object' },
@@ -69,6 +72,7 @@ export const RISK_WEIGHTS: Partial<Record<ProctorEventType, RiskWeight>> = {
   FULLSCREEN_EXIT: { weight: 18, decayHalfLifeSec: 180, minOccurrences: 1, category: 'screen' },
   SCREEN_SHARING: { weight: 50, decayHalfLifeSec: 1800, minOccurrences: 1, category: 'screen' },
   SCREEN_RECORDING_TOOL: { weight: 35, decayHalfLifeSec: 600, minOccurrences: 1, category: 'screen' },
+  DEVTOOLS_OPEN: { weight: 30, decayHalfLifeSec: 300, minOccurrences: 1, category: 'screen' },
 
   // ── Desktop agent (Electron) ──
   SUSPICIOUS_PROCESS: { weight: 30, decayHalfLifeSec: 600, minOccurrences: 1, category: 'desktop' },
@@ -86,6 +90,11 @@ export const RISK_WEIGHTS: Partial<Record<ProctorEventType, RiskWeight>> = {
   UNNATURAL_TYPING: { weight: 15, decayHalfLifeSec: 300, minOccurrences: 2, category: 'ai_cheat' },
   EXTERNAL_ASSISTANCE: { weight: 40, decayHalfLifeSec: 600, minOccurrences: 1, category: 'ai_cheat' },
   PLAGIARISM_FLAG: { weight: 45, decayHalfLifeSec: 1800, minOccurrences: 1, category: 'ai_cheat' },
+  // P3 — low weight: a single long pause (or one style-shifted answer) is
+  // routine human variance, not evidence on its own; only sustained/repeated
+  // occurrence should move the needle.
+  LONG_PAUSE: { weight: 10, decayHalfLifeSec: 90, minOccurrences: 2, category: 'ai_cheat' },
+  STYLE_SHIFT: { weight: 12, decayHalfLifeSec: 300, minOccurrences: 1, category: 'ai_cheat' },
 };
 
 export function weightFor(type: ProctorEventType): RiskWeight {

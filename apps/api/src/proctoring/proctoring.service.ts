@@ -5,6 +5,28 @@ import { Interview, InterviewSession, ProctorSeverity } from '@prisma/client';
 // A session with its parent interview eagerly loaded (used by the warning /
 // termination paths so we can resolve the owning organization).
 type SessionWithInterview = InterviewSession & { interview: Interview | null };
+
+/**
+ * P3 §4/§7 — "repeated violations end the session (configurable policy per
+ * assessment: warn / pause / terminate)". Read from Interview.config (the
+ * existing loose JSON bag — no schema change needed for this part) so a
+ * recruiter can eventually set it via a composer UI (P7's job, not built
+ * yet). Self-serve practice sessions (Interview.config.selfServe === true,
+ * set in PracticeService.startSession) default to WARN — a demo candidate
+ * tripping a threshold shouldn't get auto-locked out of a practice run with
+ * no recruiter watching, same "never leave a demo candidate stuck"
+ * reasoning already used elsewhere in this codebase. Recruiter-created
+ * assessments default to TERMINATE, preserving the exact pre-P3 behavior
+ * unless a recruiter explicitly configures otherwise.
+ */
+export type ProctoringPolicy = 'WARN' | 'PAUSE' | 'TERMINATE';
+export function resolvePolicy(interview: Interview | null): ProctoringPolicy {
+  const config = (interview?.config as { proctoringPolicy?: string; selfServe?: boolean } | null) ?? null;
+  if (config?.proctoringPolicy === 'WARN' || config?.proctoringPolicy === 'PAUSE' || config?.proctoringPolicy === 'TERMINATE') {
+    return config.proctoringPolicy;
+  }
+  return config?.selfServe ? 'WARN' : 'TERMINATE';
+}
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit/audit.service';
 import { NotificationService } from '../notifications/notification.service';
@@ -39,7 +61,7 @@ export class ProctoringService {
     @Inject(REDIS) private readonly redis: Redis,
   ) {}
 
-  async ingest(dto: IngestEventDto): Promise<{ risk: RiskResult; warningLevel: number; terminated: boolean }> {
+  async ingest(dto: IngestEventDto): Promise<{ risk: RiskResult; warningLevel: number; terminated: boolean; policy: ProctoringPolicy }> {
     const session = await this.prisma.interviewSession.findUnique({
       where: { id: dto.sessionId },
       include: { interview: true },
@@ -96,17 +118,18 @@ export class ProctoringService {
       .catch(() => undefined);
 
     // 3) Escalate warnings based on weighted risk, not raw event count.
+    const policy = resolvePolicy(session.interview);
     const targetLevel = this.warningLevelForRisk(risk.riskScore);
     let terminated = false;
     let warningLevel = session.warningCount;
 
     if (targetLevel > session.warningCount) {
-      warningLevel = await this.issueWarning(session, targetLevel, dto, risk);
-      terminated = warningLevel >= MAX_WARNINGS;
+      warningLevel = await this.issueWarning(session, targetLevel, dto, risk, policy);
+      terminated = warningLevel >= MAX_WARNINGS && policy === 'TERMINATE';
       if (terminated) await this.terminate(session, risk, dto.type);
     }
 
-    return { risk, warningLevel, terminated };
+    return { risk, warningLevel, terminated, policy };
   }
 
   /** Map a risk score to the highest crossed warning threshold. */
@@ -123,6 +146,7 @@ export class ProctoringService {
     level: number,
     dto: IngestEventDto,
     risk: RiskResult,
+    policy: ProctoringPolicy,
   ): Promise<number> {
     // Persist immutable warning with evidence pointers.
     await this.prisma.warning.create({
@@ -137,11 +161,19 @@ export class ProctoringService {
       },
     });
 
+    // P3 — policy determines what the max-warnings threshold actually DOES:
+    // TERMINATE ends the session (terminate() runs right after, in ingest());
+    // PAUSE uses the real (previously dead-code) SUSPENDED exam state, which
+    // submitAnswer's own guard already blocks on — an honest MVP of "pause"
+    // without building a full resume-workflow UI in this pass; WARN never
+    // escalates past WARNING_ISSUED, so it never blocks the candidate.
+    const atMax = level >= MAX_WARNINGS;
+    const nextState = policy === 'TERMINATE' && atMax ? 'TERMINATED' : policy === 'PAUSE' && atMax ? 'SUSPENDED' : 'WARNING_ISSUED';
     await this.prisma.interviewSession.update({
       where: { id: session.id },
       data: {
         warningCount: level,
-        examState: level >= MAX_WARNINGS ? 'TERMINATED' : 'WARNING_ISSUED',
+        examState: nextState,
       },
     });
 

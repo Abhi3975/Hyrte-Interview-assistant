@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { Category, Difficulty, Prisma, ProctorEventType, ProctorSeverity } from '@prisma/client';
+import { Category, Difficulty, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { QuestionService } from '../questions/question.service';
 import { EvaluationService } from '../evaluation/evaluation.service';
@@ -90,16 +90,6 @@ function pick<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 const MICRO_ACK_PROBABILITY = 0.3;
-
-/** Maps a browser proctoring flag to a stored ProctorEvent type + severity. */
-const FLAG_MAP: Record<string, { type: ProctorEventType; severity: ProctorSeverity }> = {
-  tabSwitch: { type: ProctorEventType.TAB_SWITCH, severity: ProctorSeverity.MEDIUM },
-  eyeShift: { type: ProctorEventType.LOOKING_AWAY, severity: ProctorSeverity.LOW },
-  multiFace: { type: ProctorEventType.MULTIPLE_FACES, severity: ProctorSeverity.HIGH },
-  aiAssist: { type: ProctorEventType.COPY_PASTE, severity: ProctorSeverity.HIGH },
-  secondVoice: { type: ProctorEventType.AUDIO_ADDITIONAL_VOICE, severity: ProctorSeverity.MEDIUM },
-  screen: { type: ProctorEventType.FULLSCREEN_EXIT, severity: ProctorSeverity.HIGH },
-};
 
 export interface PracticeQuestion {
   id: string;
@@ -398,15 +388,21 @@ export class PracticeService {
    */
   async startSession(
     candidateId: string,
-    input: { category: Category; difficulty: Difficulty; topic?: string; jobRole?: string; interviewId?: string },
+    input: { category: Category; difficulty: Difficulty; topic?: string; jobRole?: string; interviewId?: string; consentedAt: string },
   ): Promise<{ sessionId: string }> {
+    // P3 §7 — consent is mandatory and logged; a malformed/missing timestamp
+    // is rejected outright rather than silently defaulting to "now" (which
+    // would mask a real client bug that skipped the checkbox).
+    const consentedAt = new Date(input.consentedAt);
+    if (Number.isNaN(consentedAt.getTime())) throw new BadRequestException('consentedAt must be a valid timestamp');
+
     // Recruiter-assigned assessment: tie the session to that interview so the
     // recruiter sees the candidate's result on their dashboard.
     if (input.interviewId) {
       const iv = await this.prisma.interview.findUnique({ where: { id: input.interviewId }, select: { id: true } });
       if (iv) {
         const s = await this.prisma.interviewSession.create({
-          data: { interviewId: iv.id, candidateId, status: 'IN_PROGRESS', examState: 'ACTIVE', startedAt: new Date() },
+          data: { interviewId: iv.id, candidateId, status: 'IN_PROGRESS', examState: 'ACTIVE', startedAt: new Date(), consentedAt },
           select: { id: true },
         });
         return { sessionId: s.id };
@@ -445,6 +441,7 @@ export class PracticeService {
         status: 'IN_PROGRESS',
         examState: 'ACTIVE',
         startedAt: new Date(),
+        consentedAt,
       },
       select: { id: true },
     });
@@ -484,25 +481,27 @@ export class PracticeService {
       input.answers,
     );
 
-    // One ProctorEvent per triggered flag, carrying its count in the payload.
-    const events: Prisma.ProctorEventCreateManyInput[] = [];
-    for (const [key, count] of Object.entries(input.flags ?? {})) {
-      const map = FLAG_MAP[key];
-      if (map && count > 0) {
-        events.push({ sessionId, type: map.type, severity: map.severity, payload: { count } });
-      }
-    }
+    // P3 — flags are no longer aggregated into ProctorEvent rows HERE.
+    // bumpFlag() on the frontend now streams each violation to
+    // POST /proctoring/events in real time as it happens (see P3 writeup) —
+    // doing it again here would double-count every signal in the recruiter's
+    // per-type breakdown. `input.flags` is still folded into the transcript
+    // JSON below as a point-in-time summary, which is harmless (it's not a
+    // second set of ProctorEvent rows).
     const integrity = Math.max(0, Math.min(100, Math.round(input.integrity ?? 100)));
 
     await this.prisma.$transaction(async (tx) => {
-      if (events.length) await tx.proctorEvent.createMany({ data: events });
       await tx.interviewSession.update({
         where: { id: sessionId },
         data: {
           status: 'COMPLETED',
           examState: 'COMPLETED',
           completedAt: new Date(),
-          riskScore: 100 - integrity,
+          // riskScore is intentionally NOT set here — the real-time risk
+          // engine (ProctoringService.ingest, driven by the same streamed
+          // events) already maintains the authoritative, weighted score;
+          // overwriting it with this cruder 100-integrity approximation on
+          // every completion would clobber the more accurate number.
           transcript: { answers: input.answers, flags: input.flags ?? {}, integrity, behavior: input.behavior ?? {} } as Prisma.InputJsonValue,
         },
       });

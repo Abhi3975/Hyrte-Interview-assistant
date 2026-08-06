@@ -429,6 +429,11 @@ model InterviewSession {
   approvedById     String? // admin/recruiter who unlocked the assessment
   approvedAt       DateTime?
   identityVerified Boolean   @default(false)
+  // P3 — consent screen is mandatory and logged (Part 1 §7 Guardrails), not
+  // just a UI gate that vanishes if nobody looks. Null means never consented
+  // (should be unreachable once the lobby enforces it, but the column
+  // existing is what makes "logged" a checkable fact, not a claim).
+  consentedAt      DateTime?
   warningCount     Int       @default(0)
   disqualified     Boolean   @default(false)
   terminatedReason String?
@@ -601,6 +606,10 @@ enum ProctorEventType {
   LOOKING_SIDEWAYS
   GAZE_OFF_SCREEN
   SUSPICIOUS_BEHAVIOR
+  // P3 — the camera hardware track itself (disabled/muted/ended), distinct
+  // from FACE_NOT_DETECTED (which is about frame CONTENT — camera can stay
+  // on with no face in view, or the track can be off outright).
+  CAMERA_OFF
   // ── Object detection ──
   OBJECT_PHONE
   OBJECT_SECONDARY_LAPTOP
@@ -621,6 +630,10 @@ enum ProctorEventType {
   FULLSCREEN_EXIT
   SCREEN_SHARING
   SCREEN_RECORDING_TOOL
+  // P3 — window-size-delta heuristic (a well-known, documented technique —
+  // real devtools panels change innerWidth/innerHeight vs outerWidth/
+  // outerHeight measurably; imperfect, but a real signal, not fabricated).
+  DEVTOOLS_OPEN
   // ── Desktop agent (Electron) ──
   SUSPICIOUS_PROCESS
   SUSPICIOUS_EXTENSION
@@ -636,6 +649,20 @@ enum ProctorEventType {
   UNNATURAL_TYPING
   EXTERNAL_ASSISTANCE
   PLAGIARISM_FLAG
+  // P3 — real, honestly-scoped heuristics (not fabricated theater): a long
+  // silence during the candidate's own turn while they have NOT signalled
+  // "give me a second" (see the P2 patient-listening affordance — using it
+  // is explicitly never penalized; this only fires when they didn't use it).
+  LONG_PAUSE
+  // P3 — a later answer's textual complexity (avg word length / vocabulary
+  // variety) deviating sharply from the candidate's own established
+  // baseline from their first few answers. Explicitly NOT claiming to
+  // detect accent or genuinely "read-like" audio delivery — real audio
+  // prosody analysis isn't feasible client-side with available browser
+  // APIs, so this is deliberately not attempted (flagged honestly, not
+  // faked) — this is a text-only, coarse, defensible proxy for a sudden
+  // fluency/register shift.
+  STYLE_SHIFT
 }
 
 enum ProctorSeverity {
