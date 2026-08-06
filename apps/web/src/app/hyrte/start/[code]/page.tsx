@@ -58,6 +58,19 @@ export default function HyrteStartPage() {
       router.push(`/signup?next=${encodeURIComponent(`/hyrte/start/${params.code}`)}`);
       return;
     }
+    // The launch endpoint is CANDIDATE-only server-side (recruiters preview/
+    // create links but don't take them). Catch that case here with a real
+    // explanation instead of ever surfacing the backend guard's raw
+    // "Requires role: CANDIDATE" text — this is a signed-in recruiter/admin
+    // testing their own link, not an actual authorization failure worth
+    // alarming them over.
+    if (user.role !== 'CANDIDATE') {
+      setError(
+        `This link launches a candidate's simulation, and you're signed in as ${user.role.toLowerCase()}. ` +
+          `Sign out and open the link again with a candidate account to try it yourself, or just send this link to the candidate.`,
+      );
+      return;
+    }
     setLaunching(true);
     setError('');
     try {
@@ -107,8 +120,20 @@ export default function HyrteStartPage() {
             </div>
           )}
           <button className="btn-primary w-full" disabled={launching || !hydrated} onClick={enter}>
-            {launching ? 'Building your workplace…' : user ? 'Enter the workplace' : 'Sign in to enter the workplace'}
+            {launching
+              ? 'Building your workplace…'
+              : !user
+                ? 'Sign in to enter the workplace'
+                : user.role === 'CANDIDATE'
+                  ? 'Enter the workplace'
+                  : `Preview only — signed in as ${user.role.toLowerCase()}`}
           </button>
+          {user && user.role !== 'CANDIDATE' && (
+            <p className="text-xs text-black/40 dark:text-white/40">
+              This launches for candidates only. Share this link, or open it in a private window signed
+              in as a candidate to try it yourself.
+            </p>
+          )}
         </div>
       )}
     </div>
