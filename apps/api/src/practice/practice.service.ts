@@ -64,6 +64,33 @@ const PERSONALITIES: Record<string, string> = {
   pressure: 'PERSONALITY: High-pressure interviewer. Add time pressure and rapid-fire follow-ups while staying professional.',
 };
 
+/**
+ * P2 — natural delivery. Deterministic variation banks instead of trusting
+ * the LLM to vary its own closing/filler phrasing (same discipline already
+ * proven in this codebase: don't rely on instruction-following for anything
+ * that must reliably vary or reliably happen — use it for judgment calls,
+ * not guarantees). Independent implementation from HYRTE's own
+ * hyrte-interview.service.ts (same technique, but that file is
+ * simulation-side and out of bounds for this product).
+ */
+const MICRO_ACKS = ['Got it.', 'I see.', 'That makes sense.', 'Interesting.', 'Okay.', 'Understood.', 'Alright.'];
+const CLOSING_LINES = [
+  "That wraps up our conversation today — thanks for walking me through your thinking.",
+  "That's everything I wanted to cover. Thanks for being so thorough with your answers.",
+  "I think that gives me a solid picture of how you approach problems. Thanks for your time today.",
+  "That's a good place to stop — I appreciated how you talked through your reasoning.",
+];
+const REPORT_READY_MESSAGES = [
+  "I'm putting together your feedback now — it'll be ready in just a moment.",
+  "Give me a moment to pull everything we covered into your report.",
+  "Your report is being generated now based on everything from today.",
+  "I'll compile what we discussed into your report right away.",
+];
+function pick<T>(arr: T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+const MICRO_ACK_PROBABILITY = 0.3;
+
 /** Maps a browser proctoring flag to a stored ProctorEvent type + severity. */
 const FLAG_MAP: Record<string, { type: ProctorEventType; severity: ProctorSeverity }> = {
   tabSwitch: { type: ProctorEventType.TAB_SWITCH, severity: ProctorSeverity.MEDIUM },
@@ -109,7 +136,15 @@ export class PracticeService {
    * Drives the conversational AI interviewer. Given the running transcript, it
    * returns the interviewer's next spoken message — greeting + intro, one
    * question at a time with context, progressive hints, code review, and a
-   * final report when ending.
+   * closing sequence when ending. P2 — structured JSON response instead of
+   * free text: `hintLevel` makes hint-usage a server-authoritative signal
+   * (previously the frontend guessed this from a regex on the CANDIDATE's
+   * own words — false-positived on any message containing "explain", and
+   * couldn't tell a hint that was actually GIVEN from one that was declined
+   * per the strict progressive-help rules above). The detailed final report
+   * is NOT generated here — that's a separate, already-real structured call
+   * (evaluateSession/evaluateTranscript) the frontend makes right after; this
+   * call's `end` path is just the natural spoken closing.
    */
   async interviewTurn(input: {
     jobRole: string;
@@ -129,7 +164,14 @@ export class PracticeService {
     transcript: { role: 'interviewer' | 'candidate'; content: string }[];
     end?: boolean;
     forceAdvance?: boolean;
-  }): Promise<{ text: string }> {
+    // P2 — round structure. `currentRound` grounds the prompt in which round
+    // is active; `forceRoundAdvance` is the deterministic hard-cap signal
+    // (same pattern as forceAdvance for the intro) — the client's own timer
+    // decided the round's time budget is up, not the LLM.
+    currentRound?: { type: string; label: string };
+    nextRoundLabel?: string;
+    forceRoundAdvance?: boolean;
+  }): Promise<{ text: string; hintLevel?: number }> {
     const extra = [
       input.experience ? `- Candidate experience level: ${input.experience} (calibrate depth/difficulty to this).` : '',
       input.company ? `- Emulate the interview style of: ${input.company}.` : '',
@@ -137,6 +179,7 @@ export class PracticeService {
       input.language && input.language !== 'English'
         ? `- Conduct the interview in ${input.language} (${input.language === 'Mixed' ? 'natural Hindi-English mix / Hinglish' : input.language}).`
         : '',
+      input.currentRound ? `- Current round: ${input.currentRound.label}. Keep questions in this reply focused on this round's purpose.` : '',
     ].filter(Boolean).join('\n');
     const modeNote =
       input.mode === 'theory'
@@ -157,19 +200,29 @@ export class PracticeService {
       `- Total questions: ${input.count ?? 5}` +
       (extra ? `\n${extra}` : '');
     const directive = input.end
-      ? [
-          'The interview is now ENDING. Using ALL accumulated evidence from the transcript, produce the COMPLETE final interview report with clear headings:',
-          'Overall Score; Technical Score; sub-scores for Communication, Coding, Optimization, Debugging, Problem Solving, Domain Knowledge (JS/DSA/System Design as relevant), Confidence; Interview Readiness;',
-          'Strongest Areas; Weakest Areas; Repeated Mistakes; Conceptual Gaps; Topics to Revise; Estimated Experience Level;',
-          'Hiring Recommendation (Hire / Lean Hire / No Hire) and EXPLAIN WHY with evidence from the interview.',
-          'Then a personalized Learning Roadmap: a 7-Day plan, a 30-Day plan, a 90-Day plan, plus recommended resources, practice questions, projects and interview tips.',
-        ].join(' ')
+      ? // P2 — this used to ask for "the COMPLETE final interview report" as
+        // the last chat message, duplicating the real structured evaluation
+        // the frontend fetches separately right after. Now: just a brief,
+        // warm acknowledgement of the final answer — the deterministic
+        // closing + report-ready notification are appended in code below,
+        // never left to the LLM's own phrasing.
+        'The interview is now ENDING. In THIS reply, write ONLY a brief (1 sentence) warm acknowledgement of the candidate\'s final answer — do NOT write a report, scores, or a closing statement, those are handled separately.'
       : input.forceAdvance
-        ? 'The introduction/small-talk phase has already used its allotted time budget. In THIS reply: wrap up the introduction in ONE short warm sentence (do not ask any further get-to-know-you questions), then immediately move on — explain today\'s focus briefly and ask the first real interview question. Reply with ONLY your next spoken message as the interviewer — no stage directions.'
-        : 'Continue the interview naturally. Reply with ONLY your next spoken message as the interviewer — no stage directions. Keep it conversational and reasonably brief (it is read aloud by TTS), EXCEPT when giving structured code review/feedback which can be longer. Ask ONE thing at a time and wait.';
+        ? 'The introduction/small-talk phase has already used its allotted time budget. In THIS reply: wrap up the introduction in ONE short warm sentence (do not ask any further get-to-know-you questions), then immediately move on — explain today\'s focus briefly and ask the first real interview question.'
+        : input.forceRoundAdvance
+          ? `This round's time budget is up. In THIS reply: wrap up the current round in ONE short sentence (do not ask a further question in this round), then transition naturally to the next round — ${input.nextRoundLabel ?? 'the next part of the interview'} — and ask its first question.`
+          : 'Continue the interview naturally. Keep it conversational and reasonably brief (it is read aloud by TTS), EXCEPT when giving structured code review/feedback which can be longer. Ask ONE thing at a time and wait.';
 
     const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
-      { role: 'system', content: `${INTERVIEWER_SYSTEM}\n\n${persona}\n\n${ctx}${resume}${modeNote}\n\n${directive}` },
+      {
+        role: 'system',
+        content:
+          `${INTERVIEWER_SYSTEM}\n\n${persona}\n\n${ctx}${resume}${modeNote}\n\n${directive}\n\n` +
+          'Return ONLY JSON: {"reply": string (your next spoken message, no stage directions), ' +
+          '"hintLevel": int 1-5 (ONLY include this field on a turn where you actually GAVE a hint per the ' +
+          'graduated-hint rules above — omit it entirely on every other turn, including ones where you declined ' +
+          'to give one)}.',
+      },
     ];
     if (input.transcript.length === 0) {
       messages.push({ role: 'user', content: '(The candidate has just joined the interview. Greet them warmly, explain how it works, and ask them how they are and to briefly introduce themselves.)' });
@@ -181,11 +234,24 @@ export class PracticeService {
         const behavior = input.behaviorSummary
           ? ` Observed behavior signals (factor these into Communication, Confidence, Behavior Profile and the overall recommendation): ${input.behaviorSummary}`
           : '';
-        messages.push({ role: 'user', content: `(Please end the interview and give my full report now.${behavior})` });
+        messages.push({ role: 'user', content: `(Please end the interview now.${behavior})` });
       }
     }
-    const res = await this.ai.complete(messages, { temperature: 0.6, maxTokens: input.end ? 2200 : 600 });
-    return { text: res.text.trim() };
+    const res = await this.ai.completeJson<{ reply?: string; hintLevel?: number }>(messages, { temperature: 0.6, maxTokens: input.end ? 300 : 600 });
+    const replyRaw = (res.reply ?? '').trim() || "Thanks for walking me through that.";
+    const hintLevel = typeof res.hintLevel === 'number' && res.hintLevel >= 1 && res.hintLevel <= 5 ? Math.round(res.hintLevel) : undefined;
+
+    // P2 — deterministic closing sequence: final answer already acknowledged
+    // above by the LLM; the closing line + report-ready notification are
+    // fixed-bank, never LLM-phrased, so they're guaranteed to actually
+    // happen rather than hoping the model remembers to say them.
+    const reply = input.end
+      ? `${replyRaw} ${pick(CLOSING_LINES)} ${pick(REPORT_READY_MESSAGES)}`.trim()
+      : Math.random() < MICRO_ACK_PROBABILITY && input.transcript.length > 0
+        ? `${pick(MICRO_ACKS)} ${replyRaw}`
+        : replyRaw;
+
+    return { text: reply, hintLevel };
   }
 
   async generateCoding(topic: string, difficulty: Difficulty, kind: 'code' | 'sql' = 'code') {

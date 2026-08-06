@@ -94,7 +94,58 @@ const THEORY_STYLES = ['Rapid Fire', 'Detailed Discussion', 'Real Company Interv
 const EXPERIENCE = ['Fresher', '1-2 Years', '3-5 Years', '5-8 Years', 'Senior', 'Staff', 'Principal'];
 const COMPANIES = ['Google', 'Amazon', 'Microsoft', 'Meta', 'Apple', 'Netflix', 'Uber', 'Stripe', 'Airbnb', 'Oracle', 'Salesforce', 'Deloitte', 'EY', 'KPMG', 'JPMorgan', 'Goldman Sachs', 'Startup', 'FAANG Mixed', 'Random'];
 const DURATIONS = [10, 20, 30, 45, 60];
-const LANGUAGES = ['English', 'Hindi', 'Mixed'];
+// P2 — config-driven language list. English + Hindi(+Mixed/Hinglish) are the
+// only ones actually verified end-to-end (STT/TTS/prompting) today; the rest
+// are real menu entries (not hidden) so the extensibility is honest and
+// visible, but marked `live: false` and disabled until each is actually
+// wired and tested — adding one for real later is a one-line change here,
+// not a scattered one.
+const LANGUAGES: { id: string; label: string; live: boolean }[] = [
+  { id: 'English', label: 'English', live: true },
+  { id: 'Hindi', label: 'Hindi', live: true },
+  { id: 'Mixed', label: 'Hinglish (Mixed)', live: true },
+  { id: 'Tamil', label: 'Tamil', live: false },
+  { id: 'Telugu', label: 'Telugu', live: false },
+  { id: 'Marathi', label: 'Marathi', live: false },
+  { id: 'Bengali', label: 'Bengali', live: false },
+  { id: 'Kannada', label: 'Kannada', live: false },
+  { id: 'Gujarati', label: 'Gujarati', live: false },
+  { id: 'Punjabi', label: 'Punjabi', live: false },
+];
+
+// P2 — round structure. Each wizard `wType` maps to an ordered sequence of
+// rounds with a time-share of whatever's left after the intro. Deterministic
+// (a client-side timer force-advances rounds — see roundStartedAtRef below),
+// same "don't trust the LLM for guarantees" pattern as the intro cap.
+type RoundType = 'hr' | 'technical' | 'role_scenario' | 'coding';
+const ROUND_LABELS: Record<RoundType, string> = {
+  hr: 'the behavioral/HR round',
+  technical: 'the technical round',
+  role_scenario: 'the role-scenario round',
+  coding: 'the live coding round',
+};
+const ROUND_SEQUENCES: Record<string, { type: RoundType; share: number }[]> = {
+  'Coding Interview': [{ type: 'technical', share: 0.3 }, { type: 'coding', share: 0.7 }],
+  'Theoretical Interview': [{ type: 'hr', share: 0.2 }, { type: 'technical', share: 0.8 }],
+  'Mixed Interview': [{ type: 'hr', share: 0.15 }, { type: 'technical', share: 0.35 }, { type: 'role_scenario', share: 0.2 }, { type: 'coding', share: 0.3 }],
+  'Case Study': [{ type: 'role_scenario', share: 1 }],
+  'Practical Scenario': [{ type: 'role_scenario', share: 1 }],
+  'Behavioral Interview': [{ type: 'hr', share: 1 }],
+};
+/** Coding only makes sense for code-relevant categories — redistribute its share rather than schedule a round nobody can use. */
+function computeRoundSequence(wType: string, codeEligible: boolean): { type: RoundType; share: number }[] {
+  let seq = ROUND_SEQUENCES[wType] ?? ROUND_SEQUENCES['Mixed Interview'];
+  if (!codeEligible) {
+    const coding = seq.find((r) => r.type === 'coding');
+    if (coding) {
+      seq = seq.filter((r) => r.type !== 'coding');
+      const totalRemaining = seq.reduce((s, r) => s + r.share, 0) || 1;
+      seq = seq.map((r) => ({ ...r, share: r.share + (r.share / totalRemaining) * coding.share }));
+    }
+  }
+  return seq;
+}
+const ROUND_INTRO_RESERVE_SEC = 90; // matches INTRO_CAP_MS below
 const WIZARD_STEPS = ['Category', 'Topic', 'Type', 'Level', 'Company', 'Duration', 'Language', 'Review'];
 const PERSONALITIES: { id: string; label: string }[] = [
   { id: 'friendly', label: 'Friendly' },
@@ -219,12 +270,24 @@ function InterviewRoomInner() {
   const introForceSentRef = useRef(false);
   const forceAdvanceConsumedRef = useRef(false);
   const [introForced, setIntroForced] = useState(false);
+  // P2 — round structure. roundIndex advances deterministically on a
+  // per-round timer (started once the intro completes, not before); the
+  // pending flag mirrors introForced's shape exactly, one flag consumed per
+  // forced advance.
+  const roundStartedAtRef = useRef<number | null>(null);
+  const roundForceSentRef = useRef(false);
+  const roundAdvanceConsumedRef = useRef(false);
+  const [roundIndex, setRoundIndex] = useState(0);
+  const [roundForced, setRoundForced] = useState(false);
+  const [thinking, setThinking] = useState(false); // "give me a second" — suppresses VAD auto-send without penalty
+  const thinkingRef = useRef(false);
 
   const topic = wizardTopic ?? assessmentTopic ?? TOPICS[topicIdx];
   useEffect(() => { messagesRef.current = messages; }, [messages]);
   useEffect(() => { voiceStateRef.current = voiceState; }, [voiceState]);
   useEffect(() => { sendingRef.current = sending; }, [sending]);
   useEffect(() => { micOnRef.current = micOn; }, [micOn]);
+  useEffect(() => { thinkingRef.current = thinking; }, [thinking]);
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, sending]);
 
   useEffect(() => {
@@ -307,10 +370,13 @@ function InterviewRoomInner() {
       const text = (finalChunk + interim).trim();
       const words = text.split(/\s+/).filter(Boolean).length;
       setInput(text);
-      // VAD: ~1s of silence = end of turn → auto-send (hands-free).
+      // P2 — patient listening: "give me a second" (thinkingRef) suppresses
+      // the ~1s VAD auto-send entirely, no penalty — the candidate resumes
+      // it explicitly (see the toggle button) rather than a timeout deciding
+      // for them.
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = setTimeout(() => {
-        if (text && words >= 1 && !sendingRef.current && voiceStateRef.current === 'listening') {
+        if (text && words >= 1 && !sendingRef.current && !thinkingRef.current && voiceStateRef.current === 'listening') {
           sendTurnRef.current?.(text);
           finalChunk = '';
         }
@@ -330,6 +396,16 @@ function InterviewRoomInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voiceState, phase, micOn, tab, startListening]);
 
+  // P2 — round structure. Computed once (wType/category don't change after
+  // the wizard is done, i.e. for the whole 'live' phase), so it's safe for
+  // the timer effect below to close over it directly — only roundIndex
+  // itself needs a ref, since it changes during the session and the effect's
+  // deps are intentionally just [phase] (same reasoning as introStartedAtRef
+  // above: don't restart the interval every render).
+  const activeRoundSequence = useMemo(() => computeRoundSequence(wType, CODE_CATEGORIES.has(topic.category)), [wType, topic.category]);
+  const roundIndexRef = useRef(0);
+  useEffect(() => { roundIndexRef.current = roundIndex; }, [roundIndex]);
+
   // timer
   useEffect(() => {
     if (phase !== 'live') return;
@@ -339,10 +415,22 @@ function InterviewRoomInner() {
         introForceSentRef.current = true;
         setIntroForced(true);
       }
+      if (roundStartedAtRef.current && !roundForceSentRef.current) {
+        const idx = roundIndexRef.current;
+        const roundEligibleSec = Math.max(30, durationMin * 60 - ROUND_INTRO_RESERVE_SEC);
+        const share = activeRoundSequence[idx]?.share ?? 0;
+        const budgetSec = share * roundEligibleSec;
+        const elapsedSec = (Date.now() - roundStartedAtRef.current) / 1000;
+        if (elapsedSec >= budgetSec && idx < activeRoundSequence.length - 1) {
+          roundForceSentRef.current = true;
+          setRoundForced(true);
+        }
+      }
     }, 1000);
     return () => clearInterval(iv);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
+
 
   // proctoring: tab / focus
   useEffect(() => {
@@ -389,6 +477,14 @@ function InterviewRoomInner() {
   // below forces it, whichever comes first. The Coding tab stays gated until then.
   const introComplete = introForced || messages.filter((m) => m.role === 'ai').length >= 2;
 
+  // Round tracking starts the moment the intro completes, not before — the
+  // intro's own cap already governs that phase.
+  useEffect(() => {
+    if (introComplete && roundStartedAtRef.current === null) {
+      roundStartedAtRef.current = Date.now();
+    }
+  }, [introComplete]);
+
   // ── conversational turn ──
   const sendTurn = useCallback(async (candidateText?: string, opts?: { end?: boolean; behaviorSummary?: string }) => {
     const base = messagesRef.current.slice();
@@ -398,22 +494,43 @@ function InterviewRoomInner() {
       const thinkingMs = lastAiTsRef.current ? Date.now() - lastAiTsRef.current : 0;
       const words = candidateText.trim().split(/\s+/).filter(Boolean).length;
       behaviorRef.current.turns.push({ thinkingMs, words });
-      if (/stuck|explain|hint|don'?t know|no idea|help me/i.test(candidateText)) behaviorRef.current.hints++;
+      // P2 — hint usage is now a server-authoritative signal (see hintLevel
+      // below), not a client-side guess from the CANDIDATE's own wording.
     }
     setMessages(base);
     setInput('');
     setSending(true);
     const shouldForceAdvance = introForced && !forceAdvanceConsumedRef.current && !opts?.end;
     if (shouldForceAdvance) forceAdvanceConsumedRef.current = true;
+    // P2 — round structure: only fires once intro-advance is out of the way
+    // (never both in the same turn — the intro cap and round cap govern
+    // different phases and shouldn't compete for the same reply).
+    const shouldForceRoundAdvance = !shouldForceAdvance && roundForced && !roundAdvanceConsumedRef.current && !opts?.end;
+    if (shouldForceRoundAdvance) roundAdvanceConsumedRef.current = true;
+    const idx = roundIndexRef.current;
+    const nextRound = shouldForceRoundAdvance ? activeRoundSequence[idx + 1] : undefined;
     try {
-      const res = await api.post<{ text: string }>('/practice/interview/turn', {
+      const res = await api.post<{ text: string; hintLevel?: number }>('/practice/interview/turn', {
         jobRole: topic.label, category: topic.category, difficulty, topic: topic.topic,
         count: numQuestions, personality, mode: interviewType, experience, company, language, style: theoryStyle,
         candidateName: user?.fullName?.split(' ')[0], resumeContext: resumeContextRef.current,
         transcript: base.map((m) => ({ role: m.role === 'ai' ? 'interviewer' : 'candidate', content: m.text })),
         end: opts?.end ?? false, behaviorSummary: opts?.behaviorSummary,
         forceAdvance: shouldForceAdvance,
+        currentRound: activeRoundSequence[idx] ? { type: activeRoundSequence[idx].type, label: ROUND_LABELS[activeRoundSequence[idx].type] } : undefined,
+        nextRoundLabel: nextRound ? ROUND_LABELS[nextRound.type] : undefined,
+        forceRoundAdvance: shouldForceRoundAdvance,
       });
+      if (typeof res.hintLevel === 'number') behaviorRef.current.hints++;
+      if (shouldForceRoundAdvance) {
+        // Advance to the next round and restart its own timer, mirroring the
+        // intro cap's own reset-per-phase shape.
+        setRoundIndex((i) => Math.min(i + 1, activeRoundSequence.length - 1));
+        roundStartedAtRef.current = Date.now();
+        roundForceSentRef.current = false;
+        roundAdvanceConsumedRef.current = false;
+        setRoundForced(false);
+      }
       if (opts?.end) return res.text;
       setMessages((m) => [...m, { role: 'ai', text: res.text }]);
       speak(res.text);
@@ -426,7 +543,7 @@ function InterviewRoomInner() {
       setSending(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [topic, difficulty, numQuestions, personality, interviewType, experience, company, language, theoryStyle, user, speak, introForced]);
+  }, [topic, difficulty, numQuestions, personality, interviewType, experience, company, language, theoryStyle, user, speak, introForced, roundForced, activeRoundSequence]);
   useEffect(() => { sendTurnRef.current = sendTurn; }, [sendTurn]);
 
   function onSend() {
@@ -655,7 +772,17 @@ function InterviewRoomInner() {
           </>)}
           {wStep === 6 && (<>
             <h2 className="font-semibold">Preferred language</h2>
-            <div className="mt-3 flex flex-wrap gap-2">{LANGUAGES.map((l) => <Chip key={l} active={language === l} onClick={() => setLanguage(l)}>{l}</Chip>)}</div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {LANGUAGES.map((l) =>
+                l.live ? (
+                  <Chip key={l.id} active={language === l.id} onClick={() => setLanguage(l.id)}>{l.label}</Chip>
+                ) : (
+                  <span key={l.id} title="Not live yet" className="cursor-not-allowed rounded-full border border-black/5 px-3 py-1.5 text-sm text-black/30 dark:border-white/5 dark:text-white/25">
+                    {l.label} <span className="text-[10px] uppercase">soon</span>
+                  </span>
+                ),
+              )}
+            </div>
           </>)}
           {wStep === 7 && cat && (<>
             <h2 className="font-semibold">Review &amp; start</h2>
@@ -887,8 +1014,16 @@ function InterviewRoomInner() {
               </div>
               <div className="rounded-xl bg-white/5 p-2">
                 <div className="mb-1.5 flex items-center gap-2 px-1 text-xs text-white/50">
-                  {voiceState === 'speaking' ? <><SpeakerIcon width={14} height={14} className="text-brand-400" /> Ally is speaking…</> : voiceState === 'listening' ? <><MicIcon width={14} height={14} className="text-emerald-400" /> Listening — speak or type</> : 'Ready'}
-                  <button onClick={() => sendTurn('I\'m a bit stuck — can you explain the question and give me a hint?')} disabled={sending} className="ml-auto rounded-md bg-white/10 px-2 py-0.5 hover:bg-white/20">I&apos;m stuck — explain</button>
+                  {voiceState === 'speaking' ? <><SpeakerIcon width={14} height={14} className="text-brand-400" /> Ally is speaking…</> : voiceState === 'listening' ? thinking ? <><MicIcon width={14} height={14} className="text-amber-400" /> Taking your time — I won&apos;t auto-send</> : <><MicIcon width={14} height={14} className="text-emerald-400" /> Listening — speak or type</> : 'Ready'}
+                  <button
+                    onClick={() => setThinking((t) => !t)}
+                    disabled={sending}
+                    title="Pause hands-free auto-send while you think — no penalty"
+                    className={`ml-auto rounded-md px-2 py-0.5 ${thinking ? 'bg-amber-500/30 text-amber-200' : 'bg-white/10 hover:bg-white/20'}`}
+                  >
+                    {thinking ? "I'm ready" : 'Give me a second'}
+                  </button>
+                  <button onClick={() => sendTurn('I\'m a bit stuck — can you explain the question and give me a hint?')} disabled={sending} className="rounded-md bg-white/10 px-2 py-0.5 hover:bg-white/20">I&apos;m stuck — explain</button>
                 </div>
                 <div className="flex items-end gap-2">
                   <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); } }} onPaste={() => bumpFlag('aiAssist', 800)} rows={2} placeholder="Type your answer, or just speak…" className="min-h-0 flex-1 resize-none rounded-lg bg-black/30 p-2 text-sm outline-none placeholder:text-white/30" />

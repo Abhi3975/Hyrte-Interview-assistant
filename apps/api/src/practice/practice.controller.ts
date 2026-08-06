@@ -55,6 +55,11 @@ class TurnMsgDto {
   @IsString() content!: string;
 }
 
+class CurrentRoundDto {
+  @IsString() type!: string;
+  @IsString() label!: string;
+}
+
 class InterviewTurnDto {
   @IsString() jobRole!: string;
   @IsString() category!: string;
@@ -73,6 +78,10 @@ class InterviewTurnDto {
   @IsArray() transcript!: TurnMsgDto[];
   @IsOptional() end?: boolean;
   @IsOptional() forceAdvance?: boolean;
+  // P2 — round structure.
+  @IsOptional() @IsObject() currentRound?: CurrentRoundDto;
+  @IsOptional() @IsString() nextRoundLabel?: string;
+  @IsOptional() forceRoundAdvance?: boolean;
 }
 
 class TestCaseDto {
