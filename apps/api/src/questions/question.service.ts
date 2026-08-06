@@ -151,7 +151,7 @@ export class QuestionService {
     const created = [];
     for (const g of generated.questions ?? []) {
       const license = await this.prisma.license.create({
-        data: { type: 'AI_GENERATED', sourceName: 'InterviewAI generation engine' },
+        data: { type: 'AI_GENERATED', sourceName: 'HYRTE generation engine' },
       });
       const q = await this.prisma.question.create({
         data: {

@@ -1,33 +1,51 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { randomInt } from 'node:crypto';
+import { SMS_PROVIDER, SmsProvider } from './sms/sms-provider.interface';
 
 interface OtpEntry {
   code: string;
   expiresAt: number;
   fullName: string;
+  email?: string;
   phone?: string;
   attempts: number;
 }
 
+const TTL_MS = 10 * 60 * 1000;
+// P1 — rate limiting + resend cooldown (per-identifier and per-IP), matching
+// the OTP store's own in-memory simplicity (no Redis — see the class comment
+// below for why that's a deliberate choice, not a shortcut).
+const RESEND_COOLDOWN_MS = 30_000;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_PER_IDENTIFIER = 3; // per phone/email, per window
+const RATE_LIMIT_MAX_PER_IP = 10; // per IP, per window — covers many identifiers from one source
+
 /**
- * Passwordless phone/email OTP for the Koyo-style "Sign Up to Start" lobby.
+ * Passwordless phone/email OTP for the "Sign Up to Start" candidate lobby.
+ * Upgrade — P1 §2: phone is now the PRIMARY identifier when provided (email
+ * is the fallback delivery channel, not the other way around as before).
  *
- * Codes live in-memory with a short TTL — no DB migration, no SMS vendor
- * required. Because no SMS/email provider is wired, `request` returns the
- * code so the demo UI can display it ("demo mode"); swap in a provider send
- * and drop the returned code for production.
+ * Codes and rate-limit counters live in-memory with a short TTL — no DB
+ * migration, no Redis required, matching this deployment's existing scale
+ * (single API task, no horizontal scaling today — see deployment notes). If
+ * that ever changes, this is the one place to swap for a Redis-backed store;
+ * every caller already goes through this service, not a raw Map.
  */
 @Injectable()
 export class OtpService {
   private readonly logger = new Logger(OtpService.name);
   private readonly store = new Map<string, OtpEntry>();
   private readonly resetStore = new Map<string, { code: string; expiresAt: number; attempts: number }>();
-  private readonly TTL_MS = 10 * 60 * 1000;
+  // identifier/IP -> timestamps (ms) of recent requests, for rate limiting.
+  private readonly requestLog = new Map<string, number[]>();
+  private readonly lastSentAt = new Map<string, number>();
+
+  constructor(@Inject(SMS_PROVIDER) private readonly sms: SmsProvider) {}
 
   /** Generate + store a password-reset code for an email. */
   requestReset(email: string): string {
     const code = randomInt(0, 1_000_000).toString().padStart(6, '0');
-    this.resetStore.set(email.toLowerCase(), { code, expiresAt: Date.now() + this.TTL_MS, attempts: 0 });
+    this.resetStore.set(email.toLowerCase(), { code, expiresAt: Date.now() + TTL_MS, attempts: 0 });
     return code;
   }
 
@@ -42,17 +60,70 @@ export class OtpService {
     return true;
   }
 
-  request(fullName: string, email: string, phone?: string): string {
-    const key = email.toLowerCase();
+  /**
+   * Checks resend-cooldown + rate limits for a request BEFORE generating a
+   * code. `identifier` is whichever of phone/email is primary for this
+   * request (see requestOtp in the controller). Returns the reason so the
+   * controller can surface a clear "wait Ns" error rather than a generic
+   * 429.
+   */
+  checkRateLimit(identifier: string, ip?: string): { ok: true } | { ok: false; retryAfterSec: number; reason: string } {
+    const key = identifier.toLowerCase();
+    const now = Date.now();
+
+    const lastSent = this.lastSentAt.get(key);
+    if (lastSent && now - lastSent < RESEND_COOLDOWN_MS) {
+      return { ok: false, retryAfterSec: Math.ceil((RESEND_COOLDOWN_MS - (now - lastSent)) / 1000), reason: 'resend_cooldown' };
+    }
+
+    const prune = (log: number[]) => log.filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
+    const idLog = prune(this.requestLog.get(key) ?? []);
+    if (idLog.length >= RATE_LIMIT_MAX_PER_IDENTIFIER) {
+      return { ok: false, retryAfterSec: Math.ceil((RATE_LIMIT_WINDOW_MS - (now - idLog[0])) / 1000), reason: 'too_many_requests' };
+    }
+    if (ip) {
+      const ipKey = `ip:${ip}`;
+      const ipLog = prune(this.requestLog.get(ipKey) ?? []);
+      if (ipLog.length >= RATE_LIMIT_MAX_PER_IP) {
+        return { ok: false, retryAfterSec: Math.ceil((RATE_LIMIT_WINDOW_MS - (now - ipLog[0])) / 1000), reason: 'too_many_requests_ip' };
+      }
+    }
+    return { ok: true };
+  }
+
+  /** Records that a request actually went out — call only after checkRateLimit passed. */
+  private recordRequest(identifier: string, ip?: string): void {
+    const now = Date.now();
+    const key = identifier.toLowerCase();
+    this.lastSentAt.set(key, now);
+    const idLog = (this.requestLog.get(key) ?? []).filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
+    idLog.push(now);
+    this.requestLog.set(key, idLog);
+    if (ip) {
+      const ipKey = `ip:${ip}`;
+      const ipLog = (this.requestLog.get(ipKey) ?? []).filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
+      ipLog.push(now);
+      this.requestLog.set(ipKey, ipLog);
+    }
+  }
+
+  /**
+   * `identifier` is the primary key for this OTP — phone when given
+   * (P1: phone-first), else email. Both are stored on the entry regardless,
+   * so verify() can be looked up by whichever the candidate actually used.
+   */
+  request(fullName: string, identifier: string, email?: string, phone?: string, ip?: string): string {
+    const key = identifier.toLowerCase();
     const code = randomInt(0, 1_000_000).toString().padStart(6, '0');
-    this.store.set(key, { code, expiresAt: Date.now() + this.TTL_MS, fullName, phone, attempts: 0 });
-    this.logger.log(`OTP for ${key}: ${code}${this.smsConfigured() ? '' : ' (demo mode)'}`);
+    this.store.set(key, { code, expiresAt: Date.now() + TTL_MS, fullName, email, phone, attempts: 0 });
+    this.recordRequest(identifier, ip);
+    this.logger.log(`OTP for ${key}: ${code}${this.smsConfigured() || this.emailConfigured() ? '' : ' (demo mode)'}`);
     return code;
   }
 
-  /** True when a real SMS provider (Twilio) is configured via env. */
+  /** True when a real SMS provider is configured via env. */
   smsConfigured(): boolean {
-    return Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM);
+    return this.sms.isConfigured();
   }
 
   /** True when a real email provider (Resend or SendGrid) is configured. */
@@ -62,7 +133,7 @@ export class OtpService {
 
   private otpHtml(code: string): string {
     return `<div style="font-family:system-ui,sans-serif;max-width:420px;margin:auto">
-      <h2 style="margin:0 0 8px">Verify your InterviewAI sign-in</h2>
+      <h2 style="margin:0 0 8px">Verify your HYRTE sign-in</h2>
       <p style="color:#555;margin:0 0 16px">Enter this code to start your interview. It expires in 10 minutes.</p>
       <div style="font-size:32px;font-weight:700;letter-spacing:6px;background:#f4f4f5;padding:16px;text-align:center;border-radius:10px">${code}</div>
       <p style="color:#999;font-size:12px;margin-top:16px">If you didn't request this, you can ignore this email.</p>
@@ -80,8 +151,8 @@ export class OtpService {
         headers: { Authorization: `Bearer ${key}`, 'content-type': 'application/json' },
         body: JSON.stringify({
           personalizations: [{ to: [{ email }] }],
-          from: { email: from, name: 'InterviewAI' },
-          subject: `Your InterviewAI code is ${code}`,
+          from: { email: from, name: 'HYRTE' },
+          subject: `Your HYRTE code is ${code}`,
           content: [{ type: 'text/html', value: this.otpHtml(code) }],
         }),
       });
@@ -100,7 +171,7 @@ export class OtpService {
    */
   async sendEmail(email: string, code: string): Promise<boolean> {
     if (!this.emailConfigured()) return false;
-    const from = process.env.RESEND_FROM || 'InterviewAI <onboarding@resend.dev>';
+    const from = process.env.RESEND_FROM || 'HYRTE <onboarding@resend.dev>';
     try {
       const res = await fetch('https://api.resend.com/emails', {
         method: 'POST',
@@ -108,13 +179,8 @@ export class OtpService {
         body: JSON.stringify({
           from,
           to: [email],
-          subject: `Your InterviewAI code is ${code}`,
-          html: `<div style="font-family:system-ui,sans-serif;max-width:420px;margin:auto">
-            <h2 style="margin:0 0 8px">Verify your InterviewAI sign-in</h2>
-            <p style="color:#555;margin:0 0 16px">Enter this code to start your interview. It expires in 10 minutes.</p>
-            <div style="font-size:32px;font-weight:700;letter-spacing:6px;background:#f4f4f5;padding:16px;text-align:center;border-radius:10px">${code}</div>
-            <p style="color:#999;font-size:12px;margin-top:16px">If you didn't request this, you can ignore this email.</p>
-          </div>`,
+          subject: `Your HYRTE code is ${code}`,
+          html: this.otpHtml(code),
         }),
       });
       if (!res.ok) { this.logger.warn(`Resend email failed ${res.status}: ${(await res.text()).slice(0, 160)}`); return false; }
@@ -126,37 +192,23 @@ export class OtpService {
   }
 
   /**
-   * Send the code by SMS via Twilio's REST API (no SDK needed — Basic-auth
-   * fetch). `phone` must be full E.164 incl. country code, e.g. +919905270822.
-   * NOTE: delivery to Indian numbers additionally requires TRAI DLT
-   * registration of the sender/template with the provider.
+   * Send the code by SMS. `phone` must be full E.164 incl. country code,
+   * e.g. +919905270822. Delegates to the injected SmsProvider (Twilio today)
+   * — this method never talks to a vendor API directly.
    */
   async sendSms(phone: string, code: string): Promise<boolean> {
-    if (!this.smsConfigured()) return false;
-    const sid = process.env.TWILIO_ACCOUNT_SID!;
-    const token = process.env.TWILIO_AUTH_TOKEN!;
-    const from = process.env.TWILIO_FROM!;
-    try {
-      const body = new URLSearchParams({ To: phone, From: from, Body: `Your InterviewAI verification code is ${code}. It expires in 10 minutes.` });
-      const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Basic ${Buffer.from(`${sid}:${token}`).toString('base64')}`,
-          'content-type': 'application/x-www-form-urlencoded',
-        },
-        body,
-      });
-      if (!res.ok) { this.logger.warn(`Twilio SMS failed ${res.status}: ${(await res.text()).slice(0, 150)}`); return false; }
-      return true;
-    } catch (err) {
-      this.logger.warn(`Twilio SMS error: ${err}`);
-      return false;
-    }
+    return this.sms.send(phone, `Your HYRTE verification code is ${code}. It expires in 10 minutes.`);
   }
 
-  /** Returns the pending signup's name on success, or null if invalid/expired. */
-  verify(email: string, code: string): { fullName: string } | null {
-    const key = email.toLowerCase();
+  /**
+   * Returns the pending signup's name + which identifiers it was requested
+   * with on success, or null if invalid/expired. `identifier` must match
+   * whatever `request()` was called with (phone if that's what was primary,
+   * else email) — this is what makes phone genuinely a login key now, not
+   * just an SMS delivery address that verification silently ignored.
+   */
+  verify(identifier: string, code: string): { fullName: string; email?: string; phone?: string } | null {
+    const key = identifier.toLowerCase();
     const entry = this.store.get(key);
     if (!entry) return null;
     if (Date.now() > entry.expiresAt || entry.attempts >= 5) {
@@ -166,6 +218,6 @@ export class OtpService {
     entry.attempts++;
     if (entry.code !== code.trim()) return null;
     this.store.delete(key);
-    return { fullName: entry.fullName };
+    return { fullName: entry.fullName, email: entry.email, phone: entry.phone };
   }
 }

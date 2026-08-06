@@ -40,7 +40,7 @@ export default function ForgotPassword() {
 
   return (
     <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-6">
-      <Link href="/" className="mb-8 text-lg font-bold">Interview<span className="text-brand-500">AI</span></Link>
+      <Link href="/" className="mb-8 text-lg font-bold">HYRTE</Link>
       <h1 className="text-2xl font-bold">Reset your password</h1>
 
       {done ? (

@@ -47,7 +47,7 @@ export default function TakeByLink({ params }: { params: Promise<{ code: string 
   return (
     <main className="flex min-h-screen items-center justify-center bg-neutral-950 px-4 text-white">
       <div className="w-full max-w-md rounded-2xl bg-white/5 p-6">
-        <div className="text-lg font-bold">Interview<span className="text-brand-500">AI</span></div>
+        <div className="text-lg font-bold">HYRTE</div>
         {error ? (
           <p className="mt-4 rounded-lg bg-red-500/10 p-3 text-sm text-red-400">{error}</p>
         ) : !cfg ? (

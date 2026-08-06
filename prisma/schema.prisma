@@ -65,6 +65,12 @@ model Organization {
 model User {
   id             String        @id @default(cuid())
   email          String        @unique
+  // P1 — phone-OTP-primary auth. Nullable+unique (Postgres allows multiple
+  // NULLs under a unique constraint) so this is purely additive: existing
+  // email/password accounts are entirely unaffected. E.164 format
+  // (+<countrycode><number>), set once verified via OTP.
+  phone          String?       @unique
+  phoneVerified  Boolean       @default(false)
   passwordHash   String?
   fullName       String
   avatarUrl      String?

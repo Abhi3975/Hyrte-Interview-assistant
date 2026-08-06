@@ -109,7 +109,7 @@ export function DashboardShell({
     <div className={`flex h-screen overflow-hidden ${osClass}`}>
       <aside className="hidden w-64 shrink-0 flex-col overflow-y-auto border-r border-black/5 p-4 dark:border-white/10 md:flex">
         <Link href="/" className="mb-6 block text-lg font-bold">
-          Interview<span className="text-brand-500">AI</span>
+          HYRTE
         </Link>
 
         {sidebarExtra}

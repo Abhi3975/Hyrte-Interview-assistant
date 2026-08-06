@@ -68,20 +68,49 @@ export class AuthService {
   }
 
   /**
-   * Passwordless login for OTP signup: find the candidate by email or create a
-   * fresh CANDIDATE (no passwordHash), then issue tokens. Used by the
-   * "Sign Up to Start the Interview" lobby.
+   * Passwordless login for OTP signup — P1 §2: phone-aware. Finds the
+   * candidate by phone first (phone is now a real login key, not just an
+   * SMS delivery address), then by email, else creates a fresh CANDIDATE.
+   * Used by the "Sign Up to Start the Interview" lobby.
    */
   async otpLogin(
-    email: string,
-    fullName: string,
+    identity: { email?: string; phone?: string; fullName: string },
     ctx: { ip?: string; ua?: string },
   ): Promise<TokenPair & { user: SafeUser }> {
-    let user = await this.prisma.user.findUnique({ where: { email } });
+    const { fullName } = identity;
+    let user: User | null = null;
+
+    if (identity.phone) {
+      user = await this.prisma.user.findUnique({ where: { phone: identity.phone } });
+    }
+    if (!user && identity.email) {
+      user = await this.prisma.user.findUnique({ where: { email: identity.email } });
+      // A returning email-only candidate verifying phone for the first
+      // time — link it to their existing account rather than create a
+      // duplicate.
+      if (user && identity.phone && !user.phone) {
+        user = await this.prisma.user.update({ where: { id: user.id }, data: { phone: identity.phone, phoneVerified: true } });
+      }
+    }
     if (!user) {
+      // Phone-only signups still need SOME value in the required, unique
+      // `email` column. Synthesize a clearly-internal placeholder rather
+      // than making `email` nullable schema-wide, which would touch every
+      // existing query that assumes `user.email` is a real string
+      // (recruiter views, notifications, audit logs). Never shown to the
+      // candidate or emailed to anyone — a DB-integrity detail, not a real
+      // address.
+      const email = identity.email ?? `${(identity.phone ?? randomUUID()).replace(/[^0-9a-zA-Z]/g, '')}@phone.hyrte.internal`;
       user = await this.prisma.$transaction(async (tx) => {
         const created = await tx.user.create({
-          data: { email, fullName, role: Role.CANDIDATE, emailVerified: true },
+          data: {
+            email,
+            fullName,
+            role: Role.CANDIDATE,
+            emailVerified: Boolean(identity.email),
+            phone: identity.phone,
+            phoneVerified: Boolean(identity.phone),
+          },
         });
         await tx.candidateProfile.create({ data: { userId: created.id } });
         return created;
@@ -187,6 +216,7 @@ export class AuthService {
 export interface SafeUser {
   id: string;
   email: string;
+  phone: string | null;
   fullName: string;
   role: Role;
   organizationId: string | null;
@@ -196,6 +226,7 @@ function toSafeUser(user: User): SafeUser {
   return {
     id: user.id,
     email: user.email,
+    phone: user.phone,
     fullName: user.fullName,
     role: user.role,
     organizationId: user.organizationId,

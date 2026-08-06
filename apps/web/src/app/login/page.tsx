@@ -38,7 +38,7 @@ export default function LoginPage() {
   return (
     <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-6">
       <Link href="/" className="mb-8 text-lg font-bold">
-        Interview<span className="text-brand-500">AI</span>
+        HYRTE
       </Link>
       <h1 className="text-2xl font-bold">Welcome back</h1>
       <p className="mt-1 text-sm text-black/60 dark:text-white/60">Log in to continue.</p>

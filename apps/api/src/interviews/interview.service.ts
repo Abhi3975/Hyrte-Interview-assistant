@@ -38,7 +38,7 @@ export class InterviewService {
         orderBy: { createdAt: 'desc' },
         select: {
           id: true, status: true, examState: true, startedAt: true, completedAt: true, riskScore: true,
-          candidate: { select: { fullName: true, email: true } },
+          candidate: { select: { fullName: true, email: true, phone: true } },
           evaluation: { select: { overallScore: true, recommendation: true } },
         },
       }),

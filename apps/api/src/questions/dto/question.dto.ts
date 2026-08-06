@@ -19,7 +19,7 @@ export class SubmitQuestionDto {
   @IsOptional() @IsString() expectedAnswer?: string;
   @IsOptional() @IsArray() tags?: string[];
   @IsOptional() @IsArray() followUps?: string[];
-  // Submitter must affirm they grant InterviewAI a license to use it.
+  // Submitter must affirm they grant HYRTE a license to use it.
   @IsOptional() licenseGranted?: boolean;
 }
 

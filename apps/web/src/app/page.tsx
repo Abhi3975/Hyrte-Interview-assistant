@@ -56,7 +56,7 @@ export default function LandingPage() {
       {/* Nav */}
       <header className="relative z-10 mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
         <div className="text-lg font-bold">
-          Interview<span className="text-brand-500">AI</span>
+          HYRTE
         </div>
         <nav className="flex items-center gap-3">
           <Link href="/login" className="btn-ghost">Log in</Link>
@@ -72,7 +72,7 @@ export default function LandingPage() {
         </div>
         <h1 className="rise d2 text-balance text-4xl font-bold tracking-tight sm:text-6xl">
           Never take an <span className="grad-text">interview</span> again.
-          <br />InterviewAI takes them for you.
+          <br />HYRTE takes them for you.
         </h1>
         <p className="rise d3 mx-auto mt-6 max-w-2xl text-lg text-black/60 dark:text-white/60">
           Fully automated, human-like AI interviews — voice, video, live coding and
@@ -247,7 +247,7 @@ export default function LandingPage() {
       </section>
 
       <footer className="mx-auto max-w-6xl px-6 py-10 text-sm text-black/40 dark:text-white/40">
-        © {new Date().getFullYear()} InterviewAI. Only license-compliant question sources.
+        © {new Date().getFullYear()} HYRTE. Only license-compliant question sources.
       </footer>
     </main>
   );

@@ -133,7 +133,7 @@ export class AggregatorService {
           await this.store(v, {
             source: 'AI_GENERATED',
             licenseType: 'AI_GENERATED',
-            licenseMeta: { sourceName: 'InterviewAI variation engine' },
+            licenseMeta: { sourceName: 'HYRTE variation engine' },
             organizationId: opts.organizationId ?? null,
             parentId: stored.id,
           });

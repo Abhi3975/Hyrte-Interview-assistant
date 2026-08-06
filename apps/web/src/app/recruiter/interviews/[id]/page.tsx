@@ -9,7 +9,7 @@ interface Resume { summary: string; skills: string[]; projects: string[]; experi
 interface Detail {
   interview: { id: string; title: string; jobRole: string; category: string; difficulty: string; durationMins: number; status: string };
   questions: { id: string; ordinal: number; question: { id: string; title: string; prompt: string; type: string; difficulty: string } }[];
-  sessions: { id: string; status: string; examState: string; completedAt?: string; riskScore?: number; candidate: { fullName: string; email: string }; evaluation?: { overallScore: number; recommendation: string } }[];
+  sessions: { id: string; status: string; examState: string; completedAt?: string; riskScore?: number; candidate: { fullName: string; email: string; phone: string | null }; evaluation?: { overallScore: number; recommendation: string } }[];
   invites: { code: string; name: string; email?: string; expiresAt: string }[];
   resume: Resume | null;
 }
@@ -199,7 +199,12 @@ export default function AssessmentDetail({ params }: { params: Promise<{ id: str
                   <tbody>
                     {data.sessions.map((s) => (
                       <tr key={s.id} className="border-t border-black/5 dark:border-white/10">
-                        <td className="py-2 pr-3"><div className="font-medium">{s.candidate.fullName}</div><div className="text-xs text-black/40">{s.candidate.email}</div></td>
+                        <td className="py-2 pr-3">
+                          <div className="font-medium">{s.candidate.fullName}</div>
+                          {/* P1 — a phone-only signup gets an internal placeholder email (see auth.service.ts otpLogin); never show that to a recruiter. */}
+                          {!s.candidate.email.endsWith('@phone.hyrte.internal') && <div className="text-xs text-black/40">{s.candidate.email}</div>}
+                          {s.candidate.phone && <div className="text-xs text-black/40">{s.candidate.phone}</div>}
+                        </td>
                         <td className="py-2 pr-3">{s.examState === 'COMPLETED' ? 'Completed' : 'In progress'}</td>
                         <td className="py-2 pr-3 tabular-nums">{s.evaluation ? `${s.evaluation.overallScore}/100` : '—'}</td>
                         <td className="py-2 pr-3">{s.evaluation ? <span className={s.evaluation.recommendation.includes('NO') ? 'text-red-600' : s.evaluation.recommendation.includes('HIRE') ? 'text-emerald-600' : 'text-amber-600'}>{s.evaluation.recommendation.replace('_', ' ')}</span> : '—'}</td>

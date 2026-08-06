@@ -4,7 +4,7 @@ import { Providers } from './providers';
 import { ThemeScript } from '@/components/theme-script';
 
 export const metadata: Metadata = {
-  title: 'InterviewAI — AI Interviews & Zero-Trust Proctoring',
+  title: 'HYRTE — AI Interviews & Zero-Trust Proctoring',
   description:
     'Conduct human-like AI voice & video interviews, DSA and full-stack assessments, with enterprise-grade proctoring. Built to scale to 100k+ concurrent users.',
 };

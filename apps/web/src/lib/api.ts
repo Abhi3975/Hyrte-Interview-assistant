@@ -1,5 +1,5 @@
 /**
- * Thin API client for the InterviewAI gateway.
+ * Thin API client for the HYRTE gateway.
  *
  * Attaches the access token, transparently refreshes it once on a 401, and
  * surfaces a typed error. Requests go through Next's /api rewrite to the
@@ -10,7 +10,10 @@ import { useAuthStore } from '@/store/auth';
 const BASE = '/api';
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  // P1 — carries the full `error` envelope (see all-exceptions.filter.ts),
+  // not just `.message`, so callers can read structured fields like
+  // request-otp's `retryAfterSec` without a second parsing pass.
+  constructor(public status: number, message: string, public body?: Record<string, unknown>) {
     super(message);
   }
 }
@@ -44,7 +47,7 @@ async function request<T>(path: string, init: RequestInit = {}, retry = true): P
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new ApiError(res.status, body?.error?.message ?? res.statusText);
+    throw new ApiError(res.status, body?.error?.message ?? res.statusText, body?.error);
   }
   return (res.status === 204 ? undefined : await res.json()) as T;
 }

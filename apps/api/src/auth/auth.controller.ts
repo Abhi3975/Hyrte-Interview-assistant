@@ -1,4 +1,4 @@
-import { Body, Controller, Post, Req, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Body, Controller, HttpException, HttpStatus, Post, Req, UnauthorizedException } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { OtpService } from './otp.service';
@@ -45,34 +45,57 @@ export class AuthController {
     return result;
   }
 
-  /** Request a one-time code for the "Sign Up to Start" interview lobby. */
+  /**
+   * Request a one-time code for the "Sign Up to Start" candidate lobby.
+   * P1 §2 — phone is now the PRIMARY channel: when a phone is given, SMS is
+   * attempted first; email is the fallback (either because no phone was
+   * given, or SMS delivery failed / no SMS provider is configured).
+   */
   @Public()
   @Post('request-otp')
-  async requestOtp(@Body() dto: RequestOtpDto) {
-    const code = this.otp.request(dto.fullName, dto.email, dto.phone);
-    // Prefer real email (no telecom/DLT restrictions): SendGrid then Resend.
-    if (this.otp.emailConfigured()) {
-      const ok = (await this.otp.sendViaSendGrid(dto.email, code)) || (await this.otp.sendEmail(dto.email, code));
-      if (ok) return { sent: true, channel: 'email' };
+  async requestOtp(@Body() dto: RequestOtpDto, @Req() req: any) {
+    if (!dto.phone && !dto.email) throw new BadRequestException('phone or email is required');
+    const identifier = dto.phone || dto.email!;
+    const ip = req.ip as string | undefined;
+
+    const limit = this.otp.checkRateLimit(identifier, ip);
+    if (!limit.ok) {
+      throw new HttpException(
+        { message: `Too many requests — try again in ${limit.retryAfterSec}s`, retryAfterSec: limit.retryAfterSec, reason: limit.reason },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
     }
-    // Then real SMS when a provider is configured and a phone was given.
+
+    const code = this.otp.request(dto.fullName, identifier, dto.email, dto.phone, ip);
+
     if (dto.phone && this.otp.smsConfigured()) {
       const ok = await this.otp.sendSms(dto.phone, code);
       if (ok) return { sent: true, channel: 'sms' };
+    }
+    if (dto.email && this.otp.emailConfigured()) {
+      const ok = (await this.otp.sendViaSendGrid(dto.email, code)) || (await this.otp.sendEmail(dto.email, code));
+      if (ok) return { sent: true, channel: 'email' };
     }
     // Fallback: demo mode returns the code so the UI can show it.
     const demoMode = process.env.OTP_DEMO_MODE !== 'false';
     return { sent: true, channel: 'demo', ...(demoMode ? { devCode: code } : {}) };
   }
 
-  /** Verify the code and start a passwordless candidate session. */
+  /**
+   * Verify the code and start a passwordless candidate session. `identifier`
+   * must match whichever of phone/email was used to request — verification
+   * is no longer hardcoded to email, which is what made phone genuinely just
+   * an SMS delivery address before, never an actual login key.
+   */
   @Public()
   @Post('verify-otp')
   async verifyOtp(@Body() dto: VerifyOtpDto, @Req() req: any) {
-    const pending = this.otp.verify(dto.email, dto.code);
+    if (!dto.phone && !dto.email) throw new BadRequestException('phone or email is required');
+    const identifier = dto.phone || dto.email!;
+    const pending = this.otp.verify(identifier, dto.code);
     if (!pending) throw new UnauthorizedException('Invalid or expired code');
     const ctx = { ip: req.ip, ua: req.headers['user-agent'] };
-    const result = await this.auth.otpLogin(dto.email, pending.fullName, ctx);
+    const result = await this.auth.otpLogin({ email: pending.email, phone: pending.phone, fullName: pending.fullName }, ctx);
     await this.audit.record({
       actorId: result.user.id,
       organizationId: result.user.organizationId,

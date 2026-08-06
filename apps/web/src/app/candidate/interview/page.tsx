@@ -688,7 +688,7 @@ function InterviewRoomInner() {
       <div className="min-h-screen bg-neutral-950 px-4 py-8 text-white">
         <div className="mx-auto grid max-w-4xl gap-5 md:grid-cols-2">
           <div className="rounded-2xl bg-white/5 p-6">
-            <div className="text-lg font-bold">Interview<span className="text-brand-500">AI</span></div>
+            <div className="text-lg font-bold">HYRTE</div>
             <div className="mt-1 text-sm text-white/60">{topic.label} · {difficulty[0] + difficulty.slice(1).toLowerCase()} · Demo Interview</div>
             <div className="mt-6 text-xs font-semibold uppercase tracking-wide text-white/40">Interview Team</div>
             <div className="mt-2 space-y-2">
@@ -699,9 +699,9 @@ function InterviewRoomInner() {
               <div className="rounded-xl bg-white/5 p-3">
                 <div className="flex items-center gap-3">
                   <div className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-500/20 text-brand-300"><ShieldIcon width={18} height={18} /></div>
-                  <div><div className="font-semibold">Proctor</div><div className="text-xs text-white/60">InterviewAI Integrity</div></div>
+                  <div><div className="font-semibold">Proctor</div><div className="text-xs text-white/60">HYRTE Integrity</div></div>
                 </div>
-                <div className="mt-2 flex items-center gap-1.5 rounded-lg bg-amber-500/10 px-2 py-1 text-xs text-amber-400"><ShieldIcon width={12} height={12} /> Reviews your complete interview recording</div>
+                <div className="mt-2 flex items-center gap-1.5 rounded-lg bg-amber-500/10 px-2 py-1 text-xs text-amber-400"><ShieldIcon width={12} height={12} /> Monitors your entire interview in real time</div>
               </div>
             </div>
             <div className="mt-6 text-xs font-semibold uppercase tracking-wide text-white/40">Interview Details</div>

@@ -37,7 +37,7 @@ async function bootstrap(): Promise<void> {
 
   // ── OpenAPI docs at /api/docs ──
   const config = new DocumentBuilder()
-    .setTitle('InterviewAI API')
+    .setTitle('HYRTE API')
     .setDescription('AI interview & Zero-Trust proctoring platform')
     .setVersion('0.1.0')
     .addBearerAuth()
@@ -47,7 +47,7 @@ async function bootstrap(): Promise<void> {
 
   const port = Number(process.env.API_PORT ?? 4000);
   await app.listen(port, '0.0.0.0');
-  Logger.log(`InterviewAI API listening on :${port} (docs at /api/docs)`, 'Bootstrap');
+  Logger.log(`HYRTE API listening on :${port} (docs at /api/docs)`, 'Bootstrap');
 }
 
 bootstrap().catch((err) => {
