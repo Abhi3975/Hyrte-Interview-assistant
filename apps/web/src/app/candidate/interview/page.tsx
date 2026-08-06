@@ -294,6 +294,17 @@ function InterviewRoomInner() {
   const streamRef = useRef<MediaStream | null>(null);
   const displayStreamRef = useRef<MediaStream | null>(null);
   const fsHandlerRef = useRef<(() => void) | null>(null);
+  // P4 — session recording. mediaRecorderRef captures a canvas-composited
+  // screen + camera-PiP + mic-audio stream (see setupRecording below);
+  // chunksRef accumulates Blob parts in memory until session end, then one
+  // combined Blob is PUT to a presigned S3 URL. recordingUploadUrlRef is
+  // fetched once, right after the session is created — null means the
+  // backend has no bucket configured, so recording is skipped entirely
+  // (same graceful-degrade shape as OTP/email/SMS elsewhere in this app).
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const recordingUploadUrlRef = useRef<string | null>(null);
+  const recordingCompositeCleanupRef = useRef<(() => void) | null>(null);
   const recognitionRef = useRef<any>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const endedRef = useRef(false);
@@ -411,6 +422,95 @@ function InterviewRoomInner() {
         }
       })
       .catch(() => {});
+  }
+
+  /**
+   * P4 — session recording. Composites the screen-share track (full frame)
+   * with the camera track as a picture-in-picture overlay onto a canvas,
+   * captures THAT as a video stream (the standard technique for combining
+   * two independent MediaStreams into one recording), adds the candidate's
+   * mic audio, and records the whole thing with MediaRecorder. Chunks
+   * accumulate in memory (recorder.start(10_000) — 10s granularity) and
+   * upload as one Blob at session end; a real, known limitation: a browser
+   * crash mid-session loses whatever wasn't uploaded yet, since nothing is
+   * streamed incrementally to S3 in this pass. Silently does nothing if
+   * either stream is missing or the backend has no bucket configured
+   * (recordingUploadUrlRef stays null) — recording is enhancement, never a
+   * requirement for the interview itself to work.
+   */
+  function setupRecording(sessionId: string) {
+    try {
+      const screenStream = displayStreamRef.current;
+      const camStream = streamRef.current;
+      if (!screenStream || !camStream || typeof MediaRecorder === 'undefined') return;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = 1280; canvas.height = 720;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      const screenVideo = document.createElement('video');
+      screenVideo.srcObject = screenStream; screenVideo.muted = true; screenVideo.playsInline = true;
+      screenVideo.play().catch(() => {});
+      const camVideo = document.createElement('video');
+      camVideo.srcObject = camStream; camVideo.muted = true; camVideo.playsInline = true;
+      camVideo.play().catch(() => {});
+
+      let stopped = false;
+      const draw = () => {
+        if (stopped) return;
+        try {
+          ctx.drawImage(screenVideo, 0, 0, canvas.width, canvas.height);
+          const pipW = 200, pipH = 150, pad = 12;
+          ctx.drawImage(camVideo, canvas.width - pipW - pad, canvas.height - pipH - pad, pipW, pipH);
+        } catch {}
+        requestAnimationFrame(draw);
+      };
+      draw();
+
+      const canvasStream = (canvas as HTMLCanvasElement & { captureStream: (fps?: number) => MediaStream }).captureStream(15);
+      const micTrack = camStream.getAudioTracks()[0];
+      const combined = new MediaStream([...canvasStream.getVideoTracks(), ...(micTrack ? [micTrack] : [])]);
+
+      const mimeType = ['video/webm;codecs=vp8,opus', 'video/webm'].find((t) => MediaRecorder.isTypeSupported?.(t)) || 'video/webm';
+      const recorder = new MediaRecorder(combined, { mimeType });
+      chunksRef.current = [];
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+      recorder.start(10_000);
+      mediaRecorderRef.current = recorder;
+      recordingCompositeCleanupRef.current = () => { stopped = true; };
+
+      // Fetch the upload URL now, in parallel with the rest of the room
+      // loading — ready well before it's actually needed at session end.
+      api.post<{ uploadUrl: string | null }>(`/practice/session/${sessionId}/recording-upload-url`)
+        .then((res) => { recordingUploadUrlRef.current = res.uploadUrl; })
+        .catch(() => { recordingUploadUrlRef.current = null; });
+    } catch {}
+  }
+
+  /** Stops the recorder, combines the accumulated chunks, and PUTs the result to S3 — never blocks or fails the interview's own completion. */
+  async function finishRecordingAndUpload(sessionId: string) {
+    const recorder = mediaRecorderRef.current;
+    if (recorder) {
+      try {
+        await new Promise<void>((resolve) => {
+          recorder.onstop = () => resolve();
+          if (recorder.state !== 'inactive') recorder.stop(); else resolve();
+        });
+      } catch {}
+    }
+    recordingCompositeCleanupRef.current?.();
+    recordingCompositeCleanupRef.current = null;
+    mediaRecorderRef.current = null;
+
+    const uploadUrl = recordingUploadUrlRef.current;
+    if (!uploadUrl || chunksRef.current.length === 0) return;
+    try {
+      const blob = new Blob(chunksRef.current, { type: 'video/webm' });
+      chunksRef.current = [];
+      await fetch(uploadUrl, { method: 'PUT', headers: { 'content-type': 'video/webm' }, body: blob });
+      await api.post(`/practice/session/${sessionId}/recording-complete`);
+    } catch {}
   }
 
   const speak = useCallback((text: string) => {
@@ -761,6 +861,11 @@ function InterviewRoomInner() {
     lastWarningLevelRef.current = 0;
     setProctorNotice(null);
     setCameraPaused(false);
+    // P4 — reset recording state for a fresh session.
+    chunksRef.current = [];
+    recordingUploadUrlRef.current = null;
+    mediaRecorderRef.current = null;
+    recordingCompositeCleanupRef.current = null;
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
         throw new Error(window.isSecureContext ? 'Camera/microphone are not available in this browser.' : 'Camera & mic need a secure (HTTPS) connection. Open this site over https:// and allow permissions.');
@@ -813,6 +918,7 @@ function InterviewRoomInner() {
       try {
         const s = await api.post<{ sessionId: string }>('/practice/session', { category: topic.category, difficulty, topic: topic.topic, jobRole: topic.label, interviewId: assessmentId ?? undefined, consentedAt: consentedAtRef.current });
         sessionIdRef.current = s.sessionId;
+        setupRecording(s.sessionId);
       } catch { sessionIdRef.current = null; }
 
       if (interviewType !== 'theory' && CODE_CATEGORIES.has(topic.category)) {
@@ -851,6 +957,10 @@ function InterviewRoomInner() {
     endedRef.current = true;
     setPhase('evaluating');
     try { recognitionRef.current?.stop?.(); } catch {}
+    // P4 — stop recording and upload before teardown() releases the media
+    // streams the compositor reads from; never blocks the report on a
+    // failed upload (finishRecordingAndUpload swallows its own errors).
+    if (sessionIdRef.current) await finishRecordingAndUpload(sessionIdRef.current);
     try {
       // Aggregate behavior signals from the conversation.
       const b = behaviorRef.current;

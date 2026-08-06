@@ -138,6 +138,20 @@ export class PracticeController {
     return this.practice.completeSession(user.id, id, dto);
   }
 
+  /** P4 — a presigned URL the candidate's browser PUTs its recorded session to directly. */
+  @Post('session/:id/recording-upload-url')
+  @Roles('CANDIDATE', 'RECRUITER', 'ORG_ADMIN')
+  recordingUploadUrl(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.practice.getRecordingUploadUrl(id, user.id);
+  }
+
+  /** P4 — called once the S3 PUT above actually succeeds. */
+  @Post('session/:id/recording-complete')
+  @Roles('CANDIDATE', 'RECRUITER', 'ORG_ADMIN')
+  recordingComplete(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.practice.markRecordingUploaded(id, user.id);
+  }
+
   /** Conversational AI interviewer — returns the interviewer's next message. */
   @Post('interview/turn')
   @Roles('CANDIDATE', 'RECRUITER', 'ORG_ADMIN')

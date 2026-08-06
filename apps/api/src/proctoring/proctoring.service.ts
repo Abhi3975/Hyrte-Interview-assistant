@@ -34,6 +34,7 @@ import { REDIS } from '../redis/redis.module';
 import { RiskEngine, RiskResult } from './risk-engine.service';
 import { WARNING_THRESHOLDS, MAX_WARNINGS } from './risk-weights';
 import { IngestEventDto } from './dto/proctoring.dto';
+import { RecordingService } from '../recording/recording.service';
 
 /**
  * Proctoring Service — the orchestration layer of the Zero-Trust engine.
@@ -59,6 +60,7 @@ export class ProctoringService {
     private readonly audit: AuditService,
     private readonly notifications: NotificationService,
     @Inject(REDIS) private readonly redis: Redis,
+    private readonly recording: RecordingService,
   ) {}
 
   async ingest(dto: IngestEventDto): Promise<{ risk: RiskResult; warningLevel: number; terminated: boolean; policy: ProctoringPolicy }> {
@@ -250,16 +252,43 @@ export class ProctoringService {
 
   // ── Dashboard reads ──
 
+  /**
+   * P4 — now also returns session timing (so the client can compute a
+   * click-a-flag-jump-to-that-moment video offset), a fresh presigned
+   * playback URL if a recording exists, and a per-signal summary (count +
+   * % of the events in this session, per the spec's own "Integrity summary:
+   * per-signal % occurrence and count").
+   */
   async sessionTimeline(sessionId: string) {
-    const [events, warnings, risk] = await Promise.all([
+    const [events, warnings, risk, session] = await Promise.all([
       this.prisma.reader.proctorEvent.findMany({
         where: { sessionId },
         orderBy: { occurredAt: 'asc' },
       }),
       this.prisma.reader.warning.findMany({ where: { sessionId }, orderBy: { createdAt: 'asc' } }),
       this.prisma.reader.riskAssessment.findUnique({ where: { sessionId } }),
+      this.prisma.reader.interviewSession.findUnique({
+        where: { id: sessionId },
+        select: { startedAt: true, completedAt: true, recordingUrl: true },
+      }),
     ]);
-    return { events, warnings, risk };
+    if (!session) throw new NotFoundException('Session not found');
+
+    const counts = new Map<string, number>();
+    for (const e of events) counts.set(e.type, (counts.get(e.type) ?? 0) + 1);
+    const total = events.length;
+    const signalSummary = Array.from(counts.entries())
+      .map(([type, count]) => ({ type, count, percent: total > 0 ? Math.round((count / total) * 1000) / 10 : 0 }))
+      .sort((a, b) => b.count - a.count);
+
+    return {
+      events,
+      warnings,
+      risk,
+      session: { startedAt: session.startedAt, completedAt: session.completedAt, hasRecording: Boolean(session.recordingUrl) },
+      recordingUrl: session.recordingUrl ? await this.recording.getPlaybackUrl(sessionId) : null,
+      signalSummary,
+    };
   }
 
   async liveSessions(organizationId: string) {

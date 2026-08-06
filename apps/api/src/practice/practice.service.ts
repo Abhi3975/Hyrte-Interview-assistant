@@ -5,6 +5,7 @@ import { QuestionService } from '../questions/question.service';
 import { EvaluationService } from '../evaluation/evaluation.service';
 import { AIService } from '../ai/ai.service';
 import { PistonClient } from './piston.client';
+import { RecordingService } from '../recording/recording.service';
 
 /** Persona + protocol for the conversational AI interviewer. */
 const INTERVIEWER_SYSTEM = `# ROLE
@@ -114,7 +115,31 @@ export class PracticeService {
     private readonly evaluation: EvaluationService,
     private readonly ai: AIService,
     private readonly piston: PistonClient,
+    private readonly recording: RecordingService,
   ) {}
+
+  /**
+   * P4 — the candidate's browser PUTs its recorded session directly to this
+   * URL (never routes the binary through this API). Returns null if
+   * recording storage isn't configured — the room gracefully skips
+   * recording entirely in that case, same degrade-don't-break pattern as
+   * OtpService when no SMS/email provider is configured.
+   */
+  async getRecordingUploadUrl(sessionId: string, candidateId: string): Promise<{ uploadUrl: string | null }> {
+    const session = await this.prisma.interviewSession.findUnique({ where: { id: sessionId }, select: { candidateId: true } });
+    if (!session) throw new NotFoundException('Session not found');
+    if (session.candidateId !== candidateId) throw new ForbiddenException('Not your session');
+    return { uploadUrl: await this.recording.getUploadUrl(sessionId) };
+  }
+
+  /** Called by the candidate's browser once the S3 PUT above actually succeeds — persists the key, not a URL (presigned URLs expire). */
+  async markRecordingUploaded(sessionId: string, candidateId: string): Promise<{ ok: true }> {
+    const session = await this.prisma.interviewSession.findUnique({ where: { id: sessionId }, select: { candidateId: true } });
+    if (!session) throw new NotFoundException('Session not found');
+    if (session.candidateId !== candidateId) throw new ForbiddenException('Not your session');
+    await this.prisma.interviewSession.update({ where: { id: sessionId }, data: { recordingUrl: this.recording.recordingKey(sessionId) } });
+    return { ok: true };
+  }
 
   /**
    * Generate a real coding problem (stdin → stdout, with test cases) for the
