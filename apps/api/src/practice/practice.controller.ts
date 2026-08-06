@@ -17,6 +17,11 @@ class StartPracticeDto {
 class AnswerDto {
   @IsString() prompt!: string;
   @IsString() response!: string;
+  // P5 — when the client records this moment's wall-clock time, the
+  // evaluation report can deep-link into the session recording per question.
+  // Optional: the stateless /practice/evaluate endpoint has no recording at
+  // all, and older clients won't send it.
+  @IsOptional() @IsString() occurredAt?: string;
 }
 
 class EvaluatePracticeDto {

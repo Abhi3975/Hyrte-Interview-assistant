@@ -165,7 +165,10 @@ interface CodingTest { input: string; output: string; hidden: boolean }
 interface CodingProblem { title: string; statement: string; inputFormat: string; outputFormat: string; starter: Record<string, string>; tests: CodingTest[] }
 interface CaseResult { ordinal: number; passed: boolean; hidden: boolean; status: string; stderr?: string | null; expected?: string; actual?: string }
 interface RunResult { passed: number; total: number; results: CaseResult[] }
-interface Msg { role: 'ai' | 'you'; text: string }
+// P5 — `ts` (wall-clock ms) on candidate turns lets the evaluation report
+// deep-link into the session recording per question; optional since AI
+// turns and older code paths don't need it.
+interface Msg { role: 'ai' | 'you'; text: string; ts?: number }
 interface Evaluation {
   overallScore: number; competencies: Record<string, number>;
   strengths: string[]; weaknesses: string[]; summary: string; recommendation: string;
@@ -732,7 +735,7 @@ function InterviewRoomInner() {
     const base = messagesRef.current.slice();
     if (candidateText && candidateText.trim()) {
       const trimmed = candidateText.trim();
-      base.push({ role: 'you', text: trimmed });
+      base.push({ role: 'you', text: trimmed, ts: Date.now() });
       // Behavior signals: thinking time (since the AI finished) + answer length.
       const thinkingMs = lastAiTsRef.current ? Date.now() - lastAiTsRef.current : 0;
       const words = trimmed.split(/\s+/).filter(Boolean).length;
@@ -979,11 +982,12 @@ function InterviewRoomInner() {
       if (rep) setReport(rep);
       // Build scored answers from the conversation (each candidate turn vs the preceding AI prompt).
       const convo = messagesRef.current;
-      const answers: { prompt: string; response: string }[] = [];
+      const answers: { prompt: string; response: string; occurredAt?: string }[] = [];
       for (let i = 0; i < convo.length; i++) {
         if (convo[i].role === 'you') {
           const prompt = i > 0 && convo[i - 1].role === 'ai' ? convo[i - 1].text : 'Interview discussion';
-          answers.push({ prompt: prompt.slice(0, 500), response: convo[i].text });
+          const ts = convo[i].ts;
+          answers.push({ prompt: prompt.slice(0, 500), response: convo[i].text, occurredAt: ts ? new Date(ts).toISOString() : undefined });
         }
       }
       if (coding && codeSrc.trim()) {
@@ -1185,9 +1189,13 @@ function InterviewRoomInner() {
   if (phase === 'result') {
     return (
       <div className="mx-auto max-w-4xl px-6 py-10">
-        <div className="mb-6 flex items-center justify-between">
+        <div className="mb-6 flex items-center justify-between gap-2">
           <h1 className="text-2xl font-bold">Interview Report</h1>
-          <button onClick={() => setPhase('setup')} className="btn-ghost text-sm">New interview</button>
+          <div className="flex items-center gap-2">
+            {/* P5 — this inline view is ephemeral (gone on refresh); the durable, shareable report (84-param framework, skill cards, per-question scorecard) lives at its own URL. */}
+            {sessionIdRef.current && <a href={`/candidate/reports/${sessionIdRef.current}`} className="btn-ghost text-sm">Full report</a>}
+            <button onClick={() => setPhase('setup')} className="btn-ghost text-sm">New interview</button>
+          </div>
         </div>
         {error && <p className="mb-4 rounded-lg bg-red-500/10 p-3 text-sm text-red-500">{error}</p>}
         <div className="grid gap-5 md:grid-cols-[1fr_320px]">

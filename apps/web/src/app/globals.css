@@ -32,6 +32,17 @@ body {
   }
 }
 
+/* P5 — evaluation report PDF export via the browser's own print dialog
+   (window.print()), not a server-side PDF dependency. .no-print hides chrome
+   (nav, buttons) that only makes sense on-screen; .print-break forces a page
+   break before a section so the printed report doesn't cut a card in half. */
+@media print {
+  .no-print { display: none !important; }
+  .print-break { break-before: page; }
+  body { background: #fff; color: #0b1220; }
+  .card { box-shadow: none !important; border-color: #ddd !important; }
+}
+
 /*
  * HYRTE "agentic OS" design language — rollout of the G0-approved mockup
  * into the real workspace. Deliberately unlayered (not @layer components),

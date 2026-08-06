@@ -2,6 +2,7 @@
 
 import { use, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import Link from 'next/link';
 import { DashboardShell } from '@/components/dashboard-shell';
 import { api } from '@/lib/api';
 
@@ -48,6 +49,14 @@ export default function AssessmentDetail({ params }: { params: Promise<{ id: str
   const analyze = useMutation({
     mutationFn: () => api.post(`/interviews/${id}/analyze-resume`, { resumeText }),
     onSuccess: () => { setResumeText(''); qc.invalidateQueries({ queryKey: ['assessment', id] }); },
+  });
+  // P5 — recruiters can trigger the DB-Answer-backed evaluator directly from
+  // this table for a completed session that hasn't been scored yet.
+  const [scoringId, setScoringId] = useState<string | null>(null);
+  const runEvaluation = useMutation({
+    mutationFn: (sessionId: string) => { setScoringId(sessionId); return api.post(`/evaluation/sessions/${sessionId}`); },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['assessment', id] }),
+    onSettled: () => setScoringId(null),
   });
   const invite = useMutation({
     mutationFn: () => api.post<{ path: string }>(`/interviews/${id}/invite-link`, { name: inviteName, email: inviteEmail || undefined }),
@@ -194,7 +203,7 @@ export default function AssessmentDetail({ params }: { params: Promise<{ id: str
               <div className="mt-3 overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead><tr className="text-left text-xs text-black/50 dark:text-white/50">
-                    <th className="py-1 pr-3 font-medium">Candidate</th><th className="py-1 pr-3 font-medium">Status</th><th className="py-1 pr-3 font-medium">Score</th><th className="py-1 pr-3 font-medium">Recommendation</th><th className="py-1 font-medium">Integrity</th>
+                    <th className="py-1 pr-3 font-medium">Candidate</th><th className="py-1 pr-3 font-medium">Status</th><th className="py-1 pr-3 font-medium">Score</th><th className="py-1 pr-3 font-medium">Recommendation</th><th className="py-1 pr-3 font-medium">Integrity</th><th className="py-1 font-medium">Report</th>
                   </tr></thead>
                   <tbody>
                     {data.sessions.map((s) => (
@@ -208,7 +217,16 @@ export default function AssessmentDetail({ params }: { params: Promise<{ id: str
                         <td className="py-2 pr-3">{s.examState === 'COMPLETED' ? 'Completed' : 'In progress'}</td>
                         <td className="py-2 pr-3 tabular-nums">{s.evaluation ? `${s.evaluation.overallScore}/100` : '—'}</td>
                         <td className="py-2 pr-3">{s.evaluation ? <span className={s.evaluation.recommendation.includes('NO') ? 'text-red-600' : s.evaluation.recommendation.includes('HIRE') ? 'text-emerald-600' : 'text-amber-600'}>{s.evaluation.recommendation.replace('_', ' ')}</span> : '—'}</td>
-                        <td className="py-2 tabular-nums">{typeof s.riskScore === 'number' ? `${Math.max(0, 100 - Math.round(s.riskScore))}/100` : '—'}</td>
+                        <td className="py-2 pr-3 tabular-nums">{typeof s.riskScore === 'number' ? `${Math.max(0, 100 - Math.round(s.riskScore))}/100` : '—'}</td>
+                        <td className="py-2">
+                          {s.evaluation ? (
+                            <Link href={`/recruiter/reports/${s.id}`} className="text-brand-500 hover:underline">View report</Link>
+                          ) : s.examState === 'COMPLETED' ? (
+                            <button onClick={() => runEvaluation.mutate(s.id)} disabled={runEvaluation.isPending && scoringId === s.id} className="text-brand-500 hover:underline disabled:opacity-50">
+                              {runEvaluation.isPending && scoringId === s.id ? 'Scoring…' : 'Run evaluation'}
+                            </button>
+                          ) : '—'}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

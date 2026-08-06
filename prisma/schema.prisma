@@ -573,7 +573,10 @@ model Evaluation {
   session        InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   overallScore   Float // 0-100 aggregate
   // Competency breakdown: communication, technical, confidence, problemSolving,
-  // leadership, behavioral — stored as a flexible scored map.
+  // leadership, behavioral — stored as a flexible scored map. Superseded in
+  // spirit by parameterScores/skillCards below (P5) but left as-is — still
+  // read by the in-session inline result view (candidate/interview/page.tsx),
+  // not worth a breaking rename for a field several call sites already read.
   competencies   Json             @default("{}")
   strengths      String[]
   weaknesses     String[]
@@ -582,6 +585,31 @@ model Evaluation {
   // Which model(s) produced this, for auditability & A/B.
   modelMeta      Json             @default("{}")
   createdAt      DateTime         @default(now())
+
+  // ── P5 — Evaluation report ──
+  // The 80+ parameter framework: array of {key, group, label, score,
+  // interpretation, weight} — 7 groups (communication, technical,
+  // behavioral, confidence, cognitive, risk, hiring_readiness), ~12 params
+  // each. "Never output a bare number without its interpretation" (spec's
+  // own line) — every entry carries interpretation text, enforced at the
+  // sanitizer level, not just prompted for.
+  parameterScores Json @default("[]")
+  // 5-6 rollup cards: {key, label, level: Weak|Decent|Good|Strong,
+  // instanceNote} — every note must cite a real transcript moment.
+  skillCards      Json @default("[]")
+  // Radar axes vs a per-role static benchmark (labeled as a target bar for
+  // the role, not fabricated population data): {axis, score, benchmark}[].
+  radar           Json @default("[]")
+  // Per-question scores WITH a real occurredAt timestamp (P4's exact
+  // click-to-jump math: offset = occurredAt - session.startedAt), so the
+  // scorecard can deep-link into the actual recording, not just show text.
+  perQuestion     Json @default("[]")
+  // P5 — a shareable link's access control: an unguessable token, optional
+  // expiry, revocable by clearing shareToken (regenerating issues a new
+  // one). No accounts/login needed to view via the token — the token IS the
+  // credential, same pattern as e.g. a Figma/Notion "anyone with the link".
+  shareToken          String?   @unique
+  shareTokenExpiresAt DateTime?
 
   @@index([recommendation])
 }

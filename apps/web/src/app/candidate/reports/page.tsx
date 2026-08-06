@@ -1,6 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
+import Link from 'next/link';
 import { DashboardShell } from '@/components/dashboard-shell';
 import { api } from '@/lib/api';
 
@@ -44,7 +45,11 @@ export default function CandidateReports() {
             const integrity = typeof h.riskScore === 'number' ? Math.max(0, 100 - Math.round(h.riskScore)) : null;
             const flags = h._count?.proctorEvents ?? 0;
             return (
-              <div key={h.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-black/5 p-3 text-sm dark:border-white/10">
+              <Link
+                key={h.id}
+                href={h.evaluation ? `/candidate/reports/${h.id}` : '#'}
+                className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border border-black/5 p-3 text-sm dark:border-white/10 ${h.evaluation ? 'hover:bg-black/[0.02] dark:hover:bg-white/[0.02]' : 'pointer-events-none'}`}
+              >
                 <div>
                   <div className="font-medium">{h.interview.title}</div>
                   <div className="text-xs text-black/50 dark:text-white/50">{h.interview.category}{h.completedAt ? ` · ${new Date(h.completedAt).toLocaleDateString()}` : ''}</div>
@@ -62,7 +67,7 @@ export default function CandidateReports() {
                     {h.evaluation ? `${h.evaluation.overallScore} · ${h.evaluation.recommendation.replace('_', ' ')}` : 'Pending'}
                   </span>
                 </div>
-              </div>
+              </Link>
             );
           })}
           {!data?.history?.length && <p className="text-sm text-black/60 dark:text-white/60">No completed interviews yet.</p>}

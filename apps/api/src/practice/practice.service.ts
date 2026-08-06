@@ -484,7 +484,7 @@ export class PracticeService {
       category: Category;
       difficulty: Difficulty;
       jobRole?: string;
-      answers: { prompt: string; response: string }[];
+      answers: { prompt: string; response: string; occurredAt?: string }[];
       flags?: Record<string, number>;
       integrity?: number;
       behavior?: Record<string, unknown>;
@@ -530,25 +530,28 @@ export class PracticeService {
           transcript: { answers: input.answers, flags: input.flags ?? {}, integrity, behavior: input.behavior ?? {} } as Prisma.InputJsonValue,
         },
       });
+      const evalFields = {
+        overallScore: evaluation.overallScore,
+        competencies: evaluation.competencies as Prisma.InputJsonValue,
+        strengths: evaluation.strengths,
+        weaknesses: evaluation.weaknesses,
+        summary: evaluation.summary,
+        recommendation: evaluation.recommendation,
+        // P5 — this transaction is a second write path into Evaluation
+        // (separate from EvaluationService.persist, used by the DB-Answer-
+        // backed recruiter flow) since this one also needs to update
+        // InterviewSession in the same transaction. Must carry the same P5
+        // fields or the practice-room flow (self-serve AND recruiter-invited
+        // room sessions) would silently never get a rich report.
+        parameterScores: (evaluation.parameterScores ?? []) as unknown as Prisma.InputJsonValue,
+        skillCards: (evaluation.skillCards ?? []) as unknown as Prisma.InputJsonValue,
+        radar: (evaluation.radar ?? []) as unknown as Prisma.InputJsonValue,
+        perQuestion: (evaluation.perQuestion ?? []) as unknown as Prisma.InputJsonValue,
+      };
       await tx.evaluation.upsert({
         where: { sessionId },
-        create: {
-          sessionId,
-          overallScore: evaluation.overallScore,
-          competencies: evaluation.competencies,
-          strengths: evaluation.strengths,
-          weaknesses: evaluation.weaknesses,
-          summary: evaluation.summary,
-          recommendation: evaluation.recommendation,
-        },
-        update: {
-          overallScore: evaluation.overallScore,
-          competencies: evaluation.competencies,
-          strengths: evaluation.strengths,
-          weaknesses: evaluation.weaknesses,
-          summary: evaluation.summary,
-          recommendation: evaluation.recommendation,
-        },
+        create: { sessionId, ...evalFields },
+        update: evalFields,
       });
     });
 
