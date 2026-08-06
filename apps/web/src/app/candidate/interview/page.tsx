@@ -456,16 +456,22 @@ function InterviewRoomInner() {
       camVideo.srcObject = camStream; camVideo.muted = true; camVideo.playsInline = true;
       camVideo.play().catch(() => {});
 
-      let stopped = false;
+      // setInterval, not requestAnimationFrame: rAF fully stops in a
+      // backgrounded tab (verified live — a browser-automation session with
+      // document.hidden=true never painted a single frame, confirming this
+      // is a real behavior, not a hypothetical). A candidate briefly
+      // switching tabs (already flagged separately as tabSwitch) shouldn't
+      // also silently freeze their recording for that whole span — setInterval
+      // keeps running in background tabs too (throttled to ~1/sec by the
+      // browser in the worst case, but never fully paused like rAF is).
       const draw = () => {
-        if (stopped) return;
         try {
           ctx.drawImage(screenVideo, 0, 0, canvas.width, canvas.height);
           const pipW = 200, pipH = 150, pad = 12;
           ctx.drawImage(camVideo, canvas.width - pipW - pad, canvas.height - pipH - pad, pipW, pipH);
         } catch {}
-        requestAnimationFrame(draw);
       };
+      const drawInterval = setInterval(draw, 1000 / 15);
       draw();
 
       const canvasStream = (canvas as HTMLCanvasElement & { captureStream: (fps?: number) => MediaStream }).captureStream(15);
@@ -478,7 +484,7 @@ function InterviewRoomInner() {
       recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
       recorder.start(10_000);
       mediaRecorderRef.current = recorder;
-      recordingCompositeCleanupRef.current = () => { stopped = true; };
+      recordingCompositeCleanupRef.current = () => { clearInterval(drawInterval); };
 
       // Fetch the upload URL now, in parallel with the rest of the room
       // loading — ready well before it's actually needed at session end.
