@@ -97,6 +97,11 @@ export interface HyrteInboxMessage {
   fromStakeholder?: HyrteStakeholder | null;
   /** Set only on the auto-generated follow-up an ignored urgent message escalates into. */
   escalatesMessageId: string | null;
+  flagged: boolean;
+  archivedAt: string | null;
+  internalNotes: { text: string; createdAt: string }[];
+  convertedToWorkItemId: string | null;
+  reminderAt: string | null;
 }
 
 export interface HyrteWorldEvent {

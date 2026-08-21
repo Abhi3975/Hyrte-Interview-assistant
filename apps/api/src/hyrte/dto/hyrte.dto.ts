@@ -22,6 +22,31 @@ export class CreateHyrteSessionDto {
 
 export class ReplyInboxDto {
   @IsString() body!: string;
+  // Refinements doc §3 — CC on reply: real, not cosmetic — each CC'd
+  // stakeholder gets a genuine chance to respond via the same agent
+  // pipeline as the primary recipient.
+  @IsOptional() @IsArray() @IsString({ each: true }) ccStakeholderIds?: string[];
+}
+
+export class ForwardInboxDto {
+  @IsString() toStakeholderId!: string;
+  @IsOptional() @IsString() note?: string;
+}
+
+export class FlagInboxDto {
+  @IsOptional() @IsBoolean() flagged?: boolean;
+}
+
+export class ArchiveInboxDto {
+  @IsOptional() @IsBoolean() archived?: boolean;
+}
+
+export class AddInboxNoteDto {
+  @IsString() text!: string;
+}
+
+export class ScheduleReminderDto {
+  @IsOptional() @IsDateString() remindAt?: string;
 }
 
 export class SendSlackMessageDto {

@@ -1133,6 +1133,18 @@ model HyrteInboxMessage {
   // now).
   escalatesMessageId String?
 
+  // Refinements doc §3 — "Full Email Functionality" (Flag/Archive/Mark
+  // unread/Internal notes/Convert to task/Schedule reminder — CC handled as
+  // a reply-time action via ReplyInboxDto.ccStakeholderIds rather than a
+  // property of the received message, since world-generation never assigns
+  // multi-recipient emails today; Forward reuses the existing stakeholder
+  // agent pipeline rather than new state on this row).
+  flagged               Boolean   @default(false)
+  archivedAt            DateTime?
+  internalNotes         Json      @default("[]") // [{ text: string, createdAt: string }]
+  convertedToWorkItemId String?
+  reminderAt            DateTime?
+
   @@index([sessionId])
 }
 

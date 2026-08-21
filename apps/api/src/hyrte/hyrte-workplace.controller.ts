@@ -1,7 +1,20 @@
 import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { HyrteWorkplaceService } from './hyrte-workplace.service';
-import { CommandBarDto, ReplyInboxDto, SendMeetingMessageDto, SendSlackMessageDto, UpdateWorkItemDto, WorkItemReviewDto } from './dto/hyrte.dto';
+import {
+  AddInboxNoteDto,
+  ArchiveInboxDto,
+  CommandBarDto,
+  FlagInboxDto,
+  ForwardInboxDto,
+  MarkInboxReadDto,
+  ReplyInboxDto,
+  ScheduleReminderDto,
+  SendMeetingMessageDto,
+  SendSlackMessageDto,
+  UpdateWorkItemDto,
+  WorkItemReviewDto,
+} from './dto/hyrte.dto';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
@@ -33,9 +46,69 @@ export class HyrteWorkplaceController {
   markInboxRead(
     @Param('sessionId') sessionId: string,
     @Param('messageId') messageId: string,
+    @Body() dto: MarkInboxReadDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.workplace.markInboxRead(sessionId, messageId, user.id);
+    return this.workplace.markInboxRead(sessionId, messageId, user.id, dto.read ?? true);
+  }
+
+  @Post('inbox/:messageId/forward')
+  forwardInbox(
+    @Param('sessionId') sessionId: string,
+    @Param('messageId') messageId: string,
+    @Body() dto: ForwardInboxDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.workplace.forwardInbox(sessionId, messageId, dto, user.id);
+  }
+
+  @Patch('inbox/:messageId/flag')
+  flagInbox(
+    @Param('sessionId') sessionId: string,
+    @Param('messageId') messageId: string,
+    @Body() dto: FlagInboxDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.workplace.setInboxFlag(sessionId, messageId, dto, user.id);
+  }
+
+  @Patch('inbox/:messageId/archive')
+  archiveInbox(
+    @Param('sessionId') sessionId: string,
+    @Param('messageId') messageId: string,
+    @Body() dto: ArchiveInboxDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.workplace.setInboxArchived(sessionId, messageId, dto, user.id);
+  }
+
+  @Post('inbox/:messageId/notes')
+  addInboxNote(
+    @Param('sessionId') sessionId: string,
+    @Param('messageId') messageId: string,
+    @Body() dto: AddInboxNoteDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.workplace.addInboxNote(sessionId, messageId, dto, user.id);
+  }
+
+  @Post('inbox/:messageId/convert-to-task')
+  convertInboxToTask(
+    @Param('sessionId') sessionId: string,
+    @Param('messageId') messageId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.workplace.convertInboxToTask(sessionId, messageId, user.id);
+  }
+
+  @Post('inbox/:messageId/reminder')
+  scheduleInboxReminder(
+    @Param('sessionId') sessionId: string,
+    @Param('messageId') messageId: string,
+    @Body() dto: ScheduleReminderDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.workplace.scheduleInboxReminder(sessionId, messageId, dto, user.id);
   }
 
   @Get('slack')

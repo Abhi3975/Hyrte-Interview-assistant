@@ -2,7 +2,19 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { BehaviorContext, EvidenceType, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { HyrteGateway } from './hyrte.gateway';
-import { CommandBarDto, ReplyInboxDto, SendMeetingMessageDto, SendSlackMessageDto, UpdateWorkItemDto, WorkItemReviewDto } from './dto/hyrte.dto';
+import {
+  AddInboxNoteDto,
+  ArchiveInboxDto,
+  CommandBarDto,
+  FlagInboxDto,
+  ForwardInboxDto,
+  ReplyInboxDto,
+  ScheduleReminderDto,
+  SendMeetingMessageDto,
+  SendSlackMessageDto,
+  UpdateWorkItemDto,
+  WorkItemReviewDto,
+} from './dto/hyrte.dto';
 import { HyrteStakeholderAgentService } from './agents/stakeholder-agent.service';
 import { HyrteConsequenceService } from './consequences/consequence.service';
 import { DecisionGraphService } from './dig/decision-graph.service';
@@ -15,6 +27,8 @@ import { HyrteMeetingService } from './meetings/meeting.service';
 
 /** §4.12 Layers 5/9/11 — chance a stakeholder NOT party to an exchange independently reacts to it. Not 100%: constant chatter reads as noise, not signal. */
 const INDEPENDENT_REACTION_PROBABILITY = 0.5;
+/** Doc §3 "Schedule reminder" — default when the candidate doesn't pick a specific time. */
+const DEFAULT_REMINDER_MS = 5 * 60_000;
 
 @Injectable()
 export class HyrteWorkplaceService {
@@ -130,14 +144,166 @@ export class HyrteWorkplaceService {
           .catch((e) => this.logger.warn(e));
       }
     }
+
+    // Refinements doc §3 — CC, made real rather than cosmetic: each CC'd
+    // stakeholder gets an actual chance to weigh in via the same agent
+    // pipeline the primary recipient uses, not just a label on the message.
+    if (dto.ccStakeholderIds?.length) {
+      const validCcs = await this.prisma.hyrteStakeholder.findMany({
+        where: { sessionId, id: { in: dto.ccStakeholderIds } },
+        select: { id: true },
+      });
+      for (const cc of validCcs) {
+        if (cc.id === message.fromStakeholderId) continue; // already the primary recipient
+        this.agent
+          .respond(
+            sessionId,
+            cc.id,
+            `(You were CC'd on a reply about "${message.subject}".) ${dto.body}`,
+            { kind: 'inbox', subject: `Re: ${message.subject}` },
+            entry.id,
+          )
+          .catch((e) => this.logger.warn(e));
+      }
+    }
     return entry;
   }
 
-  async markInboxRead(sessionId: string, messageId: string, candidateId: string) {
+  /** Doc §3 — Forward: the receiving stakeholder gets a genuine in-character reaction, not a silent copy. */
+  async forwardInbox(sessionId: string, messageId: string, dto: ForwardInboxDto, candidateId: string) {
+    await this.assertOwnership(sessionId, candidateId);
+    const message = await this.prisma.hyrteInboxMessage.findFirst({
+      where: { id: messageId, sessionId },
+      include: { fromStakeholder: { select: { name: true, role: true } } },
+    });
+    if (!message) throw new NotFoundException('Message not found');
+    const target = await this.prisma.hyrteStakeholder.findFirst({ where: { id: dto.toStakeholderId, sessionId } });
+    if (!target) throw new NotFoundException('Stakeholder not found');
+
+    const entry = await this.logDecision(
+      sessionId,
+      candidateId,
+      'email.forward',
+      { messageId, toStakeholderId: dto.toStakeholderId, note: dto.note },
+      `Forwarded an email ("${message.subject}") to ${target.name}${dto.note ? ` with note: "${dto.note}"` : ''}`,
+    );
+
+    const forwardedContent =
+      `(This was forwarded to you from ${message.fromStakeholder?.name ?? 'someone'}` +
+      `${message.fromStakeholder?.role ? ` (${message.fromStakeholder.role})` : ''}: "${message.body}")` +
+      (dto.note ? `\n\nNote from the candidate: "${dto.note}"` : '');
+    this.agent
+      .respond(sessionId, target.id, forwardedContent, { kind: 'inbox', subject: `Fwd: ${message.subject}` }, entry.id)
+      .catch((e) => this.logger.warn(e));
+
+    return entry;
+  }
+
+  /** Explicit read/unread toggle — was hardcoded to always mark read regardless of the DTO's `read` field. */
+  async markInboxRead(sessionId: string, messageId: string, candidateId: string, read = true) {
     await this.assertOwnership(sessionId, candidateId);
     const message = await this.prisma.hyrteInboxMessage.findFirst({ where: { id: messageId, sessionId } });
     if (!message) throw new NotFoundException('Message not found');
-    return this.prisma.hyrteInboxMessage.update({ where: { id: messageId }, data: { readAt: new Date() } });
+    return this.prisma.hyrteInboxMessage.update({ where: { id: messageId }, data: { readAt: read ? new Date() : null } });
+  }
+
+  async setInboxFlag(sessionId: string, messageId: string, dto: FlagInboxDto, candidateId: string) {
+    await this.assertOwnership(sessionId, candidateId);
+    const message = await this.prisma.hyrteInboxMessage.findFirst({ where: { id: messageId, sessionId } });
+    if (!message) throw new NotFoundException('Message not found');
+    return this.prisma.hyrteInboxMessage.update({ where: { id: messageId }, data: { flagged: dto.flagged ?? !message.flagged } });
+  }
+
+  async setInboxArchived(sessionId: string, messageId: string, dto: ArchiveInboxDto, candidateId: string) {
+    await this.assertOwnership(sessionId, candidateId);
+    const message = await this.prisma.hyrteInboxMessage.findFirst({ where: { id: messageId, sessionId } });
+    if (!message) throw new NotFoundException('Message not found');
+    const archived = dto.archived ?? !message.archivedAt;
+    return this.prisma.hyrteInboxMessage.update({ where: { id: messageId }, data: { archivedAt: archived ? new Date() : null } });
+  }
+
+  async addInboxNote(sessionId: string, messageId: string, dto: AddInboxNoteDto, candidateId: string) {
+    await this.assertOwnership(sessionId, candidateId);
+    const message = await this.prisma.hyrteInboxMessage.findFirst({ where: { id: messageId, sessionId } });
+    if (!message) throw new NotFoundException('Message not found');
+    const notes = Array.isArray(message.internalNotes) ? message.internalNotes : [];
+    const updatedNotes = [...notes, { text: dto.text, createdAt: new Date().toISOString() }];
+    return this.prisma.hyrteInboxMessage.update({
+      where: { id: messageId },
+      data: { internalNotes: updatedNotes as unknown as Prisma.InputJsonValue },
+    });
+  }
+
+  /** Doc §3 — Convert to task: a real HyrteWorkItem, candidate-owned, reusing the exact same Work Pipeline everything else lands in. */
+  async convertInboxToTask(sessionId: string, messageId: string, candidateId: string) {
+    await this.assertOwnership(sessionId, candidateId);
+    const message = await this.prisma.hyrteInboxMessage.findFirst({ where: { id: messageId, sessionId } });
+    if (!message) throw new NotFoundException('Message not found');
+    if (message.convertedToWorkItemId) {
+      const existing = await this.prisma.hyrteWorkItem.findUnique({ where: { id: message.convertedToWorkItemId } });
+      if (existing) return existing;
+    }
+
+    const workItem = await this.prisma.hyrteWorkItem.create({
+      data: {
+        sessionId,
+        title: message.subject,
+        type: 'REPLY',
+        priority: message.urgent ? 'HIGH' : 'MEDIUM',
+        origin: 'EVENT',
+        ownerIsCandidate: true,
+        history: [
+          { at: new Date().toISOString(), actor: 'You', action: 'created', note: `Converted from email "${message.subject}"` },
+        ] as unknown as Prisma.InputJsonValue,
+      },
+    });
+    await this.prisma.hyrteInboxMessage.update({ where: { id: messageId }, data: { convertedToWorkItemId: workItem.id } });
+    this.gateway.broadcast(sessionId, { type: 'task:update', task: workItem });
+
+    await this.logDecision(
+      sessionId,
+      candidateId,
+      'email.convert_to_task',
+      { messageId, workItemId: workItem.id },
+      `Converted an email ("${message.subject}") into a task`,
+    );
+    return workItem;
+  }
+
+  /** Doc §3 — Schedule reminder: a real timer that genuinely re-surfaces the message (bumps it back to unread) at the chosen time, not a UI-only label. */
+  async scheduleInboxReminder(sessionId: string, messageId: string, dto: ScheduleReminderDto, candidateId: string) {
+    await this.assertOwnership(sessionId, candidateId);
+    const message = await this.prisma.hyrteInboxMessage.findFirst({ where: { id: messageId, sessionId } });
+    if (!message) throw new NotFoundException('Message not found');
+
+    const remindAt = dto.remindAt ? new Date(dto.remindAt) : new Date(Date.now() + DEFAULT_REMINDER_MS);
+    const delayMs = Math.max(5_000, remindAt.getTime() - Date.now());
+    const updated = await this.prisma.hyrteInboxMessage.update({ where: { id: messageId }, data: { reminderAt: remindAt } });
+
+    setTimeout(() => {
+      this.fireInboxReminder(sessionId, messageId).catch((e) => this.logger.warn(e));
+    }, delayMs);
+
+    await this.logDecision(
+      sessionId,
+      candidateId,
+      'email.schedule_reminder',
+      { messageId, remindAt: remindAt.toISOString() },
+      `Scheduled a reminder for an email ("${message.subject}") at ${remindAt.toISOString()}`,
+    );
+    return updated;
+  }
+
+  private async fireInboxReminder(sessionId: string, messageId: string): Promise<void> {
+    const [message, session] = await Promise.all([
+      this.prisma.hyrteInboxMessage.findUnique({ where: { id: messageId } }),
+      this.prisma.hyrteSession.findUnique({ where: { id: sessionId }, select: { phase: true } }),
+    ]);
+    // Same "world may have moved on" guard as every other self-scheduling
+    // timer in this codebase — don't remind into a finished session.
+    if (!message || !session || session.phase !== 'WORKSPACE_ACTIVE') return;
+    const updated = await this.prisma.hyrteInboxMessage.update({ where: { id: messageId }, data: { readAt: null } });
+    this.gateway.broadcast(sessionId, { type: 'inbox:new', message: updated });
   }
 
   // ── Slack ──
