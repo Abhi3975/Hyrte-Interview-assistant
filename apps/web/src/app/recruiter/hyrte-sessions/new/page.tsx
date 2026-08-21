@@ -3,9 +3,9 @@
 import { useState } from 'react';
 import { DashboardShell } from '@/components/dashboard-shell';
 import { api, ApiError } from '@/lib/api';
+import { INDUSTRY_CATEGORIES, INDUSTRY_VERTICAL_LABELS } from '@/lib/hyrte-industries';
 
 const EXPERIENCE_LEVELS = ['Intern', 'Junior', 'Mid', 'Senior', 'Lead/Manager'];
-const INDUSTRIES = ['SaaS', 'Healthcare', 'E-commerce', 'Manufacturing', 'Banking'];
 const COMPANY_TYPES = ['Startup', 'SME', 'Enterprise', 'Consulting', 'Government'];
 const DIFFICULTIES = ['EASY', 'MEDIUM', 'HARD', 'EXPERT'];
 
@@ -46,7 +46,7 @@ export default function NewHyrteSessionPage() {
 
   const [role, setRole] = useState('');
   const [experienceLevel, setExperienceLevel] = useState(EXPERIENCE_LEVELS[2]);
-  const [industry, setIndustry] = useState(INDUSTRIES[0]);
+  const [industry, setIndustry] = useState(INDUSTRY_CATEGORIES[0].verticals[0].label);
   const [companyType, setCompanyType] = useState(COMPANY_TYPES[0]);
   const [difficulty, setDifficulty] = useState(DIFFICULTIES[1]);
   const [culture, setCulture] = useState('');
@@ -64,7 +64,7 @@ export default function NewHyrteSessionPage() {
       setRole(result.role ?? '');
       const seed = result.suggestedSeed ?? {};
       setExperienceLevel(closestMatch(seed.experienceLevel, EXPERIENCE_LEVELS));
-      setIndustry(closestMatch(seed.industry, INDUSTRIES));
+      setIndustry(closestMatch(seed.industry, INDUSTRY_VERTICAL_LABELS));
       setCompanyType(closestMatch(seed.companyType, COMPANY_TYPES));
       setDifficulty(closestMatch(seed.difficulty?.toUpperCase(), DIFFICULTIES));
       setCulture(seed.culture ?? '');
@@ -175,7 +175,7 @@ export default function NewHyrteSessionPage() {
                 />
               </label>
               <Field label="Experience level" value={experienceLevel} onChange={setExperienceLevel} options={EXPERIENCE_LEVELS} />
-              <Field label="Industry" value={industry} onChange={setIndustry} options={INDUSTRIES} />
+              <GroupedField label="Industry" value={industry} onChange={setIndustry} />
               <Field label="Company type" value={companyType} onChange={setCompanyType} options={COMPANY_TYPES} />
               <Field label="Difficulty" value={difficulty} onChange={setDifficulty} options={DIFFICULTIES} />
               <label className="col-span-2 block">
@@ -224,6 +224,38 @@ function closestMatch(value: string | undefined, options: string[]): string {
   if (!value) return options[0];
   const found = options.find((o) => o.toLowerCase() === value.toLowerCase());
   return found ?? options[0];
+}
+
+/** Recruiter doc §2 — real categories with sub-verticals, rendered as native <optgroup>s rather than a flat 5-item list. */
+function GroupedField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-sm font-medium">{label}</span>
+      <select
+        className="w-full rounded-lg border border-black/10 bg-transparent px-3 py-2 text-sm dark:border-white/10"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {INDUSTRY_CATEGORIES.map((category) => (
+          <optgroup key={category.id} label={category.label} className="text-black">
+            {category.verticals.map((v) => (
+              <option key={v.id} value={v.label} className="text-black">
+                {v.label}
+              </option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+    </label>
+  );
 }
 
 function Field({

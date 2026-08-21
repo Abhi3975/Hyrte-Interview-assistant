@@ -3,6 +3,7 @@ import { AIService } from '../../ai/ai.service';
 import { CreateHyrteSessionDto } from '../dto/hyrte.dto';
 import { COMPANY_STATE_KEYS } from '../consequences/consequence.service';
 import { ValidationReport, WorldStabilizationError, validateWorld } from './world-stabilization';
+import { applyIndustryBias, industryGroundingNote } from './industry-templates';
 import {
   FixtureCalendarEvent,
   FixtureDepartment,
@@ -176,6 +177,10 @@ export class HyrteSimulationGeneratorService {
     const artifacts: WorldGenerationArtifact[] = [];
     const nonce = Math.random().toString(36).slice(2, 8);
     const groundingNote = this.groundingNote(grounding);
+    // Recruiter doc §2 — real industry template grounding (concrete
+    // vocabulary/stakeholder-archetypes/typical-crises), not just the
+    // industry's name dropped into a sentence.
+    const industryNote = industryGroundingNote(dto.industry);
 
     // Step 2 — Company + Organization + Company State.
     const companyOrg = await this.step<CompanyOrgResult>(
@@ -187,7 +192,7 @@ export class HyrteSimulationGeneratorService {
         `starting company-state numbers are and how many things are simultaneously on fire. Company ` +
         `culture: ${dto.culture} — reflect this only in tone/flavor, not the numeric state. Invent a ` +
         `unique fictional company name — do not reuse common example names like Acme, Nimbus, or ` +
-        `TechCorp. Variety seed: ${nonce}.${groundingNote}`,
+        `TechCorp. Variety seed: ${nonce}.${groundingNote}${industryNote}`,
       () => ({
         companyName: 'Unnamed Co',
         companyState: {},
@@ -198,7 +203,8 @@ export class HyrteSimulationGeneratorService {
     );
     const companyName = typeof companyOrg.companyName === 'string' && companyOrg.companyName.trim() ? companyOrg.companyName.trim() : 'Unnamed Co';
     const departments = sanitizeDepartments(companyOrg.departments);
-    const companyState = sanitizeCompanyState(companyOrg.companyState);
+    // Real, deterministic per-industry bias — a guarantee, not a prompt hope.
+    const companyState = applyIndustryBias(sanitizeCompanyState(companyOrg.companyState), dto.industry);
     const missionBrief = sanitizeMissionBrief(companyOrg.missionBrief);
     const baselineChallenge = sanitizeBaselineChallenge(companyOrg.baselineChallenge);
 
@@ -209,7 +215,7 @@ export class HyrteSimulationGeneratorService {
       STAKEHOLDERS_SYSTEM,
       `Company: ${companyName}. Departments: ${departments.map((d) => d.name).join(', ')}. Role this ` +
         `candidate is filling: ${dto.experienceLevel} ${dto.role}. Difficulty: ${dto.difficulty} — higher ` +
-        `difficulty means higher stress/urgency and lower patience across the roster. Culture: ${dto.culture}.`,
+        `difficulty means higher stress/urgency and lower patience across the roster. Culture: ${dto.culture}.${industryNote}`,
       () => ({ stakeholders: [] }),
     );
     const stakeholders = sanitizeStakeholders(stakeholdersRaw.stakeholders, departments);
@@ -235,7 +241,7 @@ export class HyrteSimulationGeneratorService {
         'knowledge',
         artifacts,
         KNOWLEDGE_SYSTEM,
-        `Company: ${companyName}. Roster: ${JSON.stringify(roster)}. Role: ${dto.role} (${dto.industry}).`,
+        `Company: ${companyName}. Roster: ${JSON.stringify(roster)}. Role: ${dto.role} (${dto.industry}).${industryNote}`,
         () => ({ knowledgeDocs: [] }),
       ),
       this.step<WorkplaceAssetsResult>(

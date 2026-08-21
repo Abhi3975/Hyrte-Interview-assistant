@@ -6,6 +6,7 @@ import { HyrteGateway } from '../hyrte.gateway';
 import { EvidenceGraphService } from '../dig/evidence-graph.service';
 import { DecisionGraphService } from '../dig/decision-graph.service';
 import { toCandidateStakeholder } from '../dig/hidden-intention.util';
+import { industryGroundingNote } from '../generator/industry-templates';
 
 export const COMPANY_STATE_KEYS = [
   'revenue',
@@ -713,7 +714,7 @@ export class HyrteConsequenceService {
           role: 'user',
           content:
             `Company: ${session.companyName} (${session.role} role). Current state: ` +
-            `${JSON.stringify(omitMeta(companyState))}. Roster: ${JSON.stringify(roster)}.`,
+            `${JSON.stringify(omitMeta(companyState))}. Roster: ${JSON.stringify(roster)}.${industryGroundingNote(session.industry)}`,
         },
       ],
       { temperature: 0.9, maxTokens: 900 },

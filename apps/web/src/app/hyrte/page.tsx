@@ -4,10 +4,10 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { DashboardShell } from '@/components/dashboard-shell';
 import { api, ApiError } from '@/lib/api';
+import { INDUSTRY_CATEGORIES } from '@/lib/hyrte-industries';
 
 const ROLES = ['Product Manager', 'Software Engineer', 'Sales Executive', 'HR', 'Finance', 'Marketing'];
 const EXPERIENCE_LEVELS = ['Intern', 'Junior', 'Mid', 'Senior', 'Lead/Manager'];
-const INDUSTRIES = ['SaaS', 'Healthcare', 'E-commerce', 'Manufacturing', 'Banking'];
 const COMPANY_TYPES = ['Startup', 'SME', 'Enterprise', 'Consulting', 'Government'];
 const DIFFICULTIES = ['EASY', 'MEDIUM', 'HARD', 'EXPERT'];
 const CULTURES = [
@@ -28,7 +28,7 @@ export default function HyrteEntry() {
   const router = useRouter();
   const [role, setRole] = useState(ROLES[0]);
   const [experienceLevel, setExperienceLevel] = useState(EXPERIENCE_LEVELS[2]);
-  const [industry, setIndustry] = useState(INDUSTRIES[0]);
+  const [industry, setIndustry] = useState(INDUSTRY_CATEGORIES[0].verticals[0].label);
   const [companyType, setCompanyType] = useState(COMPANY_TYPES[0]);
   const [difficulty, setDifficulty] = useState(DIFFICULTIES[1]);
   const [culture, setCulture] = useState(CULTURES[0]);
@@ -87,7 +87,7 @@ export default function HyrteEntry() {
         <div className="card space-y-5">
           <Field label="Role" value={role} onChange={setRole} options={ROLES} />
           <Field label="Experience level" value={experienceLevel} onChange={setExperienceLevel} options={EXPERIENCE_LEVELS} />
-          <Field label="Industry" value={industry} onChange={setIndustry} options={INDUSTRIES} />
+          <GroupedField label="Industry" value={industry} onChange={setIndustry} />
           <Field label="Company type" value={companyType} onChange={setCompanyType} options={COMPANY_TYPES} />
           <Field label="Difficulty" value={difficulty} onChange={setDifficulty} options={DIFFICULTIES} />
           <Field label="Company culture" value={culture} onChange={setCulture} options={CULTURES} />
@@ -124,6 +124,38 @@ export default function HyrteEntry() {
         </div>
       </div>
     </DashboardShell>
+  );
+}
+
+/** Recruiter doc §2 — real categories with sub-verticals, rendered as native <optgroup>s rather than a flat 5-item list. */
+function GroupedField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-sm font-medium">{label}</span>
+      <select
+        className="w-full rounded-lg border border-black/10 bg-transparent px-3 py-2 text-sm dark:border-white/10"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {INDUSTRY_CATEGORIES.map((category) => (
+          <optgroup key={category.id} label={category.label} className="text-black">
+            {category.verticals.map((v) => (
+              <option key={v.id} value={v.label} className="text-black">
+                {v.label}
+              </option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+    </label>
   );
 }
 
