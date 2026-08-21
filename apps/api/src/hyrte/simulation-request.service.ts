@@ -38,10 +38,12 @@ export class SimulationRequestService {
   ) {}
 
   async preview(dto: PreviewSimulationRequestDto): Promise<DecomposedJd> {
-    return this.decompose(dto.jobDescriptionText, dto.companyContext);
+    this.assertHasContent(dto.jobDescriptionText, dto.customRequirements);
+    return this.decompose(dto.jobDescriptionText, dto.companyContext, dto.customRequirements);
   }
 
   async create(recruiterId: string, dto: CreateSimulationRequestDto) {
+    this.assertHasContent(dto.jobDescriptionText, dto.customRequirements);
     const code = randomBytes(6).toString('base64url');
     return this.prisma.hyrteSimulationRequest.create({
       data: {
@@ -49,6 +51,7 @@ export class SimulationRequestService {
         code,
         jobDescriptionRaw: dto.jobDescriptionText,
         companyContextRaw: dto.companyContext,
+        customRequirements: dto.customRequirements ?? [],
         role: dto.role,
         coreOutcomes: dto.coreOutcomes,
         capabilityRequirements: dto.capabilityRequirements as unknown as Prisma.InputJsonValue,
@@ -61,6 +64,15 @@ export class SimulationRequestService {
         culture: dto.culture,
       },
     });
+  }
+
+  /** Recruiter doc §1 — a recruiter can define an assessment from custom requirements alone, but must give SOMETHING. */
+  private assertHasContent(jobDescriptionText?: string, customRequirements?: string[]): void {
+    const hasJd = !!jobDescriptionText?.trim();
+    const hasRequirements = (customRequirements ?? []).some((r) => r.trim());
+    if (!hasJd && !hasRequirements) {
+      throw new BadRequestException('Provide a job description or at least one custom requirement');
+    }
   }
 
   async listMine(recruiterId: string) {
@@ -104,10 +116,14 @@ export class SimulationRequestService {
     return this.sessions.createFromSimulationRequest(request, candidateId);
   }
 
-  private async decompose(jobDescriptionText: string, companyContextText: string | undefined): Promise<DecomposedJd> {
+  private async decompose(jobDescriptionText: string | undefined, companyContextText: string | undefined, customRequirements?: string[]): Promise<DecomposedJd> {
     const userContent =
-      `Job description:\n${jobDescriptionText.trim().slice(0, 6000)}` +
-      (companyContextText?.trim() ? `\n\nCompany/industry context:\n${companyContextText.trim().slice(0, 2000)}` : '');
+      (jobDescriptionText?.trim() ? `Job description:\n${jobDescriptionText.trim().slice(0, 6000)}` : '') +
+      (companyContextText?.trim() ? `\n\nCompany/industry context:\n${companyContextText.trim().slice(0, 2000)}` : '') +
+      (customRequirements?.length
+        ? `\n\nRecruiter's custom interview requirements (use these to inform coreOutcomes/capabilityRequirements ` +
+          `even without a full JD):\n${customRequirements.map((r, i) => `${i + 1}. ${r}`).join('\n')}`
+        : '');
     return this.ai.completeJson<DecomposedJd>(
       [
         {

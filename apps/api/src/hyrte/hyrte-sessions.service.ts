@@ -88,6 +88,7 @@ export class HyrteSessionsService {
       coreOutcomes: request.coreOutcomes,
       capabilityRequirements: (request.capabilityRequirements ?? []) as unknown as JobSuccessModelGrounding['capabilityRequirements'],
       industryProbeThemes: ((request.industryContext as { probeThemes?: string[] } | null)?.probeThemes ?? []),
+      customRequirements: request.customRequirements,
     };
     const session = await this.createPlaceholder(dto, candidateId, { simulationRequestId: request.id });
 

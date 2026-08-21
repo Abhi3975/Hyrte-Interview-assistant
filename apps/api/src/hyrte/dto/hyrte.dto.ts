@@ -140,8 +140,14 @@ export class SubmitBaselineChallengeDto {
 // whatever the recruiter ended up with after reviewing the preview
 // (defaults or edited).
 export class PreviewSimulationRequestDto {
-  @IsString() jobDescriptionText!: string;
+  // Optional — recruiter doc §1: a recruiter can define an assessment from
+  // customRequirements alone, no full JD paste required.
+  @IsOptional() @IsString() jobDescriptionText?: string;
   @IsOptional() @IsString() companyContext?: string;
+  // Recruiter doc §1 "Recruiter Custom Questions" — free-text business
+  // requirements, each converted into a real embedded scenario, never
+  // literal question text (see SimulationGeneratorService.groundingNote).
+  @IsOptional() @IsArray() @IsString({ each: true }) customRequirements?: string[];
 }
 
 class CapabilityRequirementDto {
@@ -151,8 +157,9 @@ class CapabilityRequirementDto {
 }
 
 export class CreateSimulationRequestDto {
-  @IsString() jobDescriptionText!: string;
+  @IsOptional() @IsString() jobDescriptionText?: string;
   @IsOptional() @IsString() companyContext?: string;
+  @IsOptional() @IsArray() @IsString({ each: true }) customRequirements?: string[];
 
   @IsString() role!: string;
   @IsArray() @IsString({ each: true }) coreOutcomes!: string[];

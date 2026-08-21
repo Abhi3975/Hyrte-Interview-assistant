@@ -38,6 +38,10 @@ interface CreatedRequest {
 export default function NewHyrteSessionPage() {
   const [jobDescriptionText, setJobDescriptionText] = useState('');
   const [companyContext, setCompanyContext] = useState('');
+  // Recruiter doc §1 "Recruiter Custom Questions" — free-text business
+  // requirements, independent of the JD paste box. Each one becomes a real
+  // embedded scenario at world-generation time, never literal question text.
+  const [customRequirements, setCustomRequirements] = useState<string[]>(['']);
   const [previewing, setPreviewing] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
@@ -51,14 +55,18 @@ export default function NewHyrteSessionPage() {
   const [difficulty, setDifficulty] = useState(DIFFICULTIES[1]);
   const [culture, setCulture] = useState('');
 
+  const cleanRequirements = customRequirements.map((r) => r.trim()).filter(Boolean);
+  const hasContent = !!jobDescriptionText.trim() || cleanRequirements.length > 0;
+
   async function decompose() {
-    if (!jobDescriptionText.trim()) return;
+    if (!hasContent) return;
     setPreviewing(true);
     setError('');
     try {
       const result = await api.post<DecomposedJd>('/hyrte/simulation-requests/preview', {
-        jobDescriptionText,
+        jobDescriptionText: jobDescriptionText || undefined,
         companyContext: companyContext || undefined,
+        customRequirements: cleanRequirements.length ? cleanRequirements : undefined,
       });
       setDecomposed(result);
       setRole(result.role ?? '');
@@ -81,8 +89,9 @@ export default function NewHyrteSessionPage() {
     setError('');
     try {
       const result = await api.post<CreatedRequest>('/hyrte/simulation-requests', {
-        jobDescriptionText,
+        jobDescriptionText: jobDescriptionText || undefined,
         companyContext: companyContext || undefined,
+        customRequirements: cleanRequirements.length ? cleanRequirements : undefined,
         role,
         coreOutcomes: decomposed.coreOutcomes ?? [],
         capabilityRequirements: decomposed.capabilityRequirements ?? [],
@@ -107,8 +116,9 @@ export default function NewHyrteSessionPage() {
     <DashboardShell area="recruiter" title="New HYRTE Simulation" requiredRoles={['RECRUITER', 'ORG_ADMIN', 'SUPER_ADMIN']}>
       <div className="mx-auto max-w-2xl space-y-5 py-6">
         <p className="text-sm text-black/60 dark:text-white/60">
-          Paste a real job description. Nothing generates until it&apos;s decomposed here — the simulation
-          candidates enter is grounded in this text, not a generic role template.
+          Paste a real job description and/or add custom interview requirements below. Nothing generates
+          until it&apos;s processed here — the simulation candidates enter is grounded in this, not a
+          generic role template.
         </p>
 
         {error && <p className="rounded-lg bg-red-500/10 p-3 text-sm text-red-500">{error}</p>}
@@ -116,7 +126,7 @@ export default function NewHyrteSessionPage() {
         {!created && (
           <div className="card space-y-3">
             <label className="block">
-              <span className="mb-1 block text-sm font-medium">Job description</span>
+              <span className="mb-1 block text-sm font-medium">Job description (optional)</span>
               <textarea
                 value={jobDescriptionText}
                 onChange={(e) => setJobDescriptionText(e.target.value)}
@@ -134,8 +144,47 @@ export default function NewHyrteSessionPage() {
                 className="w-full rounded-lg border border-black/10 bg-transparent px-3 py-2 text-sm outline-none focus:border-brand-500 dark:border-white/15"
               />
             </label>
-            <button className="btn-primary" disabled={previewing || !jobDescriptionText.trim()} onClick={decompose}>
-              {previewing ? 'Decomposing…' : decomposed ? 'Re-decompose' : 'Decompose job description'}
+
+            <div className="border-t border-black/10 pt-3 dark:border-white/15">
+              <span className="mb-1 block text-sm font-medium">Custom interview requirements (optional)</span>
+              <p className="mb-2 text-xs text-black/50 dark:text-white/50">
+                Write these like notes to yourself, not exam questions — e.g. &quot;How would you handle an
+                angry enterprise customer threatening churn?&quot; Each one becomes a real situation the
+                candidate discovers naturally through their inbox, Slack, and meetings — never a literal
+                question shown on screen.
+              </p>
+              <div className="space-y-2">
+                {customRequirements.map((req, i) => (
+                  <div key={i} className="flex gap-2">
+                    <input
+                      value={req}
+                      onChange={(e) =>
+                        setCustomRequirements((prev) => prev.map((r, idx) => (idx === i ? e.target.value : r)))
+                      }
+                      placeholder="e.g. Test how they'd scale our API under sudden load"
+                      className="flex-1 rounded-lg border border-black/10 bg-transparent px-3 py-2 text-sm outline-none focus:border-brand-500 dark:border-white/15"
+                    />
+                    {customRequirements.length > 1 && (
+                      <button
+                        className="btn-ghost text-xs"
+                        onClick={() => setCustomRequirements((prev) => prev.filter((_, idx) => idx !== i))}
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <button
+                className="mt-2 text-xs font-medium text-brand-600 hover:underline dark:text-brand-400"
+                onClick={() => setCustomRequirements((prev) => [...prev, ''])}
+              >
+                + Add another requirement
+              </button>
+            </div>
+
+            <button className="btn-primary" disabled={previewing || !hasContent} onClick={decompose}>
+              {previewing ? 'Processing…' : decomposed ? 'Re-process' : 'Continue'}
             </button>
           </div>
         )}

@@ -69,6 +69,8 @@ export interface JobSuccessModelGrounding {
   coreOutcomes: string[];
   capabilityRequirements: { skill: string; importance: string; depth?: string }[];
   industryProbeThemes: string[];
+  /** Recruiter doc §1 "Recruiter Custom Questions" — see groundingNote() for how each becomes a real embedded scenario, never literal question text. */
+  customRequirements?: string[];
 }
 
 /** One row per pipeline step — persisted by the caller (HyrteSessionsService) once the session exists. */
@@ -269,7 +271,7 @@ export class HyrteSimulationGeneratorService {
         'event_queue',
         artifacts,
         eventQueueSystem(dto.difficulty),
-        `Company: ${companyName}. Roster: ${JSON.stringify(roster)}.`,
+        `Company: ${companyName}. Roster: ${JSON.stringify(roster)}.${groundingNote}`,
         () => ({ scheduledEvents: [] }),
       ),
       this.step<SignatureArtifactResult>(
@@ -340,6 +342,21 @@ export class HyrteSimulationGeneratorService {
 
   private groundingNote(grounding?: JobSuccessModelGrounding): string {
     if (!grounding) return '';
+    const customRequirementsBlock =
+      grounding.customRequirements && grounding.customRequirements.length > 0
+        ? '\n\nRECRUITER CUSTOM REQUIREMENTS (doc §1 "Recruiter Custom Questions" — critical instruction): the ' +
+          'recruiter wrote the following as internal notes to YOU, the simulation designer — they must NEVER ' +
+          'appear anywhere in candidate-facing content as literal text, a question, or a task/email titled ' +
+          'after them ("Question 1", "Handle the churn scenario", etc. are all forbidden). Instead, each one ' +
+          'must be converted into a real embedded business scenario the candidate discovers naturally through ' +
+          'normal work. Worked example from the doc itself: the requirement "How would you handle an angry ' +
+          'enterprise customer threatening churn?" becomes — a customer email expressing frustration appears in ' +
+          'the inbox, a colleague pings about the account in Slack, the mission or a task references the churn ' +
+          'risk, and the candidate is expected to actually respond to the customer and coordinate internally. ' +
+          'The candidate should never realize any of this traces back to a checklist — it should just feel like ' +
+          'a real situation that happened to come up. Apply this treatment to EACH of the following:\n' +
+          grounding.customRequirements.map((r, i) => `${i + 1}. ${r}`).join('\n')
+        : '';
     return (
       '\n\nThis simulation must be grounded in a REAL job description a recruiter provided — the crisis, ' +
       'tasks, and inbox/Slack content should let the candidate actually demonstrate or fail these specific ' +
@@ -347,7 +364,8 @@ export class HyrteSimulationGeneratorService {
       `- Core outcomes this role must accomplish: ${grounding.coreOutcomes.join('; ') || 'n/a'}\n` +
       `- Capability requirements to probe: ${grounding.capabilityRequirements.map((c) => `${c.skill} (${c.importance})`).join(', ') || 'n/a'}\n` +
       `- Industry themes to weave in: ${grounding.industryProbeThemes.join(', ') || 'n/a'}\n` +
-      'At least one task and one inbox/Slack message must directly test one of the core outcomes above.'
+      'At least one task and one inbox/Slack message must directly test one of the core outcomes above.' +
+      customRequirementsBlock
     );
   }
 

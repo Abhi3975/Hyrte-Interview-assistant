@@ -1540,8 +1540,15 @@ model HyrteSimulationRequest {
   code        String                       @unique
   status      HyrteSimulationRequestStatus @default(OPEN)
 
-  jobDescriptionRaw      String
+  // Nullable — recruiter doc §1: a recruiter can define an assessment
+  // purely from customRequirements below, with no full JD paste required.
+  jobDescriptionRaw      String?
   companyContextRaw      String?
+  // Recruiter doc §1 "Recruiter Custom Questions" — free-text business
+  // requirements (e.g. "How would you handle an angry enterprise customer
+  // threatening churn?"), each converted into a real embedded scenario at
+  // world-generation time — NEVER injected as literal "Question N" text.
+  customRequirements     String[] @default([])
   // Job Success Model decomposition (§3.3 shape), cached here at creation
   // time so launch() never has to re-call the LLM — copied verbatim into a
   // real JobSuccessModel row, linked to the session, at launch.
