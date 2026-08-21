@@ -36,8 +36,22 @@ const MIN_IGNORED_WINDOW_MS = 45_000;
 const MAX_IGNORED_WINDOW_MS = 75_000;
 /** §4.5 Chaos Engine — wave 1, timed from workspace unlock, not from random ticks. */
 const CHAOS_WAVE_DELAY_MS = 100_000;
-/** Part F7 — wave 2's own delay after wave 1 actually fires (not calibration-adjusted — that grace period was about first-contact onboarding, not a second hit). */
-const SECOND_WAVE_DELAY_MS = 120_000;
+/**
+ * Refinements doc §"Dynamic Difficulty" — "difficulty should evolve
+ * throughout the simulation instead of being fixed at the start." Waves 2+
+ * used to be capped at exactly one extra wave with a fixed delay — a
+ * deliberate scope decision at the time, explicitly NOT the doc's
+ * open-ended "multiple waves" ask. This is that gap closed: waves now keep
+ * coming (bounded, not literally forever — same "periodic for a compressed
+ * session" reasoning as every other capped cycle here) at a cadence AND
+ * burst size that adapt to a live, ongoing performance signal — not the
+ * one-time Role Calibration score, which only ever reflects the candidate's
+ * first two answers before any real work happened.
+ */
+const CHAOS_WAVE_CADENCE_MS = 150_000;
+const MAX_CHAOS_WAVES = 6;
+const CHAOS_WAVE_BURST_MIN = 2;
+const CHAOS_WAVE_BURST_MAX = 6;
 /** Part F7 — "difficulty-scaled bursts of 3-5 simultaneous demands." */
 const BURST_SIZE_BY_DIFFICULTY: Record<string, number> = { EASY: 2, MEDIUM: 3, HARD: 4, EXPERT: 5 };
 /** Part F7 cross-functional cascade chains. */
@@ -658,23 +672,43 @@ export class HyrteConsequenceService {
    * fired). `wave` defaults to 1 for every external caller; wave 2 is
    * self-scheduled by triggerChaosWave once wave 1 actually fires — capped at
    * 2 waves total, a deliberate scope decision, not the doc's open-ended
-   * "multiple waves."
+   * "multiple waves." Dynamic Difficulty — wave 1's delay is still seeded
+   * from the one-time Role Calibration score (that's genuinely about
+   * first-contact onboarding grace period); every wave after that reads a
+   * LIVE performance score off the session's actual current company state
+   * (`livePerformanceScore`) instead, so the cadence keeps adapting to how
+   * the candidate is *actually doing*, not a snapshot from before they'd
+   * done any real work.
    */
   scheduleChaosWave(sessionId: string, calibrationScore?: number, wave = 1): void {
-    const delayMs = wave === 1 ? chaosWaveDelayFor(calibrationScore) : SECOND_WAVE_DELAY_MS;
+    if (wave > MAX_CHAOS_WAVES) return;
+    if (wave === 1) {
+      this.scheduleChaosWaveAt(sessionId, chaosWaveDelayFor(calibrationScore), calibrationScore, wave);
+      return;
+    }
+    this.prisma.hyrteCompanyState
+      .findUnique({ where: { sessionId } })
+      .then((companyState) => {
+        const score = companyState ? livePerformanceScore(companyState) : undefined;
+        this.scheduleChaosWaveAt(sessionId, chaosWaveCadenceForLiveScore(score), calibrationScore, wave, score);
+      })
+      .catch((e) => this.logger.warn(errMsg(e)));
+  }
+
+  private scheduleChaosWaveAt(sessionId: string, delayMs: number, calibrationScore: number | undefined, wave: number, liveScore?: number): void {
     this.prisma.hyrteWorldEvent
       .create({
         data: { sessionId, kind: 'SCHEDULED', surface: 'chaos_wave', fireAtOffsetSeconds: Math.round(delayMs / 1000), payload: { wave } as unknown as Prisma.InputJsonValue },
       })
       .then((event) => {
         setTimeout(() => {
-          this.triggerChaosWave(sessionId, event.id, calibrationScore, wave).catch((e) => this.logger.warn(errMsg(e)));
+          this.triggerChaosWave(sessionId, event.id, calibrationScore, wave, liveScore).catch((e) => this.logger.warn(errMsg(e)));
         }, delayMs);
       })
       .catch((e) => this.logger.warn(errMsg(e)));
   }
 
-  private async triggerChaosWave(sessionId: string, eventId: string, calibrationScore?: number, wave = 1): Promise<void> {
+  private async triggerChaosWave(sessionId: string, eventId: string, calibrationScore?: number, wave = 1, liveScore?: number): Promise<void> {
     const [session, companyState, stakeholders] = await Promise.all([
       this.prisma.hyrteSession.findUnique({ where: { id: sessionId } }),
       this.prisma.hyrteCompanyState.findUnique({ where: { sessionId } }),
@@ -688,8 +722,14 @@ export class HyrteConsequenceService {
 
     const roster = stakeholders.map((s) => ({ key: s.id, name: s.name, role: s.role }));
     // Part F7 — burst size scales with difficulty, not a fixed 2-3 regardless
-    // of how hard the session was configured.
-    const burstSize = BURST_SIZE_BY_DIFFICULTY[session.difficulty] ?? 3;
+    // of how hard the session was configured. Dynamic Difficulty (waves 2+
+    // only — wave 1 has no live signal to react to yet) then adapts that
+    // difficulty-scaled base UP if the candidate is doing well or DOWN if
+    // they're struggling — density of simultaneous pressure adapts, but the
+    // per-event stakes below are untouched, matching the doc's own "without
+    // making the underlying business problems easier."
+    const baseBurstSize = BURST_SIZE_BY_DIFFICULTY[session.difficulty] ?? 3;
+    const burstSize = wave === 1 ? baseBurstSize : burstSizeForLiveScore(baseBurstSize, liveScore);
 
     const result = await this.ai.completeJson<ChaosWaveResponse>(
       [
@@ -723,7 +763,7 @@ export class HyrteConsequenceService {
     const events = (result.events ?? []).filter((e) => stakeholders.some((s) => s.id === e.stakeholderKey)).slice(0, burstSize);
     if (events.length === 0) {
       await this.prisma.hyrteWorldEvent.update({ where: { id: eventId }, data: { status: 'CANCELLED' } }).catch(() => {});
-      if (wave === 1) this.scheduleChaosWave(sessionId, calibrationScore, 2);
+      this.scheduleChaosWave(sessionId, calibrationScore, wave + 1);
       return;
     }
 
@@ -764,7 +804,7 @@ export class HyrteConsequenceService {
 
     await this.prisma.hyrteWorldEvent.update({ where: { id: eventId }, data: { status: 'FIRED', firedAt: new Date() } }).catch(() => {});
 
-    if (wave === 1) this.scheduleChaosWave(sessionId, calibrationScore, 2);
+    this.scheduleChaosWave(sessionId, calibrationScore, wave + 1);
   }
 
   /**
@@ -872,6 +912,40 @@ function chaosWaveDelayFor(calibrationScore?: number): number {
   if (typeof calibrationScore !== 'number' || Number.isNaN(calibrationScore)) return CHAOS_WAVE_DELAY_MS;
   const multiplier = calibrationScore < 40 ? 1.5 : calibrationScore > 75 ? 0.6 : 1;
   return Math.round(CHAOS_WAVE_DELAY_MS * multiplier);
+}
+
+/** Health-flavored keys count UP as good; the rest count as bad the higher they climb — same split used for Role-Specific reports elsewhere. */
+const LIVE_SCORE_POSITIVE_KEYS: CompanyStateKey[] = ['customerSatisfaction', 'revenue', 'teamMorale', 'productQuality', 'marketReputation', 'growth'];
+const LIVE_SCORE_NEGATIVE_KEYS: CompanyStateKey[] = ['riskLevel', 'burnout', 'technicalDebt', 'complianceRisk', 'operationalRisk', 'deadlinePressure'];
+
+/**
+ * Doc's own "Dynamic Difficulty" — a live, ongoing read of how the
+ * candidate is actually doing, derived from the company state they've
+ * already been shaping through every decision so far. Deterministic, not
+ * LLM-guessed: 0 = things are falling apart, 100 = things are going well.
+ */
+export function livePerformanceScore(companyState: Partial<Record<CompanyStateKey, number>>): number {
+  const avg = (keys: CompanyStateKey[]) => {
+    const values = keys.map((k) => (typeof companyState[k] === 'number' ? (companyState[k] as number) : 50));
+    return values.reduce((a, b) => a + b, 0) / values.length;
+  };
+  const positive = avg(LIVE_SCORE_POSITIVE_KEYS);
+  const negative = avg(LIVE_SCORE_NEGATIVE_KEYS);
+  return Math.max(0, Math.min(100, Math.round((positive + (100 - negative)) / 2)));
+}
+
+/** Doing well → shorter cadence (more pressure, "tighter deadlines" per the doc); struggling → longer cadence ("reduces the level of chaos"). */
+export function chaosWaveCadenceForLiveScore(liveScore?: number): number {
+  if (typeof liveScore !== 'number' || Number.isNaN(liveScore)) return CHAOS_WAVE_CADENCE_MS;
+  const multiplier = liveScore < 35 ? 1.6 : liveScore > 70 ? 0.65 : 1;
+  return Math.round(CHAOS_WAVE_CADENCE_MS * multiplier);
+}
+
+/** Same doing-well/struggling logic applied to simultaneous-demand density instead of timing — "fewer simultaneous interruptions" vs. more, per the doc, never touching the stakes of any individual event. */
+export function burstSizeForLiveScore(baseBurstSize: number, liveScore?: number): number {
+  if (typeof liveScore !== 'number' || Number.isNaN(liveScore)) return baseBurstSize;
+  const adjustment = liveScore < 35 ? -1 : liveScore > 70 ? 1 : 0;
+  return Math.max(CHAOS_WAVE_BURST_MIN, Math.min(CHAOS_WAVE_BURST_MAX, baseBurstSize + adjustment));
 }
 
 function clampDelta(n: unknown, max = MAX_DELTA): number {
