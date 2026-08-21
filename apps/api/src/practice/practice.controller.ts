@@ -160,8 +160,11 @@ export class PracticeController {
   /** Conversational AI interviewer — returns the interviewer's next message. */
   @Post('interview/turn')
   @Roles('CANDIDATE', 'RECRUITER', 'ORG_ADMIN')
-  interviewTurn(@Body() dto: InterviewTurnDto) {
-    return this.practice.interviewTurn(dto);
+  interviewTurn(@Body() dto: InterviewTurnDto, @CurrentUser() user: AuthenticatedUser) {
+    // Looked up server-side from the real authenticated candidate, not
+    // client-supplied — same "verify, don't trust client-sent context"
+    // reasoning as everywhere else real evidence feeds a prompt in this repo.
+    return this.practice.interviewTurn(dto, user.id);
   }
 
   /** Generate a real coding problem (stdin/stdout + test cases) via the LLM. */

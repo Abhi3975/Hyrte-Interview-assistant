@@ -536,6 +536,10 @@ export class HyrteSessionsService {
     // from the same workspace-unlock moment as the chaos wave.
     this.workTicks.scheduleOrchestratorReview(id);
 
+    // Refinements doc §4 — ambient AI-to-AI Slack chatter, same
+    // workspace-unlock start as the other two self-rescheduling chains.
+    this.consequences.scheduleAmbientChatter(id);
+
     return updated;
   }
 

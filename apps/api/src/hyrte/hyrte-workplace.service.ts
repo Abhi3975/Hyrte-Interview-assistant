@@ -2,7 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { BehaviorContext, EvidenceType, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { HyrteGateway } from './hyrte.gateway';
-import { CommandBarDto, ReplyInboxDto, SendSlackMessageDto, UpdateWorkItemDto, WorkItemReviewDto } from './dto/hyrte.dto';
+import { CommandBarDto, ReplyInboxDto, SendMeetingMessageDto, SendSlackMessageDto, UpdateWorkItemDto, WorkItemReviewDto } from './dto/hyrte.dto';
 import { HyrteStakeholderAgentService } from './agents/stakeholder-agent.service';
 import { HyrteConsequenceService } from './consequences/consequence.service';
 import { DecisionGraphService } from './dig/decision-graph.service';
@@ -11,6 +11,7 @@ import { inferContextFromRole } from './dig/behavior-context.util';
 import { OMIT_CANDIDATE_INTERNALS } from './dig/hidden-intention.util';
 import { HyrteWorkTickService } from './work/work-tick.service';
 import { HyrteCommandBarService, CommandBarResult } from './work/command-bar.service';
+import { HyrteMeetingService } from './meetings/meeting.service';
 
 /** §4.12 Layers 5/9/11 — chance a stakeholder NOT party to an exchange independently reacts to it. Not 100%: constant chatter reads as noise, not signal. */
 const INDEPENDENT_REACTION_PROBABILITY = 0.5;
@@ -28,6 +29,7 @@ export class HyrteWorkplaceService {
     private readonly evidence: EvidenceGraphService,
     private readonly workTicks: HyrteWorkTickService,
     private readonly commandBar: HyrteCommandBarService,
+    private readonly meetings: HyrteMeetingService,
   ) {}
 
   private async assertOwnership(sessionId: string, candidateId: string): Promise<void> {
@@ -397,7 +399,33 @@ export class HyrteWorkplaceService {
     const event = await this.prisma.hyrteCalendarEvent.findFirst({ where: { id: eventId, sessionId } });
     if (!event) throw new NotFoundException('Meeting not found');
     await this.logDecision(sessionId, candidateId, 'meeting.attend', { eventId }, `Attended the meeting "${event.title}"`);
+
+    // Refinements doc §7 — "Live AI Meetings". Joining starts the real
+    // discussion the FIRST time only (guarded by startedAt); rejoining an
+    // already-started meeting just resumes watching the same transcript.
+    if (!event.startedAt) {
+      await this.prisma.hyrteCalendarEvent.update({ where: { id: eventId }, data: { startedAt: new Date() } });
+      this.meetings.startDiscussion(sessionId, eventId);
+    }
     return { attended: true };
+  }
+
+  async listMeetingMessages(sessionId: string, eventId: string, candidateId: string) {
+    await this.assertOwnership(sessionId, candidateId);
+    return this.prisma.hyrteMeetingMessage.findMany({
+      where: { sessionId, eventId },
+      include: { fromStakeholder: { omit: OMIT_CANDIDATE_INTERNALS } },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  /** The candidate speaking during a live meeting — doc §7 "the candidate can contribute, ask questions, make decisions." */
+  async sendMeetingMessage(sessionId: string, eventId: string, dto: SendMeetingMessageDto, candidateId: string) {
+    await this.assertOwnership(sessionId, candidateId);
+    const event = await this.prisma.hyrteCalendarEvent.findFirst({ where: { id: eventId, sessionId } });
+    if (!event) throw new NotFoundException('Meeting not found');
+    await this.meetings.recordCandidateTurn(sessionId, eventId, candidateId, dto.body);
+    return { sent: true };
   }
 
   // ── Knowledge base ──

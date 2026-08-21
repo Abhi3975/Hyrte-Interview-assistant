@@ -56,6 +56,28 @@ const MAX_ESCALATION_HOPS = 3;
 const HOP_RELATIONSHIP_DELTA_CAP = [15, 20, 25] as const;
 const HOP_STATE_DELTA_CAP = [MAX_DELTA, 14, 18] as const;
 
+/**
+ * Simulation refinements doc §4 — "Slack should not imitate WhatsApp. It
+ * should behave like the communication layer of a real company... AI
+ * stakeholders talk to each other... The candidate is not the center of
+ * every conversation." Before this, every hyrteSlackMessage.create call site
+ * addressed the candidate directly (a reply, a chaos-wave demand, a
+ * work-tick status ping) — there was no stakeholder-to-stakeholder exchange
+ * the candidate merely observes. Same self-rescheduling, capped-cycle,
+ * session-phase-gated pattern as scheduleChaosWave/scheduleOrchestratorReview
+ * — no new scheduling infrastructure.
+ */
+const AMBIENT_CHATTER_MIN_MS = 40_000;
+const AMBIENT_CHATTER_MAX_MS = 75_000;
+/** Same "periodic for a compressed 30-40min session, not literally forever" reasoning as the orchestrator's cap. */
+const MAX_AMBIENT_CHATTER_CYCLES = 8;
+/** Matches the frontend's fixed channel list (apps/web .../slack/page.tsx CHANNELS) — an ambient exchange in a
+ * channel the candidate has no way to open would be invisible chatter, not observable world-aliveness. */
+const AMBIENT_CHANNELS = ['#product', '#engineering', '#sales', '#leadership'] as const;
+/** Stagger between turns of the same exchange so it reads as a real back-and-forth, not a batch dump. */
+const AMBIENT_TURN_MIN_GAP_MS = 3_000;
+const AMBIENT_TURN_MAX_GAP_MS = 9_000;
+
 export const randomIgnoredWindow = () =>
   MIN_IGNORED_WINDOW_MS + Math.floor(Math.random() * (MAX_IGNORED_WINDOW_MS - MIN_IGNORED_WINDOW_MS));
 
@@ -84,6 +106,16 @@ interface ChaosWaveEvent {
 interface ChaosWaveResponse {
   events?: ChaosWaveEvent[];
   companyStateDelta?: CompanyStateDelta;
+}
+
+interface AmbientChatterTurn {
+  stakeholderKey?: string;
+  body?: string;
+}
+
+interface AmbientChatterResponse {
+  channel?: string;
+  exchange?: AmbientChatterTurn[];
 }
 
 /**
@@ -732,6 +764,105 @@ export class HyrteConsequenceService {
     await this.prisma.hyrteWorldEvent.update({ where: { id: eventId }, data: { status: 'FIRED', firedAt: new Date() } }).catch(() => {});
 
     if (wave === 1) this.scheduleChaosWave(sessionId, calibrationScore, 2);
+  }
+
+  /**
+   * Refinements doc §4 — "The company never pauses... even when the
+   * candidate is reading documents or temporarily inactive, AI employees
+   * continue discussing work." Fires a short (2-3 turn) exchange between two
+   * DIFFERENT stakeholders, in a public channel, that never addresses or
+   * even mentions the candidate — the point is that it happens whether or
+   * not anyone is watching.
+   */
+  scheduleAmbientChatter(sessionId: string, cycle = 1): void {
+    if (cycle > MAX_AMBIENT_CHATTER_CYCLES) return;
+    const delay = AMBIENT_CHATTER_MIN_MS + Math.floor(Math.random() * (AMBIENT_CHATTER_MAX_MS - AMBIENT_CHATTER_MIN_MS));
+    setTimeout(() => {
+      this.triggerAmbientChatter(sessionId, cycle).catch((e) => this.logger.warn(errMsg(e)));
+    }, delay);
+  }
+
+  private async triggerAmbientChatter(sessionId: string, cycle: number): Promise<void> {
+    const session = await this.prisma.hyrteSession.findUnique({ where: { id: sessionId }, select: { phase: true, companyName: true, role: true } });
+    // Same "world may have moved on" guard as every other self-rescheduling
+    // chain here — stop quietly instead of chattering into a finished session.
+    if (!session || session.phase !== 'WORKSPACE_ACTIVE') return;
+
+    const [stakeholders, companyState, openWorkItems] = await Promise.all([
+      this.prisma.hyrteStakeholder.findMany({ where: { sessionId } }),
+      this.prisma.hyrteCompanyState.findUnique({ where: { sessionId } }),
+      this.prisma.hyrteWorkItem.findMany({
+        where: { sessionId, stage: { in: ['NEW', 'IN_PROGRESS', 'WAITING_REVIEW'] } },
+        select: { title: true },
+        take: 5,
+      }),
+    ]);
+    if (stakeholders.length < 2 || !companyState) {
+      this.scheduleAmbientChatter(sessionId, cycle + 1);
+      return;
+    }
+
+    const roster = stakeholders.map((s) => ({ key: s.id, name: s.name, role: s.role, department: s.department }));
+
+    const result = await this.ai.completeJson<AmbientChatterResponse>(
+      [
+        {
+          role: 'system',
+          content:
+            'You are generating AMBIENT background Slack chatter for a workplace simulation — a short exchange ' +
+            'BETWEEN TWO STAKEHOLDERS that the candidate merely happens to observe. This is NOT addressed to the ' +
+            'candidate and must not mention or reference them at all — it is two colleagues talking to each other ' +
+            'about their own work, exactly as they would whether or not anyone else is reading. Pick two DIFFERENT ' +
+            'stakeholders from the roster who would plausibly talk to each other right now (same department, or ' +
+            'directly dependent departments). Ground the content in something real: an open work item in flight, ' +
+            'or the current company state — not generic small talk. Return ONLY JSON: {"channel": one of ' +
+            `["#product","#engineering","#sales","#leadership"] (pick whichever best fits the two speakers), ` +
+            '"exchange": [{"stakeholderKey": string (must match a roster key), "body": string (1-2 sentences, ' +
+            'casual Slack tone, no @mentions of the candidate)}] (exactly 2-3 turns, alternating between the two ' +
+            'chosen stakeholders, reading as a real short back-and-forth)}.',
+          },
+        {
+          role: 'user',
+          content:
+            `Company: ${session.companyName} (${session.role} role). Roster: ${JSON.stringify(roster)}. ` +
+            `Open work in flight: ${JSON.stringify(openWorkItems.map((w) => w.title))}. ` +
+            `Current company state: ${JSON.stringify(omitMeta(companyState))}.`,
+        },
+      ],
+      { temperature: 0.9, maxTokens: 500 },
+    );
+
+    const turns = (result.exchange ?? [])
+      .filter((t): t is Required<AmbientChatterTurn> => !!t.stakeholderKey && stakeholders.some((s) => s.id === t.stakeholderKey) && !!t.body?.trim())
+      .slice(0, 3);
+    // Fewer than 2 turns isn't a "conversation" — skip this cycle rather than post a lone message.
+    if (turns.length < 2) {
+      this.scheduleAmbientChatter(sessionId, cycle + 1);
+      return;
+    }
+
+    const channel = AMBIENT_CHANNELS.includes(result.channel as (typeof AMBIENT_CHANNELS)[number]) ? result.channel! : '#product';
+    this.postAmbientTurn(sessionId, channel, turns, 0);
+    this.scheduleAmbientChatter(sessionId, cycle + 1);
+  }
+
+  /** Posts one turn of an ambient exchange, then schedules the next after a short human-like gap — checking the
+   * session is still live before each post, since a candidate could finish mid-exchange. */
+  private postAmbientTurn(sessionId: string, channel: string, turns: Required<AmbientChatterTurn>[], idx: number): void {
+    if (idx >= turns.length) return;
+    const delay = idx === 0 ? 0 : AMBIENT_TURN_MIN_GAP_MS + Math.floor(Math.random() * (AMBIENT_TURN_MAX_GAP_MS - AMBIENT_TURN_MIN_GAP_MS));
+    setTimeout(() => {
+      this.prisma.hyrteSession
+        .findUnique({ where: { id: sessionId }, select: { phase: true } })
+        .then((s) => (s && s.phase === 'WORKSPACE_ACTIVE' ? this.prisma.hyrteSlackMessage.create({
+          data: { sessionId, channel, fromStakeholderId: turns[idx].stakeholderKey, body: turns[idx].body.trim() },
+        }) : null))
+        .then((created) => {
+          if (created) this.gateway.broadcast(sessionId, { type: 'slack:new', message: created });
+          this.postAmbientTurn(sessionId, channel, turns, idx + 1);
+        })
+        .catch((e) => this.logger.warn(errMsg(e)));
+    }, delay);
   }
 }
 

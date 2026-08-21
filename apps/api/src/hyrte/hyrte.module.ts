@@ -18,6 +18,7 @@ import { SimulationRequestController } from './simulation-request.controller';
 import { SimulationRequestService } from './simulation-request.service';
 import { HyrteWorkTickService } from './work/work-tick.service';
 import { HyrteCommandBarService } from './work/command-bar.service';
+import { HyrteMeetingService } from './meetings/meeting.service';
 import { HyrteRecruiterController } from './recruiter/hyrte-recruiter.controller';
 import { HyrteRecruiterService } from './recruiter/hyrte-recruiter.service';
 
@@ -46,6 +47,7 @@ import { HyrteRecruiterService } from './recruiter/hyrte-recruiter.service';
     SimulationRequestService,
     HyrteWorkTickService,
     HyrteCommandBarService,
+    HyrteMeetingService,
     HyrteRecruiterService,
   ],
 })

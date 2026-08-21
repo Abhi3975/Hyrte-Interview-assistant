@@ -19,7 +19,7 @@ export function HyrteSessionProvider({
   children: React.ReactNode;
 }) {
   const accessToken = useAuthStore((s) => s.accessToken);
-  const { bumpInbox, bumpSlack, bumpTask, bumpCompanyState, bumpStakeholder } = useHyrteStore();
+  const { bumpInbox, bumpSlack, bumpTask, bumpCompanyState, bumpStakeholder, bumpMeeting } = useHyrteStore();
   const clientRef = useRef<HyrteWsClient | null>(null);
 
   useEffect(() => {
@@ -39,11 +39,14 @@ export function HyrteSessionProvider({
           return bumpCompanyState();
         case 'stakeholder:update':
           return bumpStakeholder();
+        case 'meeting:new':
+        case 'meeting:concluded':
+          return bumpMeeting();
       }
     });
 
     return () => client.close();
-  }, [accessToken, sessionId, bumpInbox, bumpSlack, bumpTask, bumpCompanyState, bumpStakeholder]);
+  }, [accessToken, sessionId, bumpInbox, bumpSlack, bumpTask, bumpCompanyState, bumpStakeholder, bumpMeeting]);
 
   return <>{children}</>;
 }

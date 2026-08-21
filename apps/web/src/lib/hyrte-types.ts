@@ -158,6 +158,18 @@ export interface HyrteCalendarEvent {
   startAt: string;
   endAt: string;
   attendeeStakeholderIds: string[];
+  startedAt: string | null;
+  notes: string | null;
+  notesGeneratedAt: string | null;
+}
+
+export interface HyrteMeetingMessage {
+  id: string;
+  eventId: string;
+  fromStakeholderId: string | null;
+  fromStakeholder?: HyrteStakeholder | null;
+  body: string;
+  createdAt: string;
 }
 
 export interface HyrteKnowledgeDoc {

@@ -29,6 +29,10 @@ export class SendSlackMessageDto {
   @IsString() body!: string;
 }
 
+export class SendMeetingMessageDto {
+  @IsString() body!: string;
+}
+
 export class UpdateWorkItemDto {
   @IsOptional() @IsEnum(WorkItemStage) stage?: WorkItemStage;
 }

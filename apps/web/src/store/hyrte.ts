@@ -14,11 +14,13 @@ interface HyrteState {
   taskVersion: number;
   companyStateVersion: number;
   stakeholderVersion: number;
+  meetingVersion: number;
   bumpInbox: () => void;
   bumpSlack: () => void;
   bumpTask: () => void;
   bumpCompanyState: () => void;
   bumpStakeholder: () => void;
+  bumpMeeting: () => void;
 }
 
 export const useHyrteStore = create<HyrteState>((set) => ({
@@ -27,9 +29,11 @@ export const useHyrteStore = create<HyrteState>((set) => ({
   taskVersion: 0,
   companyStateVersion: 0,
   stakeholderVersion: 0,
+  meetingVersion: 0,
   bumpInbox: () => set((s) => ({ inboxVersion: s.inboxVersion + 1 })),
   bumpSlack: () => set((s) => ({ slackVersion: s.slackVersion + 1 })),
   bumpTask: () => set((s) => ({ taskVersion: s.taskVersion + 1 })),
   bumpCompanyState: () => set((s) => ({ companyStateVersion: s.companyStateVersion + 1 })),
   bumpStakeholder: () => set((s) => ({ stakeholderVersion: s.stakeholderVersion + 1 })),
+  bumpMeeting: () => set((s) => ({ meetingVersion: s.meetingVersion + 1 })),
 }));

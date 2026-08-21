@@ -5,7 +5,7 @@
  * shape of lib/voice.ts's VoiceClient: transport-only, callback-driven.
  */
 export interface HyrteWsEvent {
-  type: 'inbox:new' | 'slack:new' | 'task:update' | 'company_state:update' | 'stakeholder:update' | 'error';
+  type: 'inbox:new' | 'slack:new' | 'task:update' | 'company_state:update' | 'stakeholder:update' | 'meeting:new' | 'meeting:concluded' | 'error';
   [key: string]: unknown;
 }
 

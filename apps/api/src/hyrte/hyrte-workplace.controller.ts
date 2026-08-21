@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { HyrteWorkplaceService } from './hyrte-workplace.service';
-import { CommandBarDto, ReplyInboxDto, SendSlackMessageDto, UpdateWorkItemDto, WorkItemReviewDto } from './dto/hyrte.dto';
+import { CommandBarDto, ReplyInboxDto, SendMeetingMessageDto, SendSlackMessageDto, UpdateWorkItemDto, WorkItemReviewDto } from './dto/hyrte.dto';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
@@ -107,6 +107,25 @@ export class HyrteWorkplaceController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.workplace.attendMeeting(sessionId, eventId, user.id);
+  }
+
+  @Get('calendar/:eventId/messages')
+  listMeetingMessages(
+    @Param('sessionId') sessionId: string,
+    @Param('eventId') eventId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.workplace.listMeetingMessages(sessionId, eventId, user.id);
+  }
+
+  @Post('calendar/:eventId/messages')
+  sendMeetingMessage(
+    @Param('sessionId') sessionId: string,
+    @Param('eventId') eventId: string,
+    @Body() dto: SendMeetingMessageDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.workplace.sendMeetingMessage(sessionId, eventId, dto, user.id);
   }
 
   @Get('knowledge-base')

@@ -161,6 +161,46 @@ export class PracticeService {
    * (evaluateSession/evaluateTranscript) the frontend makes right after; this
    * call's `end` path is just the natural spoken closing.
    */
+
+  /**
+   * HR request — fold real HYRTE Living Workplace Simulation evidence into
+   * this standalone room's interviewer, not just HYRTE's own internal
+   * reflection interview (which already does an equivalent lookup for
+   * itself, see HyrteInterviewService.getPracticeContinuityContext — this is
+   * the same idea, the other direction). Looks up the candidate's most
+   * recently generated HyrteInterviewReport (any HYRTE sessionType) and
+   * surfaces concrete, evidence-backed material — matches this platform's
+   * own "AI Interviewer cross-examines the Evidence Graph" architecture,
+   * just reachable from the standalone room too now. Silent no-op (empty
+   * string) if the candidate has never completed a HYRTE simulation.
+   */
+  private async getSimulationContext(candidateId: string): Promise<string> {
+    const report = await this.prisma.hyrteInterviewReport.findFirst({
+      where: { session: { candidateId } },
+      orderBy: { generatedAt: 'desc' },
+      include: { session: { select: { role: true, industry: true } } },
+    });
+    if (!report) return '';
+
+    const evidenceHighlights = (Array.isArray(report.evidenceTrail) ? (report.evidenceTrail as unknown as { action?: string; interpretation?: string }[]) : [])
+      .filter((e) => e.action)
+      .slice(0, 3)
+      .map((e) => `- ${e.action}${e.interpretation ? ` (${e.interpretation})` : ''}`)
+      .join('\n');
+
+    return (
+      `\n\nSIMULATION EXPERIENCE (this candidate has separately completed HYRTE's Living Workplace Simulation — ` +
+      `a live, evidence-based role simulation, distinct from this interview): playing ${report.session.role} at ` +
+      `a simulated company (${report.session.industry ?? 'general'} industry), they were evaluated as ` +
+      `"${report.recommendation}". Summary: ${report.summary}` +
+      (report.strengths.length ? `\nObserved strengths: ${report.strengths.join(', ')}.` : '') +
+      (report.developmentAreas.length ? `\nObserved development areas: ${report.developmentAreas.join(', ')}.` : '') +
+      (evidenceHighlights ? `\nConcrete actions observed in the simulation:\n${evidenceHighlights}` : '') +
+      `\nYou may probe deeper into this real behavior when it fits naturally (e.g. ask them to walk you through ` +
+      `one of these decisions), but never assume it fully represents them — it's one data point, not a verdict.`
+    );
+  }
+
   async interviewTurn(input: {
     jobRole: string;
     category: string;
@@ -186,7 +226,8 @@ export class PracticeService {
     currentRound?: { type: string; label: string };
     nextRoundLabel?: string;
     forceRoundAdvance?: boolean;
-  }): Promise<{ text: string; hintLevel?: number }> {
+  }, candidateId?: string): Promise<{ text: string; hintLevel?: number }> {
+    const simulation = candidateId ? await this.getSimulationContext(candidateId) : '';
     const extra = [
       input.experience ? `- Candidate experience level: ${input.experience} (calibrate depth/difficulty to this).` : '',
       input.company ? `- Emulate the interview style of: ${input.company}.` : '',
@@ -232,7 +273,7 @@ export class PracticeService {
       {
         role: 'system',
         content:
-          `${INTERVIEWER_SYSTEM}\n\n${persona}\n\n${ctx}${resume}${modeNote}\n\n${directive}\n\n` +
+          `${INTERVIEWER_SYSTEM}\n\n${persona}\n\n${ctx}${resume}${simulation}${modeNote}\n\n${directive}\n\n` +
           'Return ONLY JSON: {"reply": string (your next spoken message, no stage directions), ' +
           '"hintLevel": int 1-5 (ONLY include this field on a turn where you actually GAVE a hint per the ' +
           'graduated-hint rules above — omit it entirely on every other turn, including ones where you declined ' +

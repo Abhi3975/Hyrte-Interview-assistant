@@ -8,17 +8,21 @@ import { hyrteNav } from '@/lib/hyrte-nav';
 import { api } from '@/lib/api';
 import { useHyrteStore } from '@/store/hyrte';
 import { deriveStakeholderStatus, STATUS_DOT, STATUS_LABEL } from '@/lib/hyrte-status';
-import { HyrteCalendarEvent, HyrteInboxMessage, HyrteStakeholder } from '@/lib/hyrte-types';
+import { HyrteCalendarEvent, HyrteInboxMessage, HyrteMeetingMessage, HyrteStakeholder } from '@/lib/hyrte-types';
 
-/** Part E2 — "Meetings: join screen + attendee rail with presence/mood as subtle avatar treatment (never numeric labels)." */
+/** Part E2 — "Meetings: join screen + attendee rail with presence/mood as subtle avatar treatment (never numeric labels)."
+ * Refinements doc §7 — now also a real live multi-stakeholder discussion the candidate can watch/join, plus
+ * persisted notes recalled after the fact (see [id]/meeting.service.ts on the backend). */
 export default function HyrteMeetings({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const { inboxVersion } = useHyrteStore();
+  const { inboxVersion, meetingVersion } = useHyrteStore();
   const queryClient = useQueryClient();
   const [joinedId, setJoinedId] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+  const [sending, setSending] = useState(false);
 
   const { data: events } = useQuery({
-    queryKey: ['hyrte', 'calendar', id],
+    queryKey: ['hyrte', 'calendar', id, meetingVersion],
     queryFn: () => api.get<HyrteCalendarEvent[]>(`/hyrte/sessions/${id}/calendar`),
   });
   const { data: stakeholders } = useQuery({
@@ -29,13 +33,32 @@ export default function HyrteMeetings({ params }: { params: Promise<{ id: string
     queryKey: ['hyrte', 'inbox', id, inboxVersion],
     queryFn: () => api.get<HyrteInboxMessage[]>(`/hyrte/sessions/${id}/inbox`),
   });
+  const { data: messages } = useQuery({
+    queryKey: ['hyrte', 'meeting-messages', id, joinedId, meetingVersion],
+    queryFn: () => api.get<HyrteMeetingMessage[]>(`/hyrte/sessions/${id}/calendar/${joinedId}/messages`),
+    enabled: !!joinedId,
+  });
 
   const byId = new Map((stakeholders ?? []).map((s) => [s.id, s]));
+  const joinedEvent = events?.find((e) => e.id === joinedId);
 
   async function join(eventId: string) {
     setJoinedId(eventId);
     await api.post(`/hyrte/sessions/${id}/calendar/${eventId}/attend`);
     queryClient.invalidateQueries({ queryKey: ['hyrte', 'decision-log', id] });
+    queryClient.invalidateQueries({ queryKey: ['hyrte', 'calendar', id] });
+  }
+
+  async function speak() {
+    if (!draft.trim() || !joinedId) return;
+    setSending(true);
+    try {
+      await api.post(`/hyrte/sessions/${id}/calendar/${joinedId}/messages`, { body: draft });
+      setDraft('');
+      queryClient.invalidateQueries({ queryKey: ['hyrte', 'meeting-messages', id, joinedId] });
+    } finally {
+      setSending(false);
+    }
   }
 
   return (
@@ -65,7 +88,7 @@ export default function HyrteMeetings({ params }: { params: Promise<{ id: string
                 </div>
                 {!isJoined ? (
                   <button className="btn-primary" onClick={() => join(e.id)}>
-                    Join
+                    {e.notesGeneratedAt ? 'Open' : e.startedAt ? 'Rejoin' : 'Join'}
                   </button>
                 ) : (
                   <button className="btn-ghost" onClick={() => setJoinedId(null)}>
@@ -98,6 +121,44 @@ export default function HyrteMeetings({ params }: { params: Promise<{ id: string
                     })}
                     {attendees.length === 0 && <p className="text-sm text-black/50 dark:text-white/50">No one else invited.</p>}
                   </div>
+
+                  <div className="mb-2 mt-4 text-[11px] font-semibold uppercase tracking-wide text-black/40 dark:text-white/40">
+                    Discussion
+                  </div>
+                  <div className="mb-3 max-h-80 space-y-2 overflow-y-auto rounded-lg border border-black/5 p-3 dark:border-white/10">
+                    {messages?.map((m) => (
+                      <div key={m.id} className="text-sm">
+                        <span className="font-medium">{m.fromStakeholder?.name ?? 'You'}</span>{' '}
+                        <span className="text-xs text-black/40 dark:text-white/40">
+                          {new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                        <p className="text-black/80 dark:text-white/80">{m.body}</p>
+                      </div>
+                    ))}
+                    {!messages?.length && <p className="text-sm text-black/50 dark:text-white/50">The discussion is just getting started…</p>}
+                  </div>
+
+                  {e.notesGeneratedAt ? (
+                    <div className="rounded-lg border border-brand-500/20 bg-brand-500/5 p-3">
+                      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-brand-600 dark:text-brand-400">
+                        Meeting notes
+                      </div>
+                      <p className="text-sm text-black/80 dark:text-white/80">{e.notes}</p>
+                    </div>
+                  ) : (
+                    <div className="flex gap-2">
+                      <input
+                        className="flex-1 rounded-lg border border-black/10 bg-transparent px-3 py-2 text-sm dark:border-white/10"
+                        placeholder="Say something in the meeting…"
+                        value={draft}
+                        onChange={(ev) => setDraft(ev.target.value)}
+                        onKeyDown={(ev) => ev.key === 'Enter' && speak()}
+                      />
+                      <button className="btn-primary" disabled={sending} onClick={speak}>
+                        Send
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

@@ -863,6 +863,7 @@ model HyrteSession {
   slackMessages            HyrteSlackMessage[]
   workItems                HyrteWorkItem[]
   calendarEvents           HyrteCalendarEvent[]
+  meetingMessages          HyrteMeetingMessage[]
   knowledgeDocs            HyrteKnowledgeDoc[]
   decisionLog              HyrteDecisionLogEntry[]
   stakeholderMemory        HyrteStakeholderMemory[]
@@ -1090,6 +1091,7 @@ model HyrteStakeholder {
   slackMessages HyrteSlackMessage[]
   memory        HyrteStakeholderMemory[]
   ownedWorkItems HyrteWorkItem[]
+  meetingMessages HyrteMeetingMessage[]
 
   @@index([sessionId])
 }
@@ -1232,8 +1234,33 @@ model HyrteCalendarEvent {
   endAt     DateTime
   // Part E2 Meetings — stakeholder ids invited to this meeting.
   attendeeStakeholderIds String[] @default([])
+  // Refinements doc §7 — "Live AI Meetings" + "Persistent Meeting Memory".
+  // startedAt marks when the candidate's join actually kicked off the live
+  // discussion (distinct from the scheduled startAt); notes is the
+  // LLM-generated summary/decisions written once the discussion concludes,
+  // so it can be searched/recalled later ("what did engineering agree on
+  // yesterday") without replaying the full transcript.
+  startedAt      DateTime?
+  notes          String?
+  notesGeneratedAt DateTime?
+  messages  HyrteMeetingMessage[]
 
   @@index([sessionId])
+}
+
+model HyrteMeetingMessage {
+  id                String            @id @default(cuid())
+  sessionId         String
+  session           HyrteSession      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  eventId           String
+  event             HyrteCalendarEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  // null = the candidate's own contribution to the discussion.
+  fromStakeholderId String?
+  fromStakeholder   HyrteStakeholder? @relation(fields: [fromStakeholderId], references: [id], onDelete: SetNull)
+  body              String
+  createdAt         DateTime          @default(now())
+
+  @@index([sessionId, eventId])
 }
 
 model HyrteKnowledgeDoc {
