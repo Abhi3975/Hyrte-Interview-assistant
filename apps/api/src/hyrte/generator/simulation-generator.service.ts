@@ -4,6 +4,7 @@ import { CreateHyrteSessionDto } from '../dto/hyrte.dto';
 import { COMPANY_STATE_KEYS } from '../consequences/consequence.service';
 import { ValidationReport, WorldStabilizationError, validateWorld } from './world-stabilization';
 import { applyIndustryBias, industryGroundingNote } from './industry-templates';
+import { resolveSignatureArtifact } from './signature-artifacts';
 import {
   FixtureCalendarEvent,
   FixtureDepartment,
@@ -12,6 +13,7 @@ import {
   FixtureKnowledgeDoc,
   FixtureMissionBrief,
   FixtureScheduledEvent,
+  FixtureSignatureArtifact,
   FixtureSlackMessage,
   FixtureStakeholder,
   FixtureTask,
@@ -71,7 +73,7 @@ export interface JobSuccessModelGrounding {
 
 /** One row per pipeline step — persisted by the caller (HyrteSessionsService) once the session exists. */
 export interface WorldGenerationArtifact {
-  step: 'company_org' | 'stakeholders' | 'knowledge' | 'workplace_assets' | 'event_queue' | 'evaluation_plan' | 'stabilization_gate';
+  step: 'company_org' | 'stakeholders' | 'knowledge' | 'workplace_assets' | 'event_queue' | 'signature_artifact' | 'evaluation_plan' | 'stabilization_gate';
   // FAILED_FELL_BACK — validation never passed, caller substituted the static
   // fallback fixture (PRACTICE sessions only). FAILED_BLOCKED — validation
   // never passed and the caller declined to substitute anything (ASSESSMENT
@@ -115,6 +117,11 @@ interface EventQueueResult {
 
 interface EvaluationPlanResult {
   evaluationPlan?: Record<string, unknown>[];
+}
+
+interface SignatureArtifactResult {
+  title?: string;
+  description?: string;
 }
 
 /**
@@ -229,14 +236,21 @@ export class HyrteSimulationGeneratorService {
     const manager = stakeholders.reduce((a, b) => ((b.authorityLevel ?? 50) > (a.authorityLevel ?? 50) ? b : a));
     missionBrief.manager = { name: manager.name, role: manager.role };
 
-    // Steps 4-6 — Knowledge, Workplace Assets, and Event Queue are each only
-    // informed by the real stakeholder roster from Step 3, not by each
-    // other's output, so they run concurrently rather than as 3 more
-    // sequential round-trips (this materially cuts real-world latency — 5
-    // sequential LLM calls was measured live to push total generation time
-    // past what the dev proxy chain tolerates, causing spurious "Internal
-    // Server Error" responses even on a fully successful generation).
-    const [knowledgeRaw, assetsRaw, eventQueueRaw] = await Promise.all([
+    // Doc §22 — Role-Specific Signature Challenges. Resolved deterministically
+    // from the role (not LLM-guessed which artifact TYPE fits the role — only
+    // its specific title/description are LLM-generated, grounded in the real
+    // company situation below).
+    const artifactTemplate = resolveSignatureArtifact(dto.role);
+
+    // Steps 4-7 — Knowledge, Workplace Assets, Event Queue, and the Signature
+    // Artifact are each only informed by the real stakeholder roster from
+    // Step 3, not by each other's output, so they run concurrently rather
+    // than as 4 more sequential round-trips (this materially cuts real-world
+    // latency — 5 sequential LLM calls was measured live to push total
+    // generation time past what the dev proxy chain tolerates, causing
+    // spurious "Internal Server Error" responses even on a fully successful
+    // generation).
+    const [knowledgeRaw, assetsRaw, eventQueueRaw, signatureArtifactRaw] = await Promise.all([
       this.step<KnowledgeResult>(
         'knowledge',
         artifacts,
@@ -258,8 +272,18 @@ export class HyrteSimulationGeneratorService {
         `Company: ${companyName}. Roster: ${JSON.stringify(roster)}.`,
         () => ({ scheduledEvents: [] }),
       ),
+      this.step<SignatureArtifactResult>(
+        'signature_artifact',
+        artifacts,
+        SIGNATURE_ARTIFACT_SYSTEM,
+        `Company: ${companyName}. Role: ${dto.role}. Mission objective: ${missionBrief.objective}. Current ` +
+          `health: ${missionBrief.currentHealth}. Roster: ${JSON.stringify(roster)}. The candidate must ` +
+          `produce ${artifactTemplate.promptHint}.`,
+        () => ({ title: '', description: '' }),
+      ),
     ]);
     const knowledgeDocs = sanitizeKnowledgeDocs(knowledgeRaw.knowledgeDocs);
+    const signatureArtifact = sanitizeSignatureArtifact(signatureArtifactRaw, artifactTemplate.label, companyName);
     const validKeys = new Set(stakeholders.map((s) => s.key));
     const resolveKey = (k: unknown) => (typeof k === 'string' && validKeys.has(k) ? k : roster[Math.floor(Math.random() * roster.length)].key);
     const inbox = sanitizeInbox(assetsRaw.inbox, resolveKey);
@@ -308,6 +332,7 @@ export class HyrteSimulationGeneratorService {
         knowledgeDocs,
         scheduledEvents,
         evaluationPlan,
+        signatureArtifact,
       },
       artifacts,
     };
@@ -447,6 +472,15 @@ function eventQueueSystem(difficulty: string): string {
     `workspace unlocks this arrives) }]} (exactly ${count} entries). No prose outside the JSON.`
   );
 }
+
+const SIGNATURE_ARTIFACT_SYSTEM =
+  'You are generating the ONE Role-Specific Signature Artifact for this candidate (a real, substantive ' +
+  'deliverable that proves genuine job capability, not a generic task). Given the real company context and ' +
+  'exactly what kind of deliverable this role produces, write a concrete, SPECIFIC title and description — ' +
+  'reference the actual mission objective / current company health given below, not a generic placeholder ' +
+  '("Q3 Onboarding PRD addressing the churn spike", not "Write a PRD"). Return ONLY JSON: {"title": string ' +
+  '(short, concrete, references the real situation), "description": string (2-3 sentences: exactly what to ' +
+  'produce and why it matters right now)}.';
 
 const EVALUATION_PLAN_SYSTEM =
   'You are generating Step 7 (D7 Evaluation Plan) of a living-workplace simulation, given the real ' +
@@ -606,6 +640,16 @@ function sanitizeTasks(raw: unknown): FixtureTask[] {
 }
 
 const EVALUATION_DIMENSIONS = ['role_skills', 'communication', 'leadership', 'integrity', 'prioritization', 'adaptability', 'recovery'] as const;
+
+function sanitizeSignatureArtifact(raw: SignatureArtifactResult, artifactLabel: string, companyName: string): FixtureSignatureArtifact {
+  return {
+    title: raw.title?.trim() ? raw.title.trim() : `${artifactLabel} — ${companyName}`,
+    description: raw.description?.trim()
+      ? raw.description.trim()
+      : `Produce a ${artifactLabel.toLowerCase()} addressing the company's current situation.`,
+    dueInHours: 24,
+  };
+}
 
 function sanitizeEvaluationPlan(raw: unknown): FixtureEvaluationPlanItem[] {
   return asRecords(raw)

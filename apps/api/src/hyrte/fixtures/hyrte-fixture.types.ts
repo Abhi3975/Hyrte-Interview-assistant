@@ -60,6 +60,13 @@ export interface FixtureTask {
   dueInHours?: number;
 }
 
+/** Refinements doc §22 — Role-Specific Signature Challenges: one real, world-grounded flagship deliverable per role. */
+export interface FixtureSignatureArtifact {
+  title: string;
+  description: string;
+  dueInHours?: number;
+}
+
 export interface FixtureCalendarEvent {
   title: string;
   agenda?: string;
@@ -172,4 +179,6 @@ export interface HyrteFixture {
   scheduledEvents: FixtureScheduledEvent[];
   /** Master Build Prompt Part D7 — optional: empty for the static fallback fixture (pre-upgrade shape). */
   evaluationPlan?: FixtureEvaluationPlanItem[];
+  /** Refinements doc §22 — optional: absent for the static fallback fixture; HyrteSessionsService falls back to a deterministic title in that case, so the guarantee (every session gets one) still holds. */
+  signatureArtifact?: FixtureSignatureArtifact;
 }

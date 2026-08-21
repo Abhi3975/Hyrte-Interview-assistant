@@ -154,6 +154,8 @@ export interface HyrteWorkItem {
   artifacts: { type: string; content: string }[];
   review: HyrteWorkItemReview | null;
   history: HyrteWorkItemHistoryEntry[];
+  isSignatureArtifact: boolean;
+  signatureArtifactLabel: string | null;
 }
 
 export interface HyrteCalendarEvent {

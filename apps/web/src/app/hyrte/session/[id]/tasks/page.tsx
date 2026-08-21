@@ -65,14 +65,22 @@ export default function HyrteWorkPipeline({ params }: { params: Promise<{ id: st
               </div>
               <div className="space-y-2">
                 {colItems.map((item) => (
-                  <div key={item.id} className="card p-3">
-                    <div className="flex items-start justify-between gap-2">
+                  <div
+                    key={item.id}
+                    className={`card p-3 ${item.isSignatureArtifact ? 'border-l-4 border-l-brand-500' : ''}`}
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-2">
                       <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${PRIORITY_COLOR[item.priority] ?? PRIORITY_COLOR.LOW}`}>
                         {item.priority}
                       </span>
                       {item.origin === 'CANDIDATE_DELEGATION' && (
                         <span className="shrink-0 rounded-full bg-black/5 px-2 py-0.5 text-[10px] text-black/50 dark:bg-white/10 dark:text-white/50">
                           delegated
+                        </span>
+                      )}
+                      {item.isSignatureArtifact && (
+                        <span className="shrink-0 rounded-full bg-brand-500/15 px-2 py-0.5 text-[10px] font-medium text-brand-600 dark:text-brand-400">
+                          ★ {item.signatureArtifactLabel ?? 'Signature Artifact'}
                         </span>
                       )}
                     </div>

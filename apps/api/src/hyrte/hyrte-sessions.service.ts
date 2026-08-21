@@ -6,6 +6,7 @@ import { HyrteGateway } from './hyrte.gateway';
 import { CreateHyrteSessionDto, SubmitBaselineChallengeDto } from './dto/hyrte.dto';
 import { getPmSaasStartupFixture } from './fixtures/pm-saas-startup.fixture';
 import { GeneratedWorld, HyrteSimulationGeneratorService, JobSuccessModelGrounding } from './generator/simulation-generator.service';
+import { resolveSignatureArtifact } from './generator/signature-artifacts';
 import { WorldStabilizationError } from './generator/world-stabilization';
 import { HyrteConsequenceService, randomIgnoredWindow } from './consequences/consequence.service';
 import { DecisionGraphService } from './dig/decision-graph.service';
@@ -239,6 +240,35 @@ export class HyrteSessionsService {
         ownerIsCandidate: true,
         history: [{ at: new Date().toISOString(), actor: 'system', action: 'created', note: 'Seeded at world generation' }] as unknown as Prisma.InputJsonValue,
       })),
+    });
+
+    // Refinements doc §22 — Role-Specific Signature Challenges. One real,
+    // world-grounded flagship deliverable, tagged distinctly from the
+    // generic seeded work items above. `fixture.signatureArtifact` is absent
+    // only for the static fallback fixture (pre-upgrade shape) — deriving
+    // the label/type from the role directly here means the guarantee ("every
+    // session gets one") holds even on that path, not just the LLM-generated one.
+    const artifactTemplate = resolveSignatureArtifact(session.role);
+    const signatureArtifact = fixture.signatureArtifact ?? {
+      title: `${artifactTemplate.label} — ${session.companyName}`,
+      description: `Produce a ${artifactTemplate.label.toLowerCase()} addressing the company's current situation.`,
+      dueInHours: 24,
+    };
+    await this.prisma.hyrteWorkItem.create({
+      data: {
+        sessionId: session.id,
+        title: signatureArtifact.title,
+        type: artifactTemplate.workItemType,
+        priority: 'HIGH',
+        dueAt: new Date(Date.now() + (signatureArtifact.dueInHours ?? 24) * 3_600_000),
+        origin: 'EVENT',
+        ownerIsCandidate: true,
+        isSignatureArtifact: true,
+        signatureArtifactLabel: artifactTemplate.label,
+        history: [
+          { at: new Date().toISOString(), actor: 'system', action: 'created', note: signatureArtifact.description },
+        ] as unknown as Prisma.InputJsonValue,
+      },
     });
 
     await this.prisma.hyrteCalendarEvent.createMany({

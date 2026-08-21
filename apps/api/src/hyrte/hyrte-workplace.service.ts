@@ -406,8 +406,31 @@ export class HyrteWorkplaceService {
       this.consequences
         .reasonTaskConsequence(sessionId, updated, candidateId, decisionEntry?.id)
         .catch((e) => this.logger.warn(e));
+
+      // Doc §22 — "AI stakeholders review it, request revisions, challenge
+      // assumptions, approve or reject it." The candidate's manager (same
+      // deterministic highest-authority derivation used everywhere else in
+      // this codebase) gives real, in-character feedback on the signature
+      // artifact specifically — not just the generic company-state
+      // consequence every other completed task gets.
+      if (task.isSignatureArtifact) {
+        this.reactToSignatureArtifact(sessionId, updated.id, updated.title, candidateId).catch((e) => this.logger.warn(e));
+      }
     }
     return updated;
+  }
+
+  /** Doc §22 — the manager (same deterministic highest-authority derivation as the Mission Brief / hop-3 escalations) gives real, in-character feedback on a completed signature artifact. */
+  private async reactToSignatureArtifact(sessionId: string, taskId: string, taskTitle: string, candidateId: string): Promise<void> {
+    const stakeholders = await this.prisma.hyrteStakeholder.findMany({ where: { sessionId } });
+    if (stakeholders.length === 0) return;
+    const manager = stakeholders.reduce((a, b) => ((b.authorityLevel ?? 50) > (a.authorityLevel ?? 50) ? b : a));
+    await this.agent.respond(
+      sessionId,
+      manager.id,
+      `(The candidate just completed their signature deliverable, "${taskTitle}" — give real, substantive feedback: what's strong, what you'd push back on or want revised, and whether you'd sign off on it as-is.)`,
+      { kind: 'inbox', subject: `Re: ${taskTitle}` },
+    );
   }
 
   // ── Needs Review (Part F5) ──

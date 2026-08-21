@@ -1220,6 +1220,13 @@ model HyrteWorkItem {
   priority WorkItemPriority @default(MEDIUM)
   dueAt    DateTime?
 
+  // Refinements doc §22 — Role-Specific Signature Challenges: at most one of
+  // these per session, the candidate's real flagship deliverable for their
+  // role (a PM's PRD, an Engineer's debug report, etc.), distinct from the
+  // generic seeded work items.
+  isSignatureArtifact   Boolean @default(false)
+  signatureArtifactLabel String?
+
   // [{ type: "draft_email"|"doc"|"spec"|"report", contentRef: string }]
   artifacts Json @default("[]")
   // { requiredFrom, requestedAt, decidedAt, decision } | null
