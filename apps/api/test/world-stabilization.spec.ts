@@ -16,7 +16,7 @@ function baseFixture(): HyrteFixture {
       currentHealth: 'Onboarding completion rates have dropped and churn is rising sharply',
       successMetrics: ['Lower churn'],
     },
-    baselineChallenge: { scenario: 'x', options: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }], roleKnowledgeQuestion: 'q1', toolsQuestion: 'q2' },
+    baselineChallenge: { scenario: 'x', options: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }], warmupQuestions: [{ id: 'wq1', question: 'q1' }, { id: 'wq2', question: 'q2' }] },
     departments: [{ name: 'Engineering', headStakeholderKey: 'eng1' }],
     stakeholders: [
       {

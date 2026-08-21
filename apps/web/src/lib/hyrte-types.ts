@@ -58,11 +58,15 @@ export interface HyrteBaselineChallengeOption {
   label: string;
 }
 
+export interface HyrteWarmupQuestion {
+  id: string;
+  question: string;
+}
+
 export interface HyrteBaselineChallenge {
   scenario: string;
   options: HyrteBaselineChallengeOption[];
-  roleKnowledgeQuestion: string;
-  toolsQuestion: string;
+  warmupQuestions: HyrteWarmupQuestion[];
 }
 
 export interface HyrteSession {

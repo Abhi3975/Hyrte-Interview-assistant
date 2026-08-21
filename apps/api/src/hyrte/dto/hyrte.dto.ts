@@ -129,11 +129,17 @@ export class LinkEvidenceDto {
   @IsOptional() @IsString() note?: string;
 }
 
+class WarmupAnswerDto {
+  @IsString() id!: string;
+  @IsString() answer!: string;
+}
+
 export class SubmitBaselineChallengeDto {
   @IsString() optionId!: string;
   @IsString() reasoning!: string;
-  @IsString() roleKnowledgeAnswer!: string;
-  @IsString() toolsAnswer!: string;
+  // Recruiter doc §3 "Warm-up Questions" — 3-6 answers now (was hardcoded to
+  // exactly 2 fixed fields: roleKnowledgeAnswer/toolsAnswer).
+  @IsArray() warmupAnswers!: WarmupAnswerDto[];
 }
 
 // Upgrade §1 — entry point. Preview never persists; create does, with

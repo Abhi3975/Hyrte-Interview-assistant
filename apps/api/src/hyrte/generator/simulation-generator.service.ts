@@ -17,6 +17,7 @@ import {
   FixtureSlackMessage,
   FixtureStakeholder,
   FixtureTask,
+  FixtureWarmupQuestion,
   HyrteFixture,
 } from '../fixtures/hyrte-fixture.types';
 
@@ -50,6 +51,8 @@ const CAPS = {
  * fresh demands landing with no time left to act on them.
  */
 export const EVENT_QUEUE_SIZE_BY_DIFFICULTY: Record<string, number> = { EASY: 4, MEDIUM: 6, HARD: 8, EXPERT: 10 };
+/** Recruiter doc §3 "Warm-up Questions" — "every candidate gets 3-6 questions"; scaled by difficulty like every other difficulty-scaled count in this pipeline, was hardcoded at exactly 2 before this. */
+export const WARMUP_COUNT_BY_DIFFICULTY: Record<string, number> = { EASY: 3, MEDIUM: 4, HARD: 5, EXPERT: 6 };
 export const EVENT_QUEUE_MAX_OFFSET_SECONDS_BY_DIFFICULTY: Record<string, number> = {
   EASY: 600, // 15-min planned session, queue reaches to the 10-min mark
   MEDIUM: 840, // 20-min session, 14-min mark
@@ -71,6 +74,8 @@ export interface JobSuccessModelGrounding {
   industryProbeThemes: string[];
   /** Recruiter doc §1 "Recruiter Custom Questions" — see groundingNote() for how each becomes a real embedded scenario, never literal question text. */
   customRequirements?: string[];
+  /** Recruiter doc §3 "Warm-up Questions" — "no two candidates should receive the exact same warm-up." Prior warm-up question TEXT already used by other candidates on the same recruiter-shared link, fed in as an explicit avoid-list. */
+  priorWarmupQuestions?: string[];
 }
 
 /** One row per pipeline step — persisted by the caller (HyrteSessionsService) once the session exists. */
@@ -195,7 +200,7 @@ export class HyrteSimulationGeneratorService {
     const companyOrg = await this.step<CompanyOrgResult>(
       'company_org',
       artifacts,
-      COMPANY_ORG_SYSTEM,
+      companyOrgSystem(dto.difficulty),
       `Generate a company for a ${dto.experienceLevel} ${dto.role} at a ${dto.companyType} company in ` +
         `the ${dto.industry} industry. Difficulty: ${dto.difficulty} — reflect this in how bad the ` +
         `starting company-state numbers are and how many things are simultaneously on fire. Company ` +
@@ -215,7 +220,10 @@ export class HyrteSimulationGeneratorService {
     // Real, deterministic per-industry bias — a guarantee, not a prompt hope.
     const companyState = applyIndustryBias(sanitizeCompanyState(companyOrg.companyState), dto.industry);
     const missionBrief = sanitizeMissionBrief(companyOrg.missionBrief);
-    const baselineChallenge = sanitizeBaselineChallenge(companyOrg.baselineChallenge);
+    const baselineChallenge = sanitizeBaselineChallenge(
+      companyOrg.baselineChallenge,
+      WARMUP_COUNT_BY_DIFFICULTY[dto.difficulty] ?? WARMUP_COUNT_BY_DIFFICULTY.MEDIUM,
+    );
 
     // Step 3 — Stakeholder Generation, informed by the real company + departments above.
     const stakeholdersRaw = await this.step<StakeholdersResult>(
@@ -357,6 +365,13 @@ export class HyrteSimulationGeneratorService {
           'a real situation that happened to come up. Apply this treatment to EACH of the following:\n' +
           grounding.customRequirements.map((r, i) => `${i + 1}. ${r}`).join('\n')
         : '';
+    const priorWarmupBlock =
+      grounding.priorWarmupQuestions && grounding.priorWarmupQuestions.length > 0
+        ? '\n\nPRIOR WARM-UP QUESTIONS (doc §3 "Warm-up Questions" — "no two candidates should receive the exact ' +
+          'same warm-up"): other candidates on this same recruiter link already received the warmupQuestions ' +
+          'below. Generate genuinely DIFFERENT ones this time — same competencies, different specific ' +
+          `questions:\n${grounding.priorWarmupQuestions.map((q, i) => `${i + 1}. ${q}`).join('\n')}`
+        : '';
     return (
       '\n\nThis simulation must be grounded in a REAL job description a recruiter provided — the crisis, ' +
       'tasks, and inbox/Slack content should let the candidate actually demonstrate or fail these specific ' +
@@ -365,7 +380,8 @@ export class HyrteSimulationGeneratorService {
       `- Capability requirements to probe: ${grounding.capabilityRequirements.map((c) => `${c.skill} (${c.importance})`).join(', ') || 'n/a'}\n` +
       `- Industry themes to weave in: ${grounding.industryProbeThemes.join(', ') || 'n/a'}\n` +
       'At least one task and one inbox/Slack message must directly test one of the core outcomes above.' +
-      customRequirementsBlock
+      customRequirementsBlock +
+      priorWarmupBlock
     );
   }
 
@@ -399,33 +415,37 @@ export class HyrteSimulationGeneratorService {
 
 // ── Step prompts ──
 
-const COMPANY_ORG_SYSTEM =
-  'You are generating Step 2 (Company + Organization + Company State) of a living-workplace simulation ' +
-  'for a job-interview platform. Return ONLY JSON matching this exact shape:\n' +
-  '{\n' +
-  '  "companyName": string,\n' +
-  '  "companyState": { "revenue": int, "customerSatisfaction": int, "engineeringCapacity": int, ' +
-  '"technicalDebt": int, "teamMorale": int, "budget": int, "riskLevel": int, "deadlinePressure": int, ' +
-  '"marketReputation": int, "cashRunway": int, "complianceRisk": int, "productQuality": int, ' +
-  '"burnout": int, "hiringCapacity": int, "operationalRisk": int, "growth": int } (each 0-100),\n' +
-  '  "missionBrief": { "objective": string (1 sentence, the concrete business objective this candidate\'s ' +
-  'role owns this quarter), "whyItMatters": string (1-2 sentences), "currentHealth": string (2-3 ' +
-  'sentences narrating the company\'s current state in plain language), "successMetrics": string[] (2-4 ' +
-  'short bullet phrases) },\n' +
-  '  "baselineChallenge": { "scenario": string (2-4 sentences posing a realistic prioritization trade-off ' +
-  'for this exact role, 3 concrete options embedded in the prose), "options": [{ "id": string (short ' +
-  'slug), "label": string (one sentence) }] (exactly 3), "roleKnowledgeQuestion": string (one short, ' +
-  'specific question testing real domain knowledge for THIS role — e.g. a PM gets asked how they\'d ' +
-  'validate a feature idea, an engineer gets asked how they\'d debug a specific class of issue — ' +
-  'answerable in 2-3 sentences), "toolsQuestion": string (one short question about a tool, technique, or ' +
-  'industry-basics fact this role would realistically need, e.g. "what would you check first to diagnose ' +
-  'X") },\n' +
-  '  "departments": [{ "name": string }] (3-5 entries, realistic department names for this company\'s ' +
-  'size/stage, e.g. Engineering, Sales, Marketing, Support, Finance — pick ones that would realistically ' +
-  'interact with this candidate\'s role)\n' +
-  '}\nThe scenario+options must be answerable in under a minute with no single objectively-correct ' +
-  'option; roleKnowledgeQuestion and toolsQuestion DO have better/worse answers (they get scored). No ' +
-  'prose outside the JSON.';
+/** Recruiter doc §3 "Warm-up Questions" — count now scaled by difficulty (3-6, was hardcoded at exactly 2). */
+function companyOrgSystem(difficulty: string): string {
+  const warmupCount = WARMUP_COUNT_BY_DIFFICULTY[difficulty] ?? WARMUP_COUNT_BY_DIFFICULTY.MEDIUM;
+  return (
+    'You are generating Step 2 (Company + Organization + Company State) of a living-workplace simulation ' +
+    'for a job-interview platform. Return ONLY JSON matching this exact shape:\n' +
+    '{\n' +
+    '  "companyName": string,\n' +
+    '  "companyState": { "revenue": int, "customerSatisfaction": int, "engineeringCapacity": int, ' +
+    '"technicalDebt": int, "teamMorale": int, "budget": int, "riskLevel": int, "deadlinePressure": int, ' +
+    '"marketReputation": int, "cashRunway": int, "complianceRisk": int, "productQuality": int, ' +
+    '"burnout": int, "hiringCapacity": int, "operationalRisk": int, "growth": int } (each 0-100),\n' +
+    '  "missionBrief": { "objective": string (1 sentence, the concrete business objective this candidate\'s ' +
+    'role owns this quarter), "whyItMatters": string (1-2 sentences), "currentHealth": string (2-3 ' +
+    'sentences narrating the company\'s current state in plain language), "successMetrics": string[] (2-4 ' +
+    'short bullet phrases) },\n' +
+    '  "baselineChallenge": { "scenario": string (2-4 sentences posing a realistic prioritization trade-off ' +
+    'for this exact role, 3 concrete options embedded in the prose), "options": [{ "id": string (short ' +
+    'slug), "label": string (one sentence) }] (exactly 3), "warmupQuestions": [{ "id": string (short slug), ' +
+    '"question": string (one short, specific question testing real domain knowledge, tools, or industry ' +
+    'basics for THIS role — e.g. a PM gets asked how they\'d validate a feature idea, an engineer gets asked ' +
+    'how they\'d debug a specific class of issue, answerable in 2-3 sentences) }] (EXACTLY ' +
+    `${warmupCount} entries, each genuinely distinct from the others — different sub-topics within the ` +
+    'role, not rephrasings of the same question) },\n' +
+    '  "departments": [{ "name": string }] (3-5 entries, realistic department names for this company\'s ' +
+    'size/stage, e.g. Engineering, Sales, Marketing, Support, Finance — pick ones that would realistically ' +
+    'interact with this candidate\'s role)\n' +
+    '}\nThe scenario+options must be answerable in under a minute with no single objectively-correct ' +
+    'option; warmupQuestions DO have better/worse answers (they get scored). No prose outside the JSON.'
+  );
+}
 
 const STAKEHOLDERS_SYSTEM =
   'You are generating Step 3 (Stakeholder Generation) of a living-workplace simulation, given a real ' +
@@ -548,17 +568,40 @@ function sanitizeMissionBrief(raw: unknown): FixtureMissionBrief {
   };
 }
 
-function sanitizeBaselineChallenge(raw: unknown): HyrteFixture['baselineChallenge'] {
+const FALLBACK_WARMUP_QUESTIONS: FixtureWarmupQuestion[] = [
+  { id: 'wq-fallback-1', question: 'Walk through how you would approach your first week in this role.' },
+  { id: 'wq-fallback-2', question: 'What tool or resource would you reach for first to understand the current state of things?' },
+  { id: 'wq-fallback-3', question: 'How would you know within the first month whether things were going well?' },
+  { id: 'wq-fallback-4', question: 'What would you want to learn from your manager in your first one-on-one?' },
+  { id: 'wq-fallback-5', question: 'How would you prioritize between two conflicting requests from different stakeholders?' },
+  { id: 'wq-fallback-6', question: 'What is one mistake you would want to avoid making in your first month?' },
+];
+
+function sanitizeWarmupQuestions(raw: unknown, expectedCount: number): FixtureWarmupQuestion[] {
+  const sanitized = asRecords(raw)
+    .filter((q) => typeof q.question === 'string' && q.question.trim())
+    .slice(0, expectedCount)
+    .map((q, i) => ({ id: typeof q.id === 'string' && q.id.trim() ? q.id.trim() : `wq${i + 1}`, question: String(q.question).trim() }));
+  // Pad with real fallback questions (never duplicate placeholders) if the LLM returned fewer than expected —
+  // the doc's "every candidate gets 3-6 questions" is a guarantee, not a best-effort.
+  let fallbackIdx = 0;
+  while (sanitized.length < expectedCount && fallbackIdx < FALLBACK_WARMUP_QUESTIONS.length) {
+    sanitized.push(FALLBACK_WARMUP_QUESTIONS[fallbackIdx]);
+    fallbackIdx++;
+  }
+  return sanitized;
+}
+
+function sanitizeBaselineChallenge(raw: unknown, expectedWarmupCount: number): HyrteFixture['baselineChallenge'] {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const options = asRecords(r.options)
     .filter((o) => typeof o.id === 'string' && typeof o.label === 'string')
     .slice(0, CAPS.baselineOptions)
     .map((o) => ({ id: String(o.id), label: String(o.label) }));
-  const roleKnowledgeQuestion = typeof r.roleKnowledgeQuestion === 'string' && r.roleKnowledgeQuestion.trim() ? r.roleKnowledgeQuestion.trim() : 'Walk through how you would approach your first week in this role.';
-  const toolsQuestion = typeof r.toolsQuestion === 'string' && r.toolsQuestion.trim() ? r.toolsQuestion.trim() : 'What tool or resource would you reach for first to understand the current state of things?';
+  const warmupQuestions = sanitizeWarmupQuestions(r.warmupQuestions, expectedWarmupCount);
 
   if (typeof r.scenario === 'string' && r.scenario.trim() && options.length >= 2) {
-    return { scenario: r.scenario.trim(), options, roleKnowledgeQuestion, toolsQuestion };
+    return { scenario: r.scenario.trim(), options, warmupQuestions };
   }
   return {
     scenario:
@@ -570,8 +613,7 @@ function sanitizeBaselineChallenge(raw: unknown): HyrteFixture['baselineChalleng
       { id: 'b', label: 'Fix the issue affecting current users' },
       { id: 'c', label: 'Stick to the commitment already made to leadership' },
     ],
-    roleKnowledgeQuestion,
-    toolsQuestion,
+    warmupQuestions,
   };
 }
 

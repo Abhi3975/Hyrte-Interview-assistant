@@ -53,8 +53,11 @@ export function getPmSaasStartupFixture(): HyrteFixture {
         { id: 'b', label: 'Fix the perf regression for existing customers first' },
         { id: 'c', label: 'Stick to the onboarding redesign as promised' },
       ],
-      roleKnowledgeQuestion: 'How would you typically decide whether a churn risk is worth an unplanned engineering sprint?',
-      toolsQuestion: 'What would you look at first to figure out how bad the dashboard perf regression actually is?',
+      warmupQuestions: [
+        { id: 'wq1', question: 'How would you typically decide whether a churn risk is worth an unplanned engineering sprint?' },
+        { id: 'wq2', question: 'What would you look at first to figure out how bad the dashboard perf regression actually is?' },
+        { id: 'wq3', question: 'How would you communicate a scope trade-off like this one to the board?' },
+      ],
     },
     stakeholders: [
       {

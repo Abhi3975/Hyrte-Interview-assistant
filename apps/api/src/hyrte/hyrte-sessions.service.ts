@@ -84,11 +84,28 @@ export class HyrteSessionsService {
       culture: request.culture,
       sessionType: 'ASSESSMENT',
     };
+    // Doc §3 "Warm-up Questions" — "no two candidates should receive the
+    // exact same warm-up." Real when it matters most: a recruiter link is
+    // often shared with several candidates for the same role, so pull the
+    // actual warm-up questions already generated for prior candidates on
+    // THIS link and feed them into groundingNote() as an explicit avoid-list.
+    const priorSessions = await this.prisma.hyrteSession.findMany({
+      where: { simulationRequestId: request.id },
+      select: { baselineChallenge: true },
+    });
+    const priorWarmupQuestions = priorSessions
+      .flatMap((s) => {
+        const challenge = s.baselineChallenge as { warmupQuestions?: { question?: string }[] } | null;
+        return (challenge?.warmupQuestions ?? []).map((q) => q.question).filter((q): q is string => !!q);
+      })
+      .slice(0, 20); // sane cap — this is prompt context, not a permanent archive
+
     const grounding: JobSuccessModelGrounding = {
       coreOutcomes: request.coreOutcomes,
       capabilityRequirements: (request.capabilityRequirements ?? []) as unknown as JobSuccessModelGrounding['capabilityRequirements'],
       industryProbeThemes: ((request.industryContext as { probeThemes?: string[] } | null)?.probeThemes ?? []),
       customRequirements: request.customRequirements,
+      priorWarmupQuestions,
     };
     const session = await this.createPlaceholder(dto, candidateId, { simulationRequestId: request.id });
 
@@ -503,32 +520,30 @@ export class HyrteSessionsService {
     const challenge = session.baselineChallenge as unknown as {
       scenario: string;
       options: { id: string; label: string }[];
-      roleKnowledgeQuestion: string;
-      toolsQuestion: string;
+      warmupQuestions: { id: string; question: string }[];
     } | null;
     const chosen = challenge?.options.find((o) => o.id === dto.optionId);
     if (!chosen) throw new BadRequestException('Invalid option for this challenge');
 
-    // Upgrade §4/Step 9 — Role Calibration is "not MCQ-only": the two
-    // free-text questions get a real score, unlike the decision-framework
-    // scenario above (deliberately unscored — no single correct option).
-    const { roleKnowledgeScore, toolsScore, notes } = await this.scoreCalibrationAnswers(
-      session.role,
-      challenge?.roleKnowledgeQuestion ?? '',
-      dto.roleKnowledgeAnswer,
-      challenge?.toolsQuestion ?? '',
-      dto.toolsAnswer,
-    );
-    const calibrationScore = Math.round((roleKnowledgeScore + toolsScore) / 2);
+    // Recruiter doc §3 "Warm-up Questions" — Role Calibration is "not
+    // MCQ-only": every warm-up question (3-6, scaled by difficulty) gets a
+    // real score, unlike the decision-framework scenario above (deliberately
+    // unscored — no single correct option). Was hardcoded to exactly 2
+    // fixed questions before this.
+    const warmupQuestions = challenge?.warmupQuestions ?? [];
+    const qa = warmupQuestions.map((q) => ({
+      id: q.id,
+      question: q.question,
+      answer: dto.warmupAnswers.find((a) => a.id === q.id)?.answer ?? '',
+    }));
+    const { scores, averageScore, notes } = await this.scoreCalibrationAnswers(session.role, qa);
+    const calibrationScore = averageScore;
 
     const baselineResponse = {
       optionId: dto.optionId,
       optionLabel: chosen.label,
       reasoning: dto.reasoning,
-      roleKnowledgeAnswer: dto.roleKnowledgeAnswer,
-      roleKnowledgeScore,
-      toolsAnswer: dto.toolsAnswer,
-      toolsScore,
+      warmupAnswers: qa.map((q, i) => ({ id: q.id, question: q.question, answer: q.answer, score: scores[i] })),
       calibrationScore,
     };
 
@@ -552,7 +567,7 @@ export class HyrteSessionsService {
         type: 'SIMULATION_DECISION',
         rawText:
           `Baseline challenge — chose "${chosen.label}". Reasoning: ${dto.reasoning} | Role calibration: ` +
-          `${calibrationScore}/100 (role knowledge ${roleKnowledgeScore}, tools ${toolsScore}) — ${notes}`,
+          `${calibrationScore}/100 across ${qa.length} warm-up questions (${scores.join(', ')}) — ${notes}`,
         behaviorContext: 'AMBIGUITY', // the decision-framework scenario has no single correct option, by design (§8 step 2)
       }),
     ]);
@@ -574,38 +589,38 @@ export class HyrteSessionsService {
     return updated;
   }
 
+  /** Recruiter doc §3 — scores N warm-up questions (3-6, was hardcoded to exactly 2) in one call, same order as given. */
   private async scoreCalibrationAnswers(
     role: string,
-    roleKnowledgeQuestion: string,
-    roleKnowledgeAnswer: string,
-    toolsQuestion: string,
-    toolsAnswer: string,
-  ): Promise<{ roleKnowledgeScore: number; toolsScore: number; notes: string }> {
+    qa: { id: string; question: string; answer: string }[],
+  ): Promise<{ scores: number[]; averageScore: number; notes: string }> {
+    if (qa.length === 0) return { scores: [], averageScore: 50, notes: 'No warm-up questions to score.' };
     try {
-      const result = await this.ai.completeJson<{ roleKnowledgeScore?: number; toolsScore?: number; notes?: string }>(
+      const result = await this.ai.completeJson<{ scores?: number[]; notes?: string }>(
         [
           {
             role: 'system',
             content:
               'You are scoring a quick Role Calibration check before a candidate enters a workplace simulation. ' +
               'Score each answer 0-100 on whether it shows real, correct understanding — brief but substantive ' +
-              'answers can score well; empty/nonsensical answers score near 0. Return ONLY JSON: ' +
-              '{"roleKnowledgeScore": int, "toolsScore": int, "notes": string (one short sentence)}.',
+              'answers can score well; empty/nonsensical answers score near 0. Return ONLY JSON: {"scores": ' +
+              `int[] (EXACTLY ${qa.length} entries, same order as the questions given), "notes": string (one ` +
+              'short sentence, overall impression)}.',
           },
           {
             role: 'user',
-            content:
-              `Role: ${role}.\nQ1 (role knowledge): ${roleKnowledgeQuestion}\nA1: ${roleKnowledgeAnswer}\n\n` +
-              `Q2 (tools/industry basics): ${toolsQuestion}\nA2: ${toolsAnswer}`,
+            content: `Role: ${role}.\n\n` + qa.map((p, i) => `Q${i + 1}: ${p.question}\nA${i + 1}: ${p.answer}`).join('\n\n'),
           },
         ],
-        { temperature: 0.3, maxTokens: 200 },
+        { temperature: 0.3, maxTokens: 300 },
       );
       const clamp = (n: unknown) => Math.max(0, Math.min(100, Math.round(typeof n === 'number' && Number.isFinite(n) ? n : 50)));
-      return { roleKnowledgeScore: clamp(result.roleKnowledgeScore), toolsScore: clamp(result.toolsScore), notes: result.notes ?? '' };
+      const scores = qa.map((_, i) => clamp(result.scores?.[i]));
+      const averageScore = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
+      return { scores, averageScore, notes: result.notes ?? '' };
     } catch (e) {
       this.logger.warn(`scoreCalibrationAnswers failed, defaulting to neutral scores: ${e instanceof Error ? e.message : String(e)}`);
-      return { roleKnowledgeScore: 50, toolsScore: 50, notes: 'Scoring unavailable — defaulted to neutral.' };
+      return { scores: qa.map(() => 50), averageScore: 50, notes: 'Scoring unavailable — defaulted to neutral.' };
     }
   }
 }

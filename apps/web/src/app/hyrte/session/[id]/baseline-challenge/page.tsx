@@ -17,8 +17,7 @@ export default function HyrteBaselineChallenge({ params }: { params: Promise<{ i
   const queryClient = useQueryClient();
   const [optionId, setOptionId] = useState('');
   const [reasoning, setReasoning] = useState('');
-  const [roleKnowledgeAnswer, setRoleKnowledgeAnswer] = useState('');
-  const [toolsAnswer, setToolsAnswer] = useState('');
+  const [warmupAnswers, setWarmupAnswers] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
 
   const { data: session, isLoading } = useQuery({
@@ -27,7 +26,12 @@ export default function HyrteBaselineChallenge({ params }: { params: Promise<{ i
   });
 
   const submitMutation = useMutation({
-    mutationFn: () => api.post(`/hyrte/sessions/${id}/baseline-challenge/submit`, { optionId, reasoning, roleKnowledgeAnswer, toolsAnswer }),
+    mutationFn: () =>
+      api.post(`/hyrte/sessions/${id}/baseline-challenge/submit`, {
+        optionId,
+        reasoning,
+        warmupAnswers: Object.entries(warmupAnswers).map(([qid, answer]) => ({ id: qid, answer })),
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['hyrte', 'session', id] });
       router.push(`/hyrte/session/${id}`);
@@ -37,10 +41,9 @@ export default function HyrteBaselineChallenge({ params }: { params: Promise<{ i
 
   const challenge = session?.baselineChallenge;
   const canSubmit =
-    optionId &&
+    !!optionId &&
     reasoning.trim().length >= MIN_REASONING_LENGTH &&
-    roleKnowledgeAnswer.trim().length >= MIN_ANSWER_LENGTH &&
-    toolsAnswer.trim().length >= MIN_ANSWER_LENGTH;
+    (challenge?.warmupQuestions ?? []).every((q) => (warmupAnswers[q.id] ?? '').trim().length >= MIN_ANSWER_LENGTH);
 
   return (
     <DashboardShell
@@ -99,30 +102,22 @@ export default function HyrteBaselineChallenge({ params }: { params: Promise<{ i
             </div>
 
             <p className="text-xs text-black/50 dark:text-white/50">
-              Two quick knowledge questions — unlike the scenario above, these do get scored.
+              {challenge.warmupQuestions.length} quick warm-up questions — unlike the scenario above, these do
+              get scored.
             </p>
 
-            <div className="card">
-              <p className="text-sm font-medium">{challenge.roleKnowledgeQuestion}</p>
-              <textarea
-                className="mt-2 w-full rounded-lg border border-black/10 bg-transparent px-3 py-2 text-sm dark:border-white/10"
-                rows={2}
-                placeholder="Your answer…"
-                value={roleKnowledgeAnswer}
-                onChange={(e) => setRoleKnowledgeAnswer(e.target.value)}
-              />
-            </div>
-
-            <div className="card">
-              <p className="text-sm font-medium">{challenge.toolsQuestion}</p>
-              <textarea
-                className="mt-2 w-full rounded-lg border border-black/10 bg-transparent px-3 py-2 text-sm dark:border-white/10"
-                rows={2}
-                placeholder="Your answer…"
-                value={toolsAnswer}
-                onChange={(e) => setToolsAnswer(e.target.value)}
-              />
-            </div>
+            {challenge.warmupQuestions.map((q) => (
+              <div key={q.id} className="card">
+                <p className="text-sm font-medium">{q.question}</p>
+                <textarea
+                  className="mt-2 w-full rounded-lg border border-black/10 bg-transparent px-3 py-2 text-sm dark:border-white/10"
+                  rows={2}
+                  placeholder="Your answer…"
+                  value={warmupAnswers[q.id] ?? ''}
+                  onChange={(e) => setWarmupAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))}
+                />
+              </div>
+            ))}
 
             {error && <p className="text-sm text-red-500">{error}</p>}
 

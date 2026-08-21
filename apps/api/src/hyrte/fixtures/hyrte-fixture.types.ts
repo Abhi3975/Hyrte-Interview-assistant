@@ -118,20 +118,26 @@ export interface FixtureBaselineChallengeOption {
   label: string;
 }
 
+/** Recruiter doc §3 "Warm-up Questions" — 3-6 per candidate, scaled by difficulty, LLM-scored at submission. */
+export interface FixtureWarmupQuestion {
+  id: string;
+  question: string;
+}
+
 /**
  * Upgrade §4/Step 9 — Role Calibration, "not MCQ-only". `scenario`+`options`
  * is the original decision-framework judgment call (kept deliberately
- * unscored — no single correct option, per the doc). `roleKnowledgeQuestion`
- * and `toolsQuestion` are new: short free-text questions testing real role
- * knowledge and tools/industry familiarity, LLM-scored at submission time
- * into a calibrationScore that adjusts event difficulty (see
- * HyrteConsequenceService.scheduleChaosWave).
+ * unscored — no single correct option, per the doc). `warmupQuestions` are
+ * new (recruiter doc §3): 3-6 short free-text questions — count scaled by
+ * difficulty — testing real role knowledge, tools, and industry
+ * familiarity, LLM-scored at submission time into a calibrationScore that
+ * adjusts event difficulty (see HyrteConsequenceService.scheduleChaosWave).
+ * Was fixed at exactly 2 (roleKnowledgeQuestion/toolsQuestion) before this.
  */
 export interface FixtureBaselineChallenge {
   scenario: string;
   options: FixtureBaselineChallengeOption[];
-  roleKnowledgeQuestion: string;
-  toolsQuestion: string;
+  warmupQuestions: FixtureWarmupQuestion[];
 }
 
 /** UX flow §8 step 1 — shown before the workspace opens. */
