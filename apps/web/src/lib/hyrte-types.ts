@@ -6,6 +6,8 @@ export interface HyrteStakeholder {
   department: string | null;
   experienceLevel: string | null;
   currentTasks: string[];
+  // A fixed org-position fact, not a relationship/emotion numeric — not in OMIT_CANDIDATE_INTERNALS, genuinely sent to candidates already.
+  authorityLevel: number;
   // Trust/respect/cooperation/influence/stress/urgency/patience/motivation are
   // intentionally absent — Hard Rule #5 (Master Build Prompt): candidate-facing
   // payloads physically exclude trust/emotion numerics. The API omits these
@@ -45,12 +47,20 @@ export interface HyrteCompanyState {
   growth: number;
 }
 
+export interface HyrteMissionObjectives {
+  primary: string[];
+  secondary: string[];
+  stretch: string[];
+}
+
 export interface HyrteMissionBrief {
   objective: string;
   whyItMatters: string;
   currentHealth: string;
   successMetrics: string[];
   manager?: { name: string; role: string };
+  objectives: HyrteMissionObjectives;
+  knownRisks: string[];
 }
 
 export interface HyrteBaselineChallengeOption {

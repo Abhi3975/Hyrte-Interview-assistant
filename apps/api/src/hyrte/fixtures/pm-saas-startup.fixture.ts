@@ -42,6 +42,12 @@ export function getPmSaasStartupFixture(): HyrteFixture {
         'Customer satisfaction recovers to 75+',
       ],
       manager: { name: 'Priya Raman', role: 'CEO' },
+      objectives: {
+        primary: ['Reduce enterprise churn to under 5% this quarter', 'Keep the Q3 roadmap on schedule'],
+        secondary: ['Rebuild trust with the two accounts already lost to support incidents'],
+        stretch: ['Turn the support-incident postmortem into a repeatable playbook for the team'],
+      },
+      knownRisks: ['Engineering capacity is already stretched between roadmap work and support firefighting'],
     },
     baselineChallenge: {
       scenario:

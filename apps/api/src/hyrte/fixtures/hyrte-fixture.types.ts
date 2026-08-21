@@ -140,6 +140,13 @@ export interface FixtureBaselineChallenge {
   warmupQuestions: FixtureWarmupQuestion[];
 }
 
+/** Refinements doc §1 — "Primary objectives / Secondary objectives / Stretch objectives... multiple priorities to balance rather than one obvious task." */
+export interface FixtureMissionObjectives {
+  primary: string[];
+  secondary: string[];
+  stretch: string[];
+}
+
 /** UX flow §8 step 1 — shown before the workspace opens. */
 export interface FixtureMissionBrief {
   objective: string;
@@ -148,6 +155,10 @@ export interface FixtureMissionBrief {
   successMetrics: string[];
   /** Upgrade §4/Step 8 — the candidate's reporting manager, derived from the real generated roster (highest-authority stakeholder), not invented separately. */
   manager?: { name: string; role: string };
+  /** Refinements doc §1 — tiered objectives, replacing the single flat `objective` line as the primary source of "what to balance." `objective` is kept as a short one-line summary. */
+  objectives: FixtureMissionObjectives;
+  /** Refinements doc §1 — "Known risks", shown directly in the brief. */
+  knownRisks: string[];
 }
 
 export interface HyrteFixture {

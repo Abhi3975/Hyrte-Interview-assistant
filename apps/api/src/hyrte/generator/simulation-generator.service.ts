@@ -12,6 +12,7 @@ import {
   FixtureInboxMessage,
   FixtureKnowledgeDoc,
   FixtureMissionBrief,
+  FixtureMissionObjectives,
   FixtureScheduledEvent,
   FixtureSignatureArtifact,
   FixtureSlackMessage,
@@ -101,6 +102,8 @@ interface CompanyOrgResult {
   missionBrief?: Record<string, unknown>;
   baselineChallenge?: Record<string, unknown>;
   departments?: { name?: unknown }[];
+  /** Refinements doc §1 — "Hidden risks (not explicitly revealed)". Deliberately NOT part of missionBrief — never persisted to the candidate-visible session row, only folded into a stakeholder's privateKnowledge (see distributeHiddenRisks) so it uses the exact same never-volunteered, investigation-only exposure this codebase already built for Hidden Info. */
+  hiddenRisks?: string[];
 }
 
 interface StakeholdersResult {
@@ -224,6 +227,8 @@ export class HyrteSimulationGeneratorService {
       companyOrg.baselineChallenge,
       WARMUP_COUNT_BY_DIFFICULTY[dto.difficulty] ?? WARMUP_COUNT_BY_DIFFICULTY.MEDIUM,
     );
+    // Never touches missionBrief — see distributeHiddenRisks below for where this actually lands.
+    const hiddenRisks = sanitizeStringList(companyOrg.hiddenRisks, 2);
 
     // Step 3 — Stakeholder Generation, informed by the real company + departments above.
     const stakeholdersRaw = await this.step<StakeholdersResult>(
@@ -238,6 +243,7 @@ export class HyrteSimulationGeneratorService {
     const stakeholders = sanitizeStakeholders(stakeholdersRaw.stakeholders, departments);
     if (stakeholders.length === 0) throw new Error('Generated fixture had no valid stakeholders');
     assignDepartmentHeads(departments, stakeholders);
+    distributeHiddenRisks(hiddenRisks, stakeholders);
     const roster = stakeholders.map((s) => ({ key: s.key, name: s.name, role: s.role, department: s.department }));
 
     // Upgrade §4/Step 8 — the candidate's manager is the highest-authority
@@ -430,7 +436,17 @@ function companyOrgSystem(difficulty: string): string {
     '  "missionBrief": { "objective": string (1 sentence, the concrete business objective this candidate\'s ' +
     'role owns this quarter), "whyItMatters": string (1-2 sentences), "currentHealth": string (2-3 ' +
     'sentences narrating the company\'s current state in plain language), "successMetrics": string[] (2-4 ' +
-    'short bullet phrases) },\n' +
+    'short bullet phrases), "objectives": { "primary": string[] (1-2, what the candidate MUST accomplish — ' +
+    'the non-negotiable core of the role this quarter), "secondary": string[] (1-2, should also accomplish ' +
+    'if time allows, real but lower-stakes than primary), "stretch": string[] (exactly 1, an ambitious ' +
+    'above-and-beyond outcome — genuinely difficult, not a freebie) } (doc\'s own "multiple priorities to ' +
+    'balance rather than one obvious task" — these three tiers must be genuinely DIFFERENT priorities that ' +
+    'could plausibly conflict, not the same goal rephrased three times), "knownRisks": string[] (1-2, real ' +
+    'concrete risks the candidate is TOLD about upfront, distinct from the hiddenRisks below) },\n' +
+    '  "hiddenRisks": string[] (1-2, real concrete risks or landmines that exist in this company but are ' +
+    'deliberately NOT told to the candidate upfront — e.g. an unresolved vendor dispute, a key person ' +
+    'about to quit, a compliance gap nobody has flagged yet. These must be discoverable only through ' +
+    'investigation, never shown in the brief itself — write them as facts, not as a warning label),\n' +
     '  "baselineChallenge": { "scenario": string (2-4 sentences posing a realistic prioritization trade-off ' +
     'for this exact role, 3 concrete options embedded in the prose), "options": [{ "id": string (short ' +
     'slug), "label": string (one sentence) }] (exactly 3), "warmupQuestions": [{ "id": string (short slug), ' +
@@ -549,13 +565,33 @@ function sanitizeCompanyState(raw: unknown): HyrteFixture['companyState'] {
   return Object.fromEntries(COMPANY_STATE_KEYS.map((key) => [key, clamp0to100(r[key])])) as HyrteFixture['companyState'];
 }
 
-function sanitizeMissionBrief(raw: unknown): FixtureMissionBrief {
+function sanitizeStringList(raw: unknown, max: number): string[] {
+  return Array.isArray(raw) ? raw.filter((s): s is string => typeof s === 'string' && s.trim() !== '').map((s) => s.trim()).slice(0, max) : [];
+}
+
+export function sanitizeMissionBrief(raw: unknown): FixtureMissionBrief {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const metrics = Array.isArray(r.successMetrics)
     ? r.successMetrics.filter((m): m is string => typeof m === 'string').slice(0, CAPS.successMetrics)
     : [];
+  const objective = typeof r.objective === 'string' && r.objective.trim() ? r.objective.trim() : 'Keep the team on track this quarter.';
+
+  // Refinements doc §1 — tiered objectives. Real fallback (never empty
+  // arrays) derived from the single `objective` line when the LLM omits
+  // the richer shape, so "multiple priorities to balance" always holds.
+  const rawObjectives = (r.objectives && typeof r.objectives === 'object' ? r.objectives : {}) as Record<string, unknown>;
+  const primary = sanitizeStringList(rawObjectives.primary, 2);
+  const secondary = sanitizeStringList(rawObjectives.secondary, 2);
+  const stretch = sanitizeStringList(rawObjectives.stretch, 1);
+  const objectives: FixtureMissionObjectives = {
+    primary: primary.length > 0 ? primary : [objective],
+    secondary: secondary.length > 0 ? secondary : ['Keep stakeholders informed as things develop'],
+    stretch: stretch.length > 0 ? stretch : ['Leave the team better positioned than you found it'],
+  };
+  const knownRisks = sanitizeStringList(r.knownRisks, 3);
+
   return {
-    objective: typeof r.objective === 'string' && r.objective.trim() ? r.objective.trim() : 'Keep the team on track this quarter.',
+    objective,
     whyItMatters:
       typeof r.whyItMatters === 'string' && r.whyItMatters.trim()
         ? r.whyItMatters.trim()
@@ -565,7 +601,27 @@ function sanitizeMissionBrief(raw: unknown): FixtureMissionBrief {
         ? r.currentHealth.trim()
         : 'The company is in a stable but demanding period, balancing growth with operational pressure.',
     successMetrics: metrics.length > 0 ? metrics : ['Deliver on the current roadmap commitments'],
+    objectives,
+    knownRisks: knownRisks.length > 0 ? knownRisks : ['Resourcing is tighter than anyone would like right now'],
   };
+}
+
+/**
+ * Refinements doc §1 — "Hidden risks (not explicitly revealed)". Distributes
+ * each hidden risk into a real stakeholder's `privateKnowledge` — reusing
+ * the Hidden Info System's exact, already-proven exposure mechanic
+ * (never volunteered, scrubbed from every candidate-facing payload, only
+ * surfaces if the candidate investigates and asks the right person) rather
+ * than inventing a second, parallel "how does this get revealed" design.
+ * Mutates the given stakeholders array in place (called after stakeholder
+ * sanitization, before persistence).
+ */
+export function distributeHiddenRisks(hiddenRisks: string[], stakeholders: FixtureStakeholder[]): void {
+  if (hiddenRisks.length === 0 || stakeholders.length === 0) return;
+  hiddenRisks.forEach((risk, i) => {
+    const holder = stakeholders[i % stakeholders.length];
+    holder.privateKnowledge = [...(holder.privateKnowledge ?? []), risk];
+  });
 }
 
 const FALLBACK_WARMUP_QUESTIONS: FixtureWarmupQuestion[] = [

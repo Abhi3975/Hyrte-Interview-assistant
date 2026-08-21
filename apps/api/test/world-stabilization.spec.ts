@@ -15,6 +15,8 @@ function baseFixture(): HyrteFixture {
       whyItMatters: 'Churn is hurting revenue',
       currentHealth: 'Onboarding completion rates have dropped and churn is rising sharply',
       successMetrics: ['Lower churn'],
+      objectives: { primary: ['Reduce churn'], secondary: ['Improve onboarding'], stretch: ['Build a churn dashboard'] },
+      knownRisks: ['Support team is understaffed'],
     },
     baselineChallenge: { scenario: 'x', options: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }], warmupQuestions: [{ id: 'wq1', question: 'q1' }, { id: 'wq2', question: 'q2' }] },
     departments: [{ name: 'Engineering', headStakeholderKey: 'eng1' }],

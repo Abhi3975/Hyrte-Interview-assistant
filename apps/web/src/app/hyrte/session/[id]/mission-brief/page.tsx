@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { DashboardShell } from '@/components/dashboard-shell';
 import { api } from '@/lib/api';
-import { HyrteSession, PLANNED_DURATION_MINUTES } from '@/lib/hyrte-types';
+import { HyrteSession, HyrteStakeholder, PLANNED_DURATION_MINUTES } from '@/lib/hyrte-types';
 
 /** UX flow §8 step 1 — shown once, before the workspace unlocks. */
 export default function HyrteMissionBrief({ params }: { params: Promise<{ id: string }> }) {
@@ -36,6 +36,17 @@ export default function HyrteMissionBrief({ params }: { params: Promise<{ id: st
   });
 
   const brief = session?.missionBrief;
+
+  // Refinements doc §1 — "Introduce the Stakeholders... every simulation
+  // begins by introducing the key people." Reuses the existing
+  // /stakeholders endpoint rather than a new one — was previously only
+  // reachable via a separate nav click, never surfaced up front.
+  const { data: stakeholders } = useQuery({
+    queryKey: ['hyrte', 'stakeholders', id],
+    queryFn: () => api.get<HyrteStakeholder[]>(`/hyrte/sessions/${id}/stakeholders`),
+    enabled: !!brief,
+  });
+  const keyPeople = [...(stakeholders ?? [])].sort((a, b) => b.authorityLevel - a.authorityLevel).slice(0, 4);
 
   return (
     <DashboardShell
@@ -108,6 +119,54 @@ export default function HyrteMissionBrief({ params }: { params: Promise<{ id: st
               <p className="mt-2 text-sm text-black/70 dark:text-white/70">{brief.currentHealth}</p>
             </div>
 
+            {/* Refinements doc §1 — "multiple priorities to balance rather than one obvious task." */}
+            <div className="card space-y-3">
+              <h3 className="font-semibold">Priorities to balance</h3>
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-black/40 dark:text-white/40">
+                  Primary — must accomplish
+                </div>
+                <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-black/80 dark:text-white/80">
+                  {brief.objectives.primary.map((o) => (
+                    <li key={o}>{o}</li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-black/40 dark:text-white/40">
+                  Secondary — should also accomplish
+                </div>
+                <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-black/70 dark:text-white/70">
+                  {brief.objectives.secondary.map((o) => (
+                    <li key={o}>{o}</li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
+                  Stretch — above and beyond
+                </div>
+                <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-black/70 dark:text-white/70">
+                  {brief.objectives.stretch.map((o) => (
+                    <li key={o}>{o}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+
+            <div className="card">
+              <h3 className="font-semibold">Known risks</h3>
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-black/70 dark:text-white/70">
+                {brief.knownRisks.map((r) => (
+                  <li key={r}>{r}</li>
+                ))}
+              </ul>
+              <p className="mt-2 text-xs text-black/40 dark:text-white/40">
+                These are the risks you&apos;re told about upfront. Real workplaces have others you&apos;ll
+                only find by asking the right questions.
+              </p>
+            </div>
+
             <div className="card">
               <h3 className="font-semibold">You&apos;ll be evaluated on</h3>
               <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-black/70 dark:text-white/70">
@@ -116,6 +175,25 @@ export default function HyrteMissionBrief({ params }: { params: Promise<{ id: st
                 ))}
               </ul>
             </div>
+
+            {keyPeople.length > 0 && (
+              <div className="card">
+                <h3 className="font-semibold">Key people you&apos;ll work with</h3>
+                <div className="mt-3 flex flex-wrap gap-3">
+                  {keyPeople.map((s) => (
+                    <div key={s.id} className="flex items-center gap-2 rounded-lg border border-black/5 px-2.5 py-1.5 dark:border-white/10">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-black/5 text-[11px] font-semibold dark:bg-white/10">
+                        {s.name.split(' ').map((n) => n[0]).slice(0, 2).join('')}
+                      </span>
+                      <div>
+                        <div className="text-xs font-medium">{s.name}</div>
+                        <div className="text-[11px] text-black/50 dark:text-white/50">{s.role}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div className="card">
               <h3 className="font-semibold">What to expect</h3>
