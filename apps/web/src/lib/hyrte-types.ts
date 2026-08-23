@@ -136,7 +136,11 @@ export interface HyrteSlackMessage {
   fromStakeholder?: HyrteStakeholder | null;
 }
 
-export type WorkItemStage = 'NEW' | 'IN_PROGRESS' | 'WAITING_REVIEW' | 'BLOCKED' | 'DONE';
+// Refinements doc §5 — 7 real pipeline stages. WAITING_REVIEW is this
+// codebase's existing name for the doc's "Needs Review"; DELEGATED (just
+// handed to a stakeholder, tick hasn't started yet) and WAITING (paused on
+// someone else's input — e.g. a clarification question) are the two new ones.
+export type WorkItemStage = 'NEW' | 'DELEGATED' | 'IN_PROGRESS' | 'WAITING' | 'WAITING_REVIEW' | 'BLOCKED' | 'DONE';
 export type WorkItemPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
 export interface HyrteWorkItemReview {

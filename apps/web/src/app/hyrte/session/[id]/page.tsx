@@ -92,12 +92,16 @@ export default function HyrteHome({ params }: { params: Promise<{ id: string }> 
   // four are the closest universally-real substitutes, all backed by data
   // that already exists for any role/seed.
   const openEscalations = unread.filter((m) => m.urgent || m.escalatesMessageId).length;
-  const activeWorkItems = workItems?.filter((w) => w.stage === 'NEW' || w.stage === 'IN_PROGRESS').length ?? 0;
+  const activeWorkItems = workItems?.filter((w) => w.stage === 'NEW' || w.stage === 'DELEGATED' || w.stage === 'IN_PROGRESS' || w.stage === 'WAITING').length ?? 0;
 
+  // Refinements doc §5/§2 — "Team workload" on the dashboard should reflect
+  // all 4 real in-flight stakeholder-owned stages, not just IN_PROGRESS/
+  // WAITING_REVIEW — DELEGATED (just handed off) and WAITING (paused on the
+  // candidate's answer) are just as much "what this person is on right now."
   const workstreams = (stakeholders ?? [])
     .map((s) => ({
       stakeholder: s,
-      item: workItems?.find((w) => w.ownerStakeholderId === s.id && (w.stage === 'IN_PROGRESS' || w.stage === 'WAITING_REVIEW')),
+      item: workItems?.find((w) => w.ownerStakeholderId === s.id && (w.stage === 'DELEGATED' || w.stage === 'IN_PROGRESS' || w.stage === 'WAITING' || w.stage === 'WAITING_REVIEW')),
     }))
     .filter((w) => w.item);
 

@@ -833,7 +833,7 @@ export class HyrteConsequenceService {
       this.prisma.hyrteStakeholder.findMany({ where: { sessionId } }),
       this.prisma.hyrteCompanyState.findUnique({ where: { sessionId } }),
       this.prisma.hyrteWorkItem.findMany({
-        where: { sessionId, stage: { in: ['NEW', 'IN_PROGRESS', 'WAITING_REVIEW'] } },
+        where: { sessionId, stage: { in: ['NEW', 'DELEGATED', 'IN_PROGRESS', 'WAITING', 'WAITING_REVIEW'] } },
         select: { title: true },
         take: 5,
       }),

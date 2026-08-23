@@ -50,7 +50,7 @@ describe('HyrteCommandBarService reaction branching (refinements doc §6)', () =
     expect(result).toEqual({ overreach: false, message: 'Sent to Avery Johnson.', workItemId: 'work-item-1' });
   });
 
-  it('"ask_clarification": pauses the work item (stage NEW, no tick scheduled) and links a blocking inbox message', async () => {
+  it('"ask_clarification": pauses the work item (stage WAITING, no tick scheduled) and links a blocking inbox message', async () => {
     const { service, workItemCreate, inboxCreate, workTicks } = buildService({
       isOverreach: false,
       targetStakeholderKey: target.id,
@@ -61,7 +61,9 @@ describe('HyrteCommandBarService reaction branching (refinements doc §6)', () =
 
     const result = await service.submit('session-1', 'candidate-1', 'Avery, look into the thing.');
 
-    expect(workItemCreate.mock.calls[0][0].data.stage).toBe('NEW');
+    // Refinements doc §5 — WAITING is the real pipeline stage for "paused on
+    // someone else's input," not a reuse of NEW.
+    expect(workItemCreate.mock.calls[0][0].data.stage).toBe('WAITING');
     expect(workTicks.scheduleStart).not.toHaveBeenCalled();
     expect(inboxCreate).toHaveBeenCalledTimes(1);
     const inboxData = inboxCreate.mock.calls[0][0].data;

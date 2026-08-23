@@ -1175,9 +1175,18 @@ model HyrteSlackMessage {
 // one of these, not a bespoke type per origin. Model kept named HyrteWorkItem
 // with @@map("HyrteTask") to preserve the existing physical table/data
 // instead of a rename+copy migration — purely a Prisma-side naming change.
+// Refinements doc §5 — Work Pipeline: "Each task moves naturally through its
+// lifecycle: New / In Progress / Waiting / Blocked / Needs Review / Delegated
+// / Done" (7 states). WAITING_REVIEW is this codebase's pre-existing name for
+// "Needs Review" (unchanged to avoid a wide rename across every call site
+// that already reads it) — DELEGATED and WAITING are the two genuinely new
+// additions, both wired to real transitions in work-tick.service.ts /
+// command-bar.service.ts, not just added as unused labels.
 enum WorkItemStage {
   NEW
+  DELEGATED
   IN_PROGRESS
+  WAITING
   WAITING_REVIEW
   BLOCKED
   DONE

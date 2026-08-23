@@ -17,10 +17,17 @@ const PRIORITY_COLOR: Record<string, string> = {
   LOW: 'bg-black/10 text-black/60 dark:bg-white/10 dark:text-white/60',
 };
 
+// Refinements doc §5 — 7-stage lifecycle (was 5: New/In Progress/Waiting
+// Review/Blocked/Done). DELEGATED sits right after New (handed off, tick
+// hasn't started) and WAITING sits after In Progress (paused on someone
+// else's input, e.g. a clarification question) — both real, populated stages
+// now, not just labels.
 const COLUMNS: { stage: WorkItemStage; label: string }[] = [
   { stage: 'NEW', label: 'New' },
+  { stage: 'DELEGATED', label: 'Delegated' },
   { stage: 'IN_PROGRESS', label: 'In Progress' },
-  { stage: 'WAITING_REVIEW', label: 'Waiting Review' },
+  { stage: 'WAITING', label: 'Waiting' },
+  { stage: 'WAITING_REVIEW', label: 'Needs Review' },
   { stage: 'BLOCKED', label: 'Blocked' },
   { stage: 'DONE', label: 'Done' },
 ];

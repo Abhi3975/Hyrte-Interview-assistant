@@ -48,7 +48,8 @@ describe('HyrteWorkplaceService.replyInbox resumes a clarification-paused delega
 
   it('resumes the paused work item when replying to the message that blocks it', async () => {
     const message = { id: 'inbox-1', sessionId: 'session-1', subject: 'Quick question', fromStakeholderId: 'stakeholder-1', blocksWorkItemId: 'work-item-1', ethicalDilemma: false, escalatesMessageId: null, fromStakeholder: { role: 'Engineering Lead' } };
-    const pausedItem = { id: 'work-item-1', stage: 'NEW', history: [] };
+    // Refinements doc §5 — a clarification-paused item now sits at WAITING, not NEW.
+    const pausedItem = { id: 'work-item-1', stage: 'WAITING', history: [] };
     const { service, workItemUpdate, workTicks } = buildService(message, pausedItem);
 
     await service.replyInbox('session-1', 'inbox-1', { body: 'It should cover the last 7 days.' } as any, 'candidate-1');
@@ -68,7 +69,7 @@ describe('HyrteWorkplaceService.replyInbox resumes a clarification-paused delega
     expect(workTicks.scheduleStart).not.toHaveBeenCalled();
   });
 
-  it('does not resume a work item that has already moved past NEW (e.g. resumed by an earlier reply, or independently progressed)', async () => {
+  it('does not resume a work item that has already moved past WAITING (e.g. resumed by an earlier reply, or independently progressed)', async () => {
     const message = { id: 'inbox-1', sessionId: 'session-1', subject: 'Quick question', fromStakeholderId: 'stakeholder-1', blocksWorkItemId: 'work-item-1', ethicalDilemma: false, escalatesMessageId: null, fromStakeholder: { role: 'Engineering Lead' } };
     const pausedItem = { id: 'work-item-1', stage: 'IN_PROGRESS', history: [] };
     const { service, workItemUpdate, workTicks } = buildService(message, pausedItem);

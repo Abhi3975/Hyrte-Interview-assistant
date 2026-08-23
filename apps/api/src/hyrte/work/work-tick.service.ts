@@ -99,7 +99,7 @@ export class HyrteWorkTickService {
     const [stakeholders, companyState, openWorkItems] = await Promise.all([
       this.prisma.hyrteStakeholder.findMany({ where: { sessionId } }),
       this.prisma.hyrteCompanyState.findUnique({ where: { sessionId } }),
-      this.prisma.hyrteWorkItem.findMany({ where: { sessionId, stage: { in: ['NEW', 'IN_PROGRESS', 'WAITING_REVIEW'] } }, select: { title: true, ownerStakeholderId: true } }),
+      this.prisma.hyrteWorkItem.findMany({ where: { sessionId, stage: { in: ['NEW', 'DELEGATED', 'IN_PROGRESS', 'WAITING', 'WAITING_REVIEW'] } }, select: { title: true, ownerStakeholderId: true } }),
     ]);
     if (stakeholders.length === 0 || !companyState) {
       this.scheduleOrchestratorReview(sessionId, cycle + 1);
@@ -202,12 +202,28 @@ export class HyrteWorkTickService {
     this.scheduleOrchestratorReview(sessionId, cycle + 1);
   }
 
-  /** Call right after a Work Item is delegated to a stakeholder (or reassigned to one). */
+  /**
+   * Call right after a Work Item is delegated to a stakeholder (or
+   * reassigned/resumed to one) — this is the single entry point into the
+   * tick pipeline, from a fresh candidate delegation, an orchestrator route,
+   * a reassignment, a sub-delegation, or a resumed clarification.
+   *
+   * Refinements doc §5 — "Delegated" is a real, distinct pipeline stage
+   * ("Delegating work assigns it to another stakeholder"), not just a label:
+   * every item entering here genuinely sits at DELEGATED — visible on the
+   * board — for the real duration of TICK1_BASE_MS before tick1 promotes it
+   * to IN_PROGRESS, same as it always waited before tick1 fired; the wait
+   * just now has an honest, distinct name instead of silently staying NEW.
+   */
   scheduleStart(workItemId: string): void {
     this.prisma.hyrteWorkItem
       .findUnique({ where: { id: workItemId }, include: { ownerStakeholder: true } })
-      .then((item) => {
+      .then(async (item) => {
         if (!item?.ownerStakeholder) return;
+        if (item.stage === 'NEW' || item.stage === 'WAITING') {
+          const updated = await this.prisma.hyrteWorkItem.update({ where: { id: workItemId }, data: { stage: 'DELEGATED' } });
+          this.gateway.broadcast(item.sessionId, { type: 'task:update', task: updated });
+        }
         const delay = TICK1_BASE_MS * speedMultiplier(item.ownerStakeholder.stress, item.ownerStakeholder.trust);
         setTimeout(() => this.tick1(workItemId).catch((e) => this.logger.warn(e)), delay);
       })
@@ -234,7 +250,10 @@ export class HyrteWorkTickService {
 
   private async tick1(workItemId: string): Promise<void> {
     const item = await this.prisma.hyrteWorkItem.findUnique({ where: { id: workItemId }, include: { ownerStakeholder: true } });
-    if (!item || item.stage !== 'NEW' || !item.ownerStakeholder) return;
+    // scheduleStart always moves a fresh/resumed item to DELEGATED before
+    // scheduling this — anything else (already IN_PROGRESS, moved to
+    // BLOCKED/WAITING in the meantime, etc.) means this tick is stale.
+    if (!item || item.stage !== 'DELEGATED' || !item.ownerStakeholder) return;
 
     const history = await this.appendHistory(workItemId, {
       at: new Date().toISOString(),

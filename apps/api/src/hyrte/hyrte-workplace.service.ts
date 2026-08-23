@@ -173,7 +173,7 @@ export class HyrteWorkplaceService {
     // itself. Resume it now, same tick pipeline as a fresh delegation.
     if (message.blocksWorkItemId) {
       const paused = await this.prisma.hyrteWorkItem.findUnique({ where: { id: message.blocksWorkItemId }, select: { id: true, stage: true, history: true } });
-      if (paused && paused.stage === 'NEW') {
+      if (paused && paused.stage === 'WAITING') {
         const history = Array.isArray(paused.history) ? (paused.history as Prisma.JsonArray) : [];
         const resumed = await this.prisma.hyrteWorkItem.update({
           where: { id: paused.id },
@@ -386,7 +386,15 @@ export class HyrteWorkplaceService {
 
   async listTasks(sessionId: string, candidateId: string) {
     await this.assertOwnership(sessionId, candidateId);
-    return this.prisma.hyrteWorkItem.findMany({ where: { sessionId }, orderBy: { createdAt: 'asc' } });
+    // Pre-existing bug, caught while visually verifying the Work Pipeline's
+    // new stages: this never included ownerStakeholder, so every
+    // stakeholder-owned card rendered "Unassigned" on the board regardless
+    // of stage — same include pattern listNeedsReview already uses.
+    return this.prisma.hyrteWorkItem.findMany({
+      where: { sessionId },
+      include: { ownerStakeholder: { omit: OMIT_CANDIDATE_INTERNALS } },
+      orderBy: { createdAt: 'asc' },
+    });
   }
 
   async updateTask(sessionId: string, taskId: string, dto: UpdateWorkItemDto, candidateId: string) {

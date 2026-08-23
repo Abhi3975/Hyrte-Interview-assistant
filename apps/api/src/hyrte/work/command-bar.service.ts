@@ -70,7 +70,7 @@ export class HyrteCommandBarService {
       // Refinements doc §6 — a real workload signal (not just vibes) feeds
       // the "reject if priorities conflict" branch below.
       this.prisma.hyrteWorkItem.findMany({
-        where: { sessionId, stage: { in: ['NEW', 'IN_PROGRESS', 'WAITING_REVIEW'] } },
+        where: { sessionId, stage: { in: ['NEW', 'DELEGATED', 'IN_PROGRESS', 'WAITING', 'WAITING_REVIEW'] } },
         select: { ownerStakeholderId: true },
       }),
     ]);
@@ -184,9 +184,11 @@ export class HyrteCommandBarService {
         ownerStakeholderId: target.id,
         // Refinements doc §6 — a rejected/paused delegation still lands as a
         // real, visible work item rather than vanishing, so the candidate
-        // can see and act on it (BLOCKED for a conflict, NEW-and-paused for
-        // a clarification ask — resumed by replyInbox once answered).
-        stage: reaction === 'reject_conflict' ? 'BLOCKED' : 'NEW',
+        // can see and act on it. Refinements doc §5 — WAITING is the real
+        // pipeline stage for "waiting on someone else" (here: the
+        // candidate's answer) rather than reusing BLOCKED or leaving it at
+        // NEW; resumed by replyInbox once the candidate answers.
+        stage: reaction === 'reject_conflict' ? 'BLOCKED' : reaction === 'ask_clarification' ? 'WAITING' : 'NEW',
         dueAt: new Date(Date.now() + dueInHours * 3_600_000),
         history: [
           { at: new Date().toISOString(), actor: candidateId, action: 'delegated', note: `"${instruction}" → ${target.name}` },
