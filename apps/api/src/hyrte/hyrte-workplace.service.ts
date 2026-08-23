@@ -166,6 +166,29 @@ export class HyrteWorkplaceService {
           .catch((e) => this.logger.warn(e));
       }
     }
+
+    // Refinements doc §6 — Intelligent Delegation: this reply is the answer
+    // to a stakeholder's "ask for clarification" — the work item has been
+    // sitting paused (stage NEW, no tick scheduled) since the delegation
+    // itself. Resume it now, same tick pipeline as a fresh delegation.
+    if (message.blocksWorkItemId) {
+      const paused = await this.prisma.hyrteWorkItem.findUnique({ where: { id: message.blocksWorkItemId }, select: { id: true, stage: true, history: true } });
+      if (paused && paused.stage === 'NEW') {
+        const history = Array.isArray(paused.history) ? (paused.history as Prisma.JsonArray) : [];
+        const resumed = await this.prisma.hyrteWorkItem.update({
+          where: { id: paused.id },
+          data: {
+            history: [
+              ...history,
+              { at: new Date().toISOString(), actor: candidateId, action: 'clarified', note: `Clarified: "${dto.body}"` },
+            ] as unknown as Prisma.InputJsonValue,
+          },
+        });
+        this.gateway.broadcast(sessionId, { type: 'task:update', task: resumed });
+        this.workTicks.scheduleStart(paused.id);
+      }
+    }
+
     return entry;
   }
 

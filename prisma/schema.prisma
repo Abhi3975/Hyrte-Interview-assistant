@@ -1145,6 +1145,13 @@ model HyrteInboxMessage {
   convertedToWorkItemId String?
   reminderAt            DateTime?
 
+  // Refinements doc §6 — Intelligent Delegation: set only on a stakeholder's
+  // "asking for clarification / requesting resources" reply to a fresh
+  // delegation. The work item stays paused (stage NEW, not yet ticked) until
+  // the candidate replies to *this* message — HyrteWorkplaceService.replyInbox
+  // checks this field and resumes HyrteWorkTickService.scheduleStart only then.
+  blocksWorkItemId String?
+
   @@index([sessionId])
 }
 
@@ -1226,6 +1233,13 @@ model HyrteWorkItem {
   // generic seeded work items.
   isSignatureArtifact   Boolean @default(false)
   signatureArtifactLabel String?
+
+  // Refinements doc §6 — Intelligent Delegation: "Delegate part of the work."
+  // Set only on a sub-delegated item a stakeholder spawns while working the
+  // original — a plain id (no FK, same loosely-coupled pattern as
+  // HyrteInboxMessage.convertedToWorkItemId above) so the UI/history can trace
+  // it back without a hard relation.
+  delegatedFromItemId String?
 
   // [{ type: "draft_email"|"doc"|"spec"|"report", contentRef: string }]
   artifacts Json @default("[]")

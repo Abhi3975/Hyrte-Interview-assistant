@@ -32,7 +32,16 @@ function speedMultiplier(stress: number, trust: number): number {
 interface WorkArtifactResult {
   artifactType?: string;
   content?: string;
+  // Refinements doc §6 — "Delegate part of the work." Optional: only present
+  // when the stakeholder genuinely hands off a slice of it to a named
+  // colleague rather than doing all of it themselves.
+  subDelegateToKey?: string;
+  subDelegateTitle?: string;
+  subDelegateNote?: string;
 }
+
+/** How much workload a stakeholder is realistically willing to sub-delegate under — mirrors the command bar's own reject-on-overload signal. */
+const SUB_DELEGATE_ELIGIBLE_MIN_STRESS = 55;
 
 /** Strips Prisma's own bookkeeping fields so the prompt only sees KPI values. */
 function omitMeta(state: Record<string, unknown>): Record<string, unknown> {
@@ -268,6 +277,35 @@ export class HyrteWorkTickService {
       ? Object.fromEntries(Object.entries(omitMeta(companyState)).filter(([k]) => visibleKeys.includes(k as never)))
       : {};
 
+    // Refinements doc §6 — "Miss the deadline". Two real, deterministic
+    // signals, computed up front so the artifact's own voice can acknowledge
+    // it (same pattern as revisionNote below) rather than silently attaching
+    // a flag nobody in-fiction reacts to: (1) the item's own dueAt, set in
+    // real wall-clock hours (same pattern as every other due date in this
+    // codebase — tasks, calendar events, signature artifacts) — only fires
+    // for a genuinely short-fuse item, since a session runs ~20-40 minutes,
+    // but still worth checking honestly. (2) speedMultiplier is the SAME
+    // live number that already drives how long tick1/tick2 actually take —
+    // a meaningfully-above-baseline value (>1.3, vs. the 0.5-2.0 range)
+    // means this stakeholder is genuinely, observably slower than a
+    // well-run delegation, which is what "missed the deadline" stands in
+    // for at this session's compressed timescale.
+    const speedFactor = speedMultiplier(stakeholder.stress, stakeholder.trust);
+    const isLate = (!!item.dueAt && new Date() > item.dueAt) || speedFactor > 1.3;
+
+    // Refinements doc §6 — "Delegate part of the work" is only offered as an
+    // option to a genuinely stretched stakeholder, and never mid-revision
+    // (a revision is already a narrower, near-final ask).
+    const subDelegateEligible = !revisionNote && stakeholder.stress >= SUB_DELEGATE_ELIGIBLE_MIN_STRESS;
+    const roster = subDelegateEligible
+      ? (await this.prisma.hyrteStakeholder.findMany({ where: { sessionId: item.sessionId, id: { not: stakeholder.id } }, select: { id: true, name: true, role: true, department: true } })).map((s) => ({
+          key: s.id,
+          name: s.name,
+          role: s.role,
+          department: s.department,
+        }))
+      : [];
+
     const result = await this.ai.completeJson<WorkArtifactResult>(
       [
         {
@@ -277,19 +315,31 @@ export class HyrteWorkTickService {
             `stakeholder produces for a work item, in their own voice. Your current stress is ${stakeholder.stress}/100 ` +
             `and trust in the candidate is ${stakeholder.trust}/100 — HIGH stress should read as visibly rushed/terser/less ` +
             `polished, LOW stress and HIGH trust should read as more thorough and considered. ${revisionNote ? `The candidate requested changes: "${revisionNote}" — address this directly in the revision. ` : ''}` +
+            `${isLate ? 'This is landing later than you promised — briefly, naturally acknowledge that in your own voice (not a formal apology, just how a real busy colleague would mention it). ' : ''}` +
             'Return ONLY JSON: {"artifactType": "draft_email"|"doc"|"spec"|"report", "content": string (the ' +
             'actual work product text, 3-8 sentences, concrete and specific to the work item — not a summary ' +
-            'of what you did, the actual thing itself)}.',
+            'of what you did, the actual thing itself)' +
+            (roster.length
+              ? ', "subDelegateToKey": string|omit (OPTIONAL — you\'re stretched thin right now; only include this ' +
+                'if a genuine, clearly-separable PART of this work item realistically belongs with a specific ' +
+                'colleague on the roster below, e.g. their domain expertise fits it better or it is a natural ' +
+                'hand-off — do NOT use this just because you are busy, most of the time you should still do the ' +
+                'whole thing yourself), "subDelegateTitle": string (only if subDelegateToKey set — short, concrete ' +
+                'title for the sub-task), "subDelegateNote": string (only if subDelegateToKey set — 1 sentence, ' +
+                'in your voice, why you\'re handing this slice off)'
+              : '') +
+            '}.',
         },
         {
           role: 'user',
           content:
             `You are ${stakeholder.name}, ${stakeholder.role}. Work item: "${item.title}" (type: ${item.type}, ` +
             `priority: ${item.priority}). Company: ${item.session.companyName}. What you can see of company state: ` +
-            `${JSON.stringify(scopedState)}.`,
+            `${JSON.stringify(scopedState)}.` +
+            (roster.length ? ` Colleagues you could hand off part of this to: ${JSON.stringify(roster)}.` : ''),
         },
       ],
-      { temperature: 0.8, maxTokens: 500 },
+      { temperature: 0.8, maxTokens: 550 },
     );
 
     const artifact = {
@@ -297,11 +347,14 @@ export class HyrteWorkTickService {
       content: result.content && typeof result.content === 'string' ? result.content : `${stakeholder.name} completed work on "${item.title}".`,
     };
     const priorArtifacts = Array.isArray(item.artifacts) ? item.artifacts : [];
+
     const history = await this.appendHistory(workItemId, {
       at: new Date().toISOString(),
       actor: stakeholder.name,
       action: revisionNote ? 'revised' : 'submitted_for_review',
-      note: revisionNote ? `Revised per feedback: "${revisionNote}"` : `Submitted "${item.title}" for review`,
+      note:
+        (revisionNote ? `Revised per feedback: "${revisionNote}"` : `Submitted "${item.title}" for review`) +
+        (isLate ? ' — after the original deadline had already passed' : ''),
     });
 
     const updated = await this.prisma.hyrteWorkItem.update({
@@ -309,11 +362,48 @@ export class HyrteWorkTickService {
       data: {
         stage: 'WAITING_REVIEW',
         artifacts: [...priorArtifacts, artifact] as unknown as Prisma.InputJsonValue,
-        review: { requiredFrom: item.session.candidateId, requestedAt: new Date().toISOString(), decidedAt: null, decision: null } as unknown as Prisma.InputJsonValue,
+        review: { requiredFrom: item.session.candidateId, requestedAt: new Date().toISOString(), decidedAt: null, decision: null, late: isLate } as unknown as Prisma.InputJsonValue,
         history,
       },
     });
     this.gateway.broadcast(item.sessionId, { type: 'task:update', task: updated });
+
+    // Refinements doc §6 — "Delegate part of the work": a real second Work
+    // Item, owned by the named colleague, linked back via
+    // delegatedFromItemId — not just a mention in the artifact text.
+    const subDelegateTarget = result.subDelegateToKey ? roster.find((r) => r.key === result.subDelegateToKey) : undefined;
+    if (subDelegateTarget) {
+      const subTitle = result.subDelegateTitle?.trim() || `Part of "${item.title}" (handed off by ${stakeholder.name})`;
+      const subNote = result.subDelegateNote?.trim() || `${stakeholder.name} handed this off — it fits your area better.`;
+      const subItem = await this.prisma.hyrteWorkItem.create({
+        data: {
+          sessionId: item.sessionId,
+          title: subTitle,
+          type: item.type,
+          priority: item.priority,
+          origin: 'CANDIDATE_DELEGATION',
+          ownerStakeholderId: subDelegateTarget.key,
+          delegatedFromItemId: item.id,
+          dueAt: item.dueAt,
+          history: [{ at: new Date().toISOString(), actor: stakeholder.name, action: 'sub_delegated', note: subNote }] as unknown as Prisma.InputJsonValue,
+        },
+      });
+      this.gateway.broadcast(item.sessionId, { type: 'task:update', task: subItem });
+      this.scheduleStart(subItem.id);
+
+      const subMsg = await this.prisma.hyrteInboxMessage.create({
+        data: { sessionId: item.sessionId, fromStakeholderId: stakeholder.id, subject: `Heads up: handed off part of "${item.title}"`, body: `${subNote} I've looped in ${subDelegateTarget.name} for that part — the rest is still on me.` },
+      });
+      this.gateway.broadcast(item.sessionId, { type: 'inbox:new', message: subMsg });
+
+      await this.decisionGraph.recordDecision({
+        sessionId: item.sessionId,
+        actor: stakeholder.id,
+        actionType: 'work_item.sub_delegate',
+        payload: { workItemId: item.id, subItemId: subItem.id, toStakeholderId: subDelegateTarget.key },
+        outcome: `${stakeholder.name} sub-delegated part of "${item.title}" to ${subDelegateTarget.name}`,
+      });
+    }
 
     // Part F9 — delegated work actually landing (or not) is direct evidence
     // of the candidate's delegation quality/follow-through, but work-tick
