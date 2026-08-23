@@ -1152,6 +1152,12 @@ model HyrteInboxMessage {
   // checks this field and resumes HyrteWorkTickService.scheduleStart only then.
   blocksWorkItemId String?
 
+  // Refinements doc §8 — "Knowledge as Part of Work": deterministic
+  // category/title match (knowledge-linking.ts's findMentionedKnowledgeDoc)
+  // against this session's real KB docs — set at creation time, not a UI
+  // guess. Most messages won't match anything; that's expected.
+  relatedKnowledgeDocId String?
+
   @@index([sessionId])
 }
 
@@ -1165,6 +1171,9 @@ model HyrteSlackMessage {
   body              String
   ethicalDilemma    Boolean           @default(false)
   createdAt         DateTime          @default(now())
+
+  // Refinements doc §8 — same deterministic linking as HyrteInboxMessage above.
+  relatedKnowledgeDocId String?
 
   @@index([sessionId, channel])
 }
@@ -1312,6 +1321,12 @@ model HyrteKnowledgeDoc {
   title     String
   body      String
   category  String
+
+  // Refinements doc §8 — "Role-Specific Knowledge Bases": a deterministic
+  // category→role tag (knowledge-linking.ts's resolveRelevantRoles), never
+  // used to hide a doc — only to sort "your area" first. Empty = universal
+  // (meeting notes, general wiki).
+  relevantRoles String[] @default([])
 
   @@index([sessionId])
 }

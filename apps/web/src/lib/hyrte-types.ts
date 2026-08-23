@@ -116,6 +116,8 @@ export interface HyrteInboxMessage {
   internalNotes: { text: string; createdAt: string }[];
   convertedToWorkItemId: string | null;
   reminderAt: string | null;
+  /** Refinements doc §8 — set only when this message plausibly references a real KB doc. */
+  relatedKnowledgeDocId: string | null;
 }
 
 export interface HyrteWorldEvent {
@@ -134,6 +136,8 @@ export interface HyrteSlackMessage {
   body: string;
   createdAt: string;
   fromStakeholder?: HyrteStakeholder | null;
+  /** Refinements doc §8 — set only when this message plausibly references a real KB doc. */
+  relatedKnowledgeDocId: string | null;
 }
 
 // Refinements doc §5 — 7 real pipeline stages. WAITING_REVIEW is this
@@ -202,6 +206,8 @@ export interface HyrteKnowledgeDoc {
   title: string;
   body: string;
   category: string;
+  /** Refinements doc §8 — deterministic, never used to hide a doc, only to sort "your area" first. */
+  relevantToYourRole: boolean;
 }
 
 export const ACTION_LABELS: Record<string, string> = {

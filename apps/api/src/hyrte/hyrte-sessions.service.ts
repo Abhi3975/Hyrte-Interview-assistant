@@ -7,6 +7,7 @@ import { CreateHyrteSessionDto, SubmitBaselineChallengeDto } from './dto/hyrte.d
 import { getPmSaasStartupFixture } from './fixtures/pm-saas-startup.fixture';
 import { GeneratedWorld, HyrteSimulationGeneratorService, JobSuccessModelGrounding } from './generator/simulation-generator.service';
 import { resolveSignatureArtifact } from './generator/signature-artifacts';
+import { findMentionedKnowledgeDoc, resolveRelevantRoles } from './generator/knowledge-linking';
 import { WorldStabilizationError } from './generator/world-stabilization';
 import { HyrteConsequenceService, randomIgnoredWindow } from './consequences/consequence.service';
 import { DecisionGraphService } from './dig/decision-graph.service';
@@ -306,7 +307,15 @@ export class HyrteSessionsService {
         title: k.title,
         body: k.body,
         category: k.category,
+        relevantRoles: resolveRelevantRoles(k.category),
       })),
+    });
+    // createMany doesn't return the created rows — re-fetch once so every
+    // message-creation site below can deterministically link to a real doc
+    // id (Refinements doc §8 — "Knowledge as Part of Work").
+    const kbDocsForLinking = await this.prisma.hyrteKnowledgeDoc.findMany({
+      where: { sessionId: session.id },
+      select: { id: true, title: true, category: true },
     });
 
     // Immediate inbox/Slack seed — present the moment the workspace loads.
@@ -321,6 +330,7 @@ export class HyrteSessionsService {
           body: m.body,
           urgent: m.urgent,
           ethicalDilemma: m.ethicalDilemma ?? false,
+          relatedKnowledgeDocId: findMentionedKnowledgeDoc(`${m.subject} ${m.body}`, kbDocsForLinking),
         },
       });
       // Ignoring an urgent item has a consequence (doc §6) — start the clock now.
@@ -334,6 +344,7 @@ export class HyrteSessionsService {
           fromStakeholderId: keyToId.get(m.fromKey),
           body: m.body,
           ethicalDilemma: m.ethicalDilemma ?? false,
+          relatedKnowledgeDocId: findMentionedKnowledgeDoc(m.body, kbDocsForLinking),
         },
       });
     }
@@ -354,6 +365,7 @@ export class HyrteSessionsService {
               body: m.body,
               urgent: m.urgent,
               ethicalDilemma: m.ethicalDilemma ?? false,
+              relatedKnowledgeDocId: findMentionedKnowledgeDoc(`${m.subject} ${m.body}`, kbDocsForLinking),
             },
           })
           .then((created) => {
@@ -373,6 +385,7 @@ export class HyrteSessionsService {
               fromStakeholderId: keyToId.get(m.fromKey),
               body: m.body,
               ethicalDilemma: m.ethicalDilemma ?? false,
+              relatedKnowledgeDocId: findMentionedKnowledgeDoc(m.body, kbDocsForLinking),
             },
           })
           .then((created) => this.gateway.broadcast(session.id, { type: 'slack:new', message: created }))
@@ -405,6 +418,10 @@ export class HyrteSessionsService {
     const event = await this.prisma.hyrteWorldEvent.findUnique({ where: { id: eventId } });
     if (!event || event.status !== 'PENDING') return;
     const payload = event.payload as { fromStakeholderId?: string; subject?: string; channel?: string; body: string; urgent: boolean; ethicalDilemma: boolean };
+    // Refinements doc §8 — same deterministic linking as the immediate seed
+    // above; re-fetched here since this fires much later, independently of
+    // that original createFromSimulationRequest call's scope.
+    const kbDocs = await this.prisma.hyrteKnowledgeDoc.findMany({ where: { sessionId }, select: { id: true, title: true, category: true } });
 
     if (event.surface === 'inbox') {
       const created = await this.prisma.hyrteInboxMessage.create({
@@ -415,13 +432,21 @@ export class HyrteSessionsService {
           body: payload.body,
           urgent: payload.urgent,
           ethicalDilemma: payload.ethicalDilemma,
+          relatedKnowledgeDocId: findMentionedKnowledgeDoc(`${payload.subject ?? ''} ${payload.body}`, kbDocs),
         },
       });
       this.gateway.broadcast(sessionId, { type: 'inbox:new', message: created });
       if (payload.urgent) this.consequences.scheduleIgnoredCheck(sessionId, created.id, randomIgnoredWindow());
     } else {
       const created = await this.prisma.hyrteSlackMessage.create({
-        data: { sessionId, channel: payload.channel || '#product', fromStakeholderId: payload.fromStakeholderId, body: payload.body, ethicalDilemma: payload.ethicalDilemma },
+        data: {
+          sessionId,
+          channel: payload.channel || '#product',
+          fromStakeholderId: payload.fromStakeholderId,
+          body: payload.body,
+          ethicalDilemma: payload.ethicalDilemma,
+          relatedKnowledgeDocId: findMentionedKnowledgeDoc(payload.body, kbDocs),
+        },
       });
       this.gateway.broadcast(sessionId, { type: 'slack:new', message: created });
     }

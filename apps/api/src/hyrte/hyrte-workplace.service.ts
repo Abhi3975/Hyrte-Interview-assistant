@@ -24,6 +24,7 @@ import { OMIT_CANDIDATE_INTERNALS } from './dig/hidden-intention.util';
 import { HyrteWorkTickService } from './work/work-tick.service';
 import { HyrteCommandBarService, CommandBarResult } from './work/command-bar.service';
 import { HyrteMeetingService } from './meetings/meeting.service';
+import { isDocRelevantToRole } from './generator/knowledge-linking';
 
 /** §4.12 Layers 5/9/11 — chance a stakeholder NOT party to an exchange independently reacts to it. Not 100%: constant chatter reads as noise, not signal. */
 const INDEPENDENT_REACTION_PROBABILITY = 0.5;
@@ -650,12 +651,47 @@ export class HyrteWorkplaceService {
 
   // ── Knowledge base ──
 
-  async listKnowledgeBase(sessionId: string, candidateId: string) {
-    await this.assertOwnership(sessionId, candidateId);
-    const docs = await this.prisma.hyrteKnowledgeDoc.findMany({ where: { sessionId }, orderBy: { title: 'asc' } });
-    // Proactively consulting the KB is itself a measured behavior (doc §3).
-    await this.logDecision(sessionId, candidateId, 'knowledge_base.view', {}, 'Consulted the knowledge base');
-    return docs;
+  /**
+   * Refinements doc §8 — "Every document is searchable" and "Role-Specific
+   * Knowledge Bases... adapts to every simulation and role." `q` is a real
+   * server-side search (title/body/category, case-insensitive) rather than a
+   * client-side array filter — the row count is small per session, so a
+   * simple `contains` query is enough (same "simple is fine at this scale"
+   * reasoning as listNeedsReview's in-memory filter). `relevantToYourRole` is
+   * computed from the candidate's actual session role via
+   * knowledge-linking.ts's isDocRelevantToRole — never used to hide a
+   * document, only to let the frontend sort "your area" first, since the
+   * Hidden Information System (§13) explicitly rewards investigating outside
+   * one's obvious lane.
+   */
+  async listKnowledgeBase(sessionId: string, candidateId: string, q?: string) {
+    const session = await this.prisma.hyrteSession.findFirst({ where: { id: sessionId, candidateId }, select: { role: true } });
+    if (!session) throw new NotFoundException('Session not found');
+
+    const query = q?.trim();
+    const docs = await this.prisma.hyrteKnowledgeDoc.findMany({
+      where: query
+        ? {
+            sessionId,
+            OR: [
+              { title: { contains: query, mode: 'insensitive' } },
+              { body: { contains: query, mode: 'insensitive' } },
+              { category: { contains: query, mode: 'insensitive' } },
+            ],
+          }
+        : { sessionId },
+      orderBy: { title: 'asc' },
+    });
+    // Proactively consulting the KB is itself a measured behavior (doc §3);
+    // a search is a stronger, more specific signal worth its own payload.
+    await this.logDecision(
+      sessionId,
+      candidateId,
+      'knowledge_base.view',
+      query ? { query } : {},
+      query ? `Searched the knowledge base for "${query}"` : 'Consulted the knowledge base',
+    );
+    return docs.map((d) => ({ ...d, relevantToYourRole: isDocRelevantToRole(d.relevantRoles, session.role) }));
   }
 
   // ── Stakeholders ──

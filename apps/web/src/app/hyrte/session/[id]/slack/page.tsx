@@ -1,6 +1,7 @@
 'use client';
 
 import { use, useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { DashboardShell } from '@/components/dashboard-shell';
@@ -164,6 +165,15 @@ export default function HyrteSlack({ params }: { params: Promise<{ id: string }>
                 <span className="font-medium">{m.fromStakeholder?.name ?? 'You'}</span>{' '}
                 <span className="text-xs text-black/40 dark:text-white/40">{new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                 <p className="text-black/80 dark:text-white/80">{m.body}</p>
+                {/* Refinements doc §8 — same connected-doc link as the Inbox. */}
+                {m.relatedKnowledgeDocId && (
+                  <Link
+                    href={`/hyrte/session/${id}/knowledge-base?docId=${m.relatedKnowledgeDocId}`}
+                    className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-brand-600 hover:underline dark:text-brand-400"
+                  >
+                    📄 View referenced document
+                  </Link>
+                )}
               </div>
             ))}
             {!visibleMessages?.length && <p className="text-sm text-black/50 dark:text-white/50">No messages in {channel} yet.</p>}

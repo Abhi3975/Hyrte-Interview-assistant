@@ -1,6 +1,7 @@
 'use client';
 
 import { use, useState } from 'react';
+import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { DashboardShell } from '@/components/dashboard-shell';
 import { HyrteSessionInfoCard } from '@/components/hyrte/session-info-card';
@@ -212,6 +213,17 @@ export default function HyrteInbox({ params }: { params: Promise<{ id: string }>
             {openId === m.id && (
               <div className="mt-4 border-t border-black/5 pt-4 dark:border-white/10">
                 <p className="whitespace-pre-wrap text-sm text-black/80 dark:text-white/80">{m.body}</p>
+
+                {/* Refinements doc §8 — "Connected Workplace Experience": an
+                    email that references a real doc links straight to it. */}
+                {m.relatedKnowledgeDocId && (
+                  <Link
+                    href={`/hyrte/session/${id}/knowledge-base?docId=${m.relatedKnowledgeDocId}`}
+                    className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-brand-500/10 px-2.5 py-1.5 text-xs font-medium text-brand-600 hover:bg-brand-500/15 dark:text-brand-400"
+                  >
+                    📄 View referenced document
+                  </Link>
+                )}
 
                 <div className="mt-3 flex flex-wrap gap-2 text-xs">
                   <button className="btn-ghost !px-2 !py-1 text-xs" onClick={() => markUnread(m.id)}>

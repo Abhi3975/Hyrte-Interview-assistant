@@ -202,8 +202,8 @@ export class HyrteWorkplaceController {
   }
 
   @Get('knowledge-base')
-  listKnowledgeBase(@Param('sessionId') sessionId: string, @CurrentUser() user: AuthenticatedUser) {
-    return this.workplace.listKnowledgeBase(sessionId, user.id);
+  listKnowledgeBase(@Param('sessionId') sessionId: string, @Query('q') q: string | undefined, @CurrentUser() user: AuthenticatedUser) {
+    return this.workplace.listKnowledgeBase(sessionId, user.id, q);
   }
 
   @Get('stakeholders')
