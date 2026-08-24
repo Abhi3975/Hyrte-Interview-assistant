@@ -5,6 +5,7 @@ import { COMPANY_STATE_KEYS } from '../consequences/consequence.service';
 import { ValidationReport, WorldStabilizationError, validateWorld } from './world-stabilization';
 import { applyIndustryBias, industryGroundingNote } from './industry-templates';
 import { resolveSignatureArtifact } from './signature-artifacts';
+import { ambientInboxTargetCount, ambientSlackTargetCount, ensureUpcomingMeeting, generateAmbientInbox, generateAmbientSlack } from './ambient-noise';
 import {
   FixtureCalendarEvent,
   FixtureDepartment,
@@ -302,11 +303,20 @@ export class HyrteSimulationGeneratorService {
     const signatureArtifact = sanitizeSignatureArtifact(signatureArtifactRaw, artifactTemplate.label, companyName);
     const validKeys = new Set(stakeholders.map((s) => s.key));
     const resolveKey = (k: unknown) => (typeof k === 'string' && validKeys.has(k) ? k : roster[Math.floor(Math.random() * roster.length)].key);
-    const inbox = sanitizeInbox(assetsRaw.inbox, resolveKey);
-    const slack = sanitizeSlack(assetsRaw.slack, resolveKey);
+    const realInbox = sanitizeInbox(assetsRaw.inbox, resolveKey);
+    const realSlack = sanitizeSlack(assetsRaw.slack, resolveKey);
     const tasks = sanitizeTasks(assetsRaw.tasks);
-    const calendarEvents = sanitizeCalendarEvents(assetsRaw.calendarEvents, validKeys);
-    if (inbox.length === 0 && slack.length === 0) throw new Error('Generated fixture had no inbox or Slack content');
+    const calendarEvents = ensureUpcomingMeeting(sanitizeCalendarEvents(assetsRaw.calendarEvents, validKeys));
+    if (realInbox.length === 0 && realSlack.length === 0) throw new Error('Generated fixture had no inbox or Slack content');
+
+    // Refinements doc §20 — Controlled Initial Ambiguity: pad the real,
+    // LLM-authored inbox/Slack items (still the only ones with real
+    // urgency/ethicalDilemma/stakes) with cheap, deterministic filler so the
+    // workspace opens busy, not sparse — see ambient-noise.ts.
+    const ambientInbox = generateAmbientInbox(roster, companyName, Math.max(0, ambientInboxTargetCount(dto.difficulty) - realInbox.length));
+    const ambientSlack = generateAmbientSlack(roster, Math.max(0, ambientSlackTargetCount(dto.difficulty) - realSlack.length));
+    const inbox = [...realInbox, ...ambientInbox];
+    const slack = [...realSlack, ...ambientSlack];
     const scheduledEvents = sanitizeScheduledEvents(
       eventQueueRaw.scheduledEvents,
       resolveKey,
@@ -317,10 +327,13 @@ export class HyrteSimulationGeneratorService {
     // Step 7 — D7 Evaluation Plan. Runs last and is given the real generated
     // content (not just role/industry labels) so "which events surface each
     // signal" points at things that actually exist in this world.
+    // Only the real, LLM-authored inbox/Slack items are candidate signal
+    // sources — the ambient filler layered on top (§20) is deliberately
+    // generic noise and would only dilute this grounding.
     const contentSummary = JSON.stringify({
       tasks: tasks.map((t) => t.title),
-      inbox: inbox.map((m) => m.subject),
-      slack: slack.map((m) => m.body.slice(0, 80)),
+      inbox: realInbox.map((m) => m.subject),
+      slack: realSlack.map((m) => m.body.slice(0, 80)),
       scheduledEvents: scheduledEvents.map((e) => e.body.slice(0, 80)),
     });
     const evaluationPlanRaw = await this.step<EvaluationPlanResult>(
