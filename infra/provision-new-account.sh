@@ -185,9 +185,30 @@ aws elbv2 create-rule --listener-arn "$LISTENER" --priority 10 \
 ok "listener :80 with /api/* rule"
 
 # ── ECS ───────────────────────────────────────────────────────────────────
+# A brand-new account has never used ECS, so AWSServiceRoleForECS doesn't
+# exist yet and the first create-cluster fails with "Unable to assume the
+# service linked role". AWS does start creating it in the background at that
+# point, but IAM is eventually-consistent — so create it explicitly and give
+# it a moment to propagate rather than relying on that race.
+log "ECS service-linked role"
+if ! aws iam get-role --role-name AWSServiceRoleForECS >/dev/null 2>&1; then
+  aws iam create-service-linked-role --aws-service-name ecs.amazonaws.com >/dev/null 2>&1 || true
+  for _ in $(seq 1 12); do
+    aws iam get-role --role-name AWSServiceRoleForECS >/dev/null 2>&1 && break
+    sleep 5
+  done
+fi
+ok "AWSServiceRoleForECS"
+
 log "ECS cluster"
-aws ecs describe-clusters --clusters "$PREFIX" --query 'clusters[0].status' --output text 2>/dev/null | grep -q ACTIVE \
-  || aws ecs create-cluster --cluster-name "$PREFIX" --capacity-providers FARGATE >/dev/null
+if ! aws ecs describe-clusters --clusters "$PREFIX" --query 'clusters[0].status' --output text 2>/dev/null | grep -q ACTIVE; then
+  # Retry: the role can exist in IAM a few seconds before ECS can assume it.
+  for attempt in $(seq 1 6); do
+    aws ecs create-cluster --cluster-name "$PREFIX" --capacity-providers FARGATE >/dev/null 2>&1 && break
+    [ "$attempt" = 6 ] && { echo "create-cluster failed after 6 attempts"; exit 1; }
+    sleep 10
+  done
+fi
 ok "$PREFIX"
 
 log "Writing task definitions"
