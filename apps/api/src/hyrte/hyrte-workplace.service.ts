@@ -15,7 +15,8 @@ import {
   UpdateWorkItemDto,
   WorkItemReviewDto,
 } from './dto/hyrte.dto';
-import { HyrteStakeholderAgentService } from './agents/stakeholder-agent.service';
+import { HyrteStakeholderAgentService, AgentReplyTarget } from './agents/stakeholder-agent.service';
+import { computeResponseDelayMs } from './agents/response-delay';
 import { HyrteConsequenceService } from './consequences/consequence.service';
 import { DecisionGraphService } from './dig/decision-graph.service';
 import { EvidenceGraphService } from './dig/evidence-graph.service';
@@ -53,6 +54,46 @@ export class HyrteWorkplaceService {
       select: { id: true },
     });
     if (!session) throw new NotFoundException('Session not found');
+  }
+
+  /**
+   * Refinements doc §15 — "Waiting Is Part of Work": every call site that
+   * asks a stakeholder to reply routes through here instead of calling
+   * `agent.respond` directly, so the reply arrives after a real, simulated
+   * wait (role/workload/priority/emotional-state-based — see
+   * response-delay.ts) rather than as fast as the LLM call happens to
+   * finish. Fire-and-forget, same as every prior direct `agent.respond`
+   * call site — a failed/never-fires reply was already an accepted
+   * possibility (network hiccup, session ended mid-flight), not a new risk.
+   */
+  private scheduleAgentRespond(
+    sessionId: string,
+    stakeholderId: string,
+    candidateMessage: string,
+    target: AgentReplyTarget,
+    decisionId?: string,
+    messageUrgent = false,
+  ): void {
+    this.prisma.hyrteStakeholder
+      .findUnique({ where: { id: stakeholderId } })
+      .then(async (stakeholder) => {
+        if (!stakeholder) return;
+        const openWorkItemCount = await this.prisma.hyrteWorkItem.count({
+          where: { sessionId, ownerStakeholderId: stakeholderId, stage: { not: 'DONE' } },
+        });
+        const delay = computeResponseDelayMs({
+          role: stakeholder.role,
+          stress: stakeholder.stress,
+          urgency: stakeholder.urgency,
+          motivation: stakeholder.motivation,
+          openWorkItemCount,
+          messageUrgent,
+        });
+        setTimeout(() => {
+          this.agent.respond(sessionId, stakeholderId, candidateMessage, target, decisionId).catch((e) => this.logger.warn(e));
+        }, delay);
+      })
+      .catch((e) => this.logger.warn(e));
   }
 
   /**
@@ -134,9 +175,7 @@ export class HyrteWorkplaceService {
     );
 
     if (message.fromStakeholderId) {
-      this.agent
-        .respond(sessionId, message.fromStakeholderId, dto.body, { kind: 'inbox', subject: message.subject }, entry.id)
-        .catch((e) => this.logger.warn(e));
+      this.scheduleAgentRespond(sessionId, message.fromStakeholderId, dto.body, { kind: 'inbox', subject: message.subject }, entry.id, message.urgent);
       // §4.12 Layers 5/9/11 — someone NOT party to this exchange independently
       // reacts, probabilistically (not every message, to avoid noise).
       if (Math.random() < INDEPENDENT_REACTION_PROBABILITY) {
@@ -156,15 +195,14 @@ export class HyrteWorkplaceService {
       });
       for (const cc of validCcs) {
         if (cc.id === message.fromStakeholderId) continue; // already the primary recipient
-        this.agent
-          .respond(
-            sessionId,
-            cc.id,
-            `(You were CC'd on a reply about "${message.subject}".) ${dto.body}`,
-            { kind: 'inbox', subject: `Re: ${message.subject}` },
-            entry.id,
-          )
-          .catch((e) => this.logger.warn(e));
+        this.scheduleAgentRespond(
+          sessionId,
+          cc.id,
+          `(You were CC'd on a reply about "${message.subject}".) ${dto.body}`,
+          { kind: 'inbox', subject: `Re: ${message.subject}` },
+          entry.id,
+          message.urgent,
+        );
       }
     }
 
@@ -216,9 +254,7 @@ export class HyrteWorkplaceService {
       `(This was forwarded to you from ${message.fromStakeholder?.name ?? 'someone'}` +
       `${message.fromStakeholder?.role ? ` (${message.fromStakeholder.role})` : ''}: "${message.body}")` +
       (dto.note ? `\n\nNote from the candidate: "${dto.note}"` : '');
-    this.agent
-      .respond(sessionId, target.id, forwardedContent, { kind: 'inbox', subject: `Fwd: ${message.subject}` }, entry.id)
-      .catch((e) => this.logger.warn(e));
+    this.scheduleAgentRespond(sessionId, target.id, forwardedContent, { kind: 'inbox', subject: `Fwd: ${message.subject}` }, entry.id, message.urgent);
 
     return entry;
   }
@@ -371,9 +407,7 @@ export class HyrteWorkplaceService {
     // the future chaos engine, which decides who (if anyone) jumps in.
     if (dto.channel.startsWith('dm:')) {
       const stakeholderId = dto.channel.slice(3);
-      this.agent
-        .respond(sessionId, stakeholderId, dto.body, { kind: 'slack', channel: dto.channel }, entry.id)
-        .catch((e) => this.logger.warn(e));
+      this.scheduleAgentRespond(sessionId, stakeholderId, dto.body, { kind: 'slack', channel: dto.channel }, entry.id);
       if (Math.random() < INDEPENDENT_REACTION_PROBABILITY) {
         this.agent
           .reactIndependently(sessionId, stakeholderId, `sent a Slack DM: "${dto.body}"`)
@@ -457,7 +491,7 @@ export class HyrteWorkplaceService {
     const stakeholders = await this.prisma.hyrteStakeholder.findMany({ where: { sessionId } });
     if (stakeholders.length === 0) return;
     const manager = stakeholders.reduce((a, b) => ((b.authorityLevel ?? 50) > (a.authorityLevel ?? 50) ? b : a));
-    await this.agent.respond(
+    this.scheduleAgentRespond(
       sessionId,
       manager.id,
       `(The candidate just completed their signature deliverable, "${taskTitle}" — give real, substantive feedback: what's strong, what you'd push back on or want revised, and whether you'd sign off on it as-is.)`,

@@ -20,8 +20,13 @@ describe('HyrteWorkplaceService.replyInbox resumes a clarification-paused delega
       hyrteWorkItem: {
         findUnique: jest.fn().mockResolvedValue(pausedItem),
         update: workItemUpdate,
+        count: jest.fn().mockResolvedValue(0),
       },
-      hyrteStakeholder: { findMany: jest.fn().mockResolvedValue([]) },
+      hyrteStakeholder: {
+        findMany: jest.fn().mockResolvedValue([]),
+        // Refinements doc §15 — scheduleAgentRespond looks the stakeholder up before delaying the reply.
+        findUnique: jest.fn().mockResolvedValue({ id: 'stakeholder-1', role: 'Engineering Lead', stress: 50, urgency: 50, motivation: 50 }),
+      },
     };
     const gateway = { broadcast: jest.fn() };
     const agent = { respond: jest.fn().mockResolvedValue(undefined), reactIndependently: jest.fn().mockResolvedValue(undefined) };
