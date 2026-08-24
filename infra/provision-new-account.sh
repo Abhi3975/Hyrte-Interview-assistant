@@ -80,7 +80,10 @@ done
 log "RDS Postgres (db.t3.micro, 20GB — matches the current deployment)"
 DB_ID="${PREFIX}-db"
 if ! aws rds describe-db-instances --db-instance-identifier "$DB_ID" >/dev/null 2>&1; then
-  DB_PASS=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)
+  # Deliberately pipeline-free: `... | head -c 32` makes the upstream process
+  # die of SIGPIPE, which under `set -o pipefail` kills the whole script.
+  # 16 bytes of hex is 32 alphanumeric chars — well within RDS's password rules.
+  DB_PASS=$(openssl rand -hex 16)
   echo "$DB_PASS" > "infra/.db-password-${ACCOUNT}"
   chmod 600 "infra/.db-password-${ACCOUNT}"
   aws rds create-db-instance \
