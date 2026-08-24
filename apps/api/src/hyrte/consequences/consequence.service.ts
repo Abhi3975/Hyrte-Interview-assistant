@@ -163,7 +163,7 @@ export class HyrteConsequenceService {
    * snapshot), so the final report can show real state evolution over time
    * instead of only ever seeing the current values.
    */
-  async applyCompanyStateDelta(sessionId: string, delta: CompanyStateDelta, reason?: string): Promise<void> {
+  async applyCompanyStateDelta(sessionId: string, delta: CompanyStateDelta, reason?: string, decisionId?: string): Promise<void> {
     const entries = Object.entries(delta).filter(
       ([k, v]) => COMPANY_STATE_KEYS.includes(k as CompanyStateKey) && typeof v === 'number' && v !== 0,
     ) as [string, number][];
@@ -188,7 +188,7 @@ export class HyrteConsequenceService {
 
       this.gateway.broadcast(sessionId, { type: 'company_state:update', state });
       this.prisma.hyrteCompanyStateHistory
-        .create({ data: { sessionId, delta: Object.fromEntries(entries) as Prisma.InputJsonValue, reason } })
+        .create({ data: { sessionId, delta: Object.fromEntries(entries) as Prisma.InputJsonValue, reason, decisionId } })
         .catch((e) => this.logger.warn(`companyStateHistory write failed (session ${sessionId}): ${errMsg(e)}`));
     } catch (e) {
       this.logger.warn(`applyCompanyStateDelta failed (session ${sessionId}): ${errMsg(e)}`);
@@ -234,7 +234,7 @@ export class HyrteConsequenceService {
         { temperature: 0.6, maxTokens: 300 },
       );
 
-      await this.applyCompanyStateDelta(sessionId, result.companyStateDelta ?? {}, 'task_completion');
+      await this.applyCompanyStateDelta(sessionId, result.companyStateDelta ?? {}, 'task_completion', decisionId);
 
       if (result.benefit || result.cost) {
         this.evidence
@@ -422,7 +422,29 @@ export class HyrteConsequenceService {
       });
       this.gateway.broadcast(sessionId, { type: 'inbox:new', message: created });
 
-      await this.applyCompanyStateDelta(sessionId, result.companyStateDelta ?? {}, `escalation_hop_${hop}`);
+      // §3.5 Decision Graph — inaction is itself a decision node (the doc's
+      // own canonical example: "read customer email → ignored → customer
+      // trust decreased → customer escalated"). Awaited (not fire-and-forget)
+      // so its real id can tie the company-state delta below directly to
+      // THIS decision — Refinements doc §10's "Metrics affected" needs an
+      // actual causal link, not just a generic reason label.
+      const decisionEntry = await this.decisionGraph
+        .recordDecision({
+          sessionId,
+          actor: session.candidateId,
+          actionType: 'inbox.message_ignored',
+          payload: { messageId: message.id, escalatorId: escalator.id, hop },
+          reasoning: 'No reply sent before the message’s active window elapsed.',
+          riskAssessment:
+            'Urgent messages from named stakeholders left unanswered risk relationship damage and escalation.',
+          outcome: `Escalation hop ${hop}/${MAX_ESCALATION_HOPS} — ${escalator.name} escalated: "${text}"`,
+        })
+        .catch((e) => {
+          this.logger.warn(e);
+          return undefined;
+        });
+
+      await this.applyCompanyStateDelta(sessionId, result.companyStateDelta ?? {}, `escalation_hop_${hop}`, decisionEntry?.id);
 
       this.evidence
         .createEvidence({
@@ -433,25 +455,6 @@ export class HyrteConsequenceService {
           rawText: `Ignored an urgent message${originalSender ? ` from ${originalSender.name}` : ''} — escalation hop ${hop}/${MAX_ESCALATION_HOPS}, ${escalator.name} (${escalator.role}): "${text}"`,
           behaviorContext: 'PRESSURE',
           metadata: { escalationHop: hop },
-        })
-        .catch((e) => this.logger.warn(e));
-
-      // §3.5 Decision Graph — inaction is itself a decision node (the doc's
-      // own canonical example: "read customer email → ignored → customer
-      // trust decreased → customer escalated"). Nothing wrote this before —
-      // only the evidence object above existed, with no corresponding graph
-      // node, so reasoning/outcome/riskAssessment were never populated for
-      // this trigger type at all.
-      this.decisionGraph
-        .recordDecision({
-          sessionId,
-          actor: session.candidateId,
-          actionType: 'inbox.message_ignored',
-          payload: { messageId: message.id, escalatorId: escalator.id, hop },
-          reasoning: 'No reply sent before the message’s active window elapsed.',
-          riskAssessment:
-            'Urgent messages from named stakeholders left unanswered risk relationship damage and escalation.',
-          outcome: `Escalation hop ${hop}/${MAX_ESCALATION_HOPS} — ${escalator.name} escalated: "${text}"`,
         })
         .catch((e) => this.logger.warn(e));
 
@@ -558,7 +561,11 @@ export class HyrteConsequenceService {
    * setTimeout+LLM+applyCompanyStateDelta shape as every other delayed
    * mechanic here, just a new triggering condition.
    */
-  scheduleCascadeCheck(sessionId: string, workItem: { id: string; title: string; priority: string; ownerStakeholderId: string | null }): void {
+  scheduleCascadeCheck(
+    sessionId: string,
+    workItem: { id: string; title: string; priority: string; ownerStakeholderId: string | null },
+    decisionId?: string,
+  ): void {
     if (workItem.priority !== 'HIGH' && workItem.priority !== 'CRITICAL') return;
     if (!workItem.ownerStakeholderId) return;
     this.prisma.hyrteStakeholder
@@ -568,13 +575,13 @@ export class HyrteConsequenceService {
         const isCommitmentMaker = COMMITMENT_DEPARTMENT.test(owner.department) || COMMITMENT_DEPARTMENT.test(owner.role);
         if (!isCommitmentMaker) return;
         setTimeout(() => {
-          this.triggerCascade(sessionId, workItem.id, owner.id).catch((e) => this.logger.warn(errMsg(e)));
+          this.triggerCascade(sessionId, workItem.id, owner.id, decisionId).catch((e) => this.logger.warn(errMsg(e)));
         }, CASCADE_DELAY_MS);
       })
       .catch((e) => this.logger.warn(errMsg(e)));
   }
 
-  private async triggerCascade(sessionId: string, workItemId: string, originStakeholderId: string): Promise<void> {
+  private async triggerCascade(sessionId: string, workItemId: string, originStakeholderId: string, causedByDecisionId?: string): Promise<void> {
     const [session, workItem, origin, stakeholders, companyState] = await Promise.all([
       this.prisma.hyrteSession.findUnique({ where: { id: sessionId } }),
       this.prisma.hyrteWorkItem.findUnique({ where: { id: workItemId } }),
@@ -628,15 +635,26 @@ export class HyrteConsequenceService {
     this.gateway.broadcast(sessionId, { type: 'inbox:new', message: created });
     if (created.urgent) this.scheduleIgnoredCheck(sessionId, created.id, randomIgnoredWindow());
 
-    await this.applyCompanyStateDelta(sessionId, result.companyStateDelta ?? {}, 'cascade_consequence');
+    // Refinements doc §10 — awaited so its id ties the company-state delta
+    // directly to THIS decision, and causedByDecisionId ties this whole
+    // decision back to the candidate's original approval — a real 2-hop
+    // causal chain (approve → cascade → metrics), not just a shared reason
+    // label.
+    const cascadeEntry = await this.decisionGraph
+      .recordDecision({
+        sessionId,
+        actor: target.id,
+        actionType: 'cascade.downstream_impact',
+        payload: { workItemId, originStakeholderId: origin.id },
+        outcome: `${target.name} flagged downstream impact from "${workItem.title}": "${text}"`,
+        causedByDecisionId,
+      })
+      .catch((e) => {
+        this.logger.warn(e);
+        return undefined;
+      });
 
-    await this.decisionGraph.recordDecision({
-      sessionId,
-      actor: target.id,
-      actionType: 'cascade.downstream_impact',
-      payload: { workItemId, originStakeholderId: origin.id },
-      outcome: `${target.name} flagged downstream impact from "${workItem.title}": "${text}"`,
-    });
+    await this.applyCompanyStateDelta(sessionId, result.companyStateDelta ?? {}, 'cascade_consequence', cascadeEntry?.id);
     this.evidence
       .createEvidence({
         hyrteSessionId: sessionId,

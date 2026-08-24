@@ -15,6 +15,8 @@ export interface RecordDecisionInput {
   outcome?: string;
   /** Links this node as a recovery action for an earlier decision (DIG Recovery Score, §3.5). */
   recoveryOfId?: string;
+  /** Refinements doc §10 — general cause→effect between two decision nodes, distinct from recoveryOfId (see schema.prisma's comment on causedByDecisionId). */
+  causedByDecisionId?: string;
 }
 
 /**
@@ -49,6 +51,7 @@ export class DecisionGraphService {
         riskAssessment: input.riskAssessment,
         outcome: input.outcome,
         recoveryOfId: input.recoveryOfId,
+        causedByDecisionId: input.causedByDecisionId,
       },
     });
   }

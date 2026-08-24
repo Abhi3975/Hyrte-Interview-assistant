@@ -1039,6 +1039,12 @@ model HyrteCompanyStateHistory {
   // replaying deltas from session start if ever needed.
   delta     Json
   reason    String? // e.g. "task_completion" | "escalation" | "chaos_wave" | "stakeholder_reply"
+  // Refinements doc §10 — "Metrics affected" tied to the specific decision
+  // that caused them, not just a generic reason label. Plain id (no FK
+  // relation), same loosely-coupled pattern as HyrteInboxMessage
+  // .convertedToWorkItemId — set only where the caller already has a real
+  // decision id in scope, never guessed by time-proximity.
+  decisionId String?
   createdAt DateTime     @default(now())
 
   @@index([sessionId, createdAt])
@@ -1355,6 +1361,17 @@ model HyrteDecisionLogEntry {
   recoveryOfId           String?
   recoveryOf             HyrteDecisionLogEntry?  @relation("RecoveryChain", fields: [recoveryOfId], references: [id], onDelete: SetNull)
   recoveries             HyrteDecisionLogEntry[] @relation("RecoveryChain")
+
+  // Refinements doc §10 — Decision Log "replay": distinct from recoveryOfId
+  // (the candidate's own later corrective action). This is general
+  // cause→effect between ANY two decision nodes — e.g. approving a work
+  // item causes a separate downstream-impact decision on another
+  // stakeholder. Set only where a real triggering decision is known at
+  // write time (consequence.service.ts), never inferred after the fact.
+  causedByDecisionId String?
+  causedBy           HyrteDecisionLogEntry?  @relation("CausalChain", fields: [causedByDecisionId], references: [id], onDelete: SetNull)
+  causedDecisions    HyrteDecisionLogEntry[] @relation("CausalChain")
+
   createdAt              DateTime                @default(now())
 
   @@index([sessionId, createdAt])

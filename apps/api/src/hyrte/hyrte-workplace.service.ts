@@ -567,7 +567,7 @@ export class HyrteWorkplaceService {
       this.consequences.reasonTaskConsequence(sessionId, updated, candidateId, decisionEntry.id).catch((e) => this.logger.warn(e));
       // Part F7 — approving a customer-facing commitment can land on a
       // different department later (cross-functional cascade chains).
-      this.consequences.scheduleCascadeCheck(sessionId, updated);
+      this.consequences.scheduleCascadeCheck(sessionId, updated, decisionEntry.id);
     } else if (dto.decision === 'request_changes') {
       this.workTicks.scheduleRevision(workItemId, dto.note ?? 'Please revise.');
     } else if (dto.decision === 'reassign' && nextOwnerId) {
@@ -743,10 +743,46 @@ export class HyrteWorkplaceService {
 
   // ── Decision log ──
 
+  /**
+   * Refinements doc §10 — Decision Log "replay": each entry already carries
+   * reasoning/outcome/riskAssessment (Phase 1), but nothing tied a decision
+   * to the SPECIFIC company-state deltas or downstream decisions it caused —
+   * the doc's own example ("email ignored → Trust −12 → escalated → Manager
+   * notified → Satisfaction −4") is a real causal chain, not a flat list.
+   * Both links (causedByDecisionId, HyrteCompanyStateHistory.decisionId) are
+   * set at write time by consequence.service.ts wherever a real triggering
+   * decision is known — joined here in-memory since the row count per
+   * session is small (same "simple is fine at this scale" reasoning as
+   * listNeedsReview's in-memory filter above).
+   */
   async listDecisionLog(sessionId: string, candidateId: string) {
     await this.assertOwnership(sessionId, candidateId);
     // Newest-first for the candidate-facing log — DecisionGraphService.getGraph
     // returns chronological (oldest-first) order for graph-consumption instead.
-    return this.prisma.hyrteDecisionLogEntry.findMany({ where: { sessionId }, orderBy: { createdAt: 'desc' } });
+    const [entries, stateHistory] = await Promise.all([
+      this.prisma.hyrteDecisionLogEntry.findMany({ where: { sessionId }, orderBy: { createdAt: 'desc' } }),
+      this.prisma.hyrteCompanyStateHistory.findMany({ where: { sessionId, decisionId: { not: null } } }),
+    ]);
+
+    const deltasByDecision = new Map<string, typeof stateHistory>();
+    for (const h of stateHistory) {
+      if (!h.decisionId) continue;
+      const list = deltasByDecision.get(h.decisionId) ?? [];
+      list.push(h);
+      deltasByDecision.set(h.decisionId, list);
+    }
+    const causedByDecision = new Map<string, typeof entries>();
+    for (const e of entries) {
+      if (!e.causedByDecisionId) continue;
+      const list = causedByDecision.get(e.causedByDecisionId) ?? [];
+      list.push(e);
+      causedByDecision.set(e.causedByDecisionId, list);
+    }
+
+    return entries.map((e) => ({
+      ...e,
+      stateDeltas: (deltasByDecision.get(e.id) ?? []).map((h) => ({ delta: h.delta, reason: h.reason, createdAt: h.createdAt })),
+      causedDecisions: (causedByDecision.get(e.id) ?? []).map((c) => ({ id: c.id, actionType: c.actionType, outcome: c.outcome, actor: c.actor, createdAt: c.createdAt })),
+    }));
   }
 }

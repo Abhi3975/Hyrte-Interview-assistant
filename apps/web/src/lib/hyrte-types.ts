@@ -223,14 +223,40 @@ export const ACTION_LABELS: Record<string, string> = {
   'work_item.review_reject': 'Rejected a work item',
   'work_item.review_reassign': 'Reassigned a work item',
   'meeting.attend': 'Joined a meeting',
+  'meeting.contribute': 'Spoke up in a meeting',
+  'email.forward': 'Forwarded an email',
+  'email.convert_to_task': 'Converted an email to a task',
+  'email.schedule_reminder': 'Scheduled a reminder',
+  'inbox.message_ignored': 'Let an urgent message go unanswered',
+  'cascade.downstream_impact': 'Downstream impact from an approval',
+  'orchestrator.route': "Manager routed new work",
+  'work_item.sub_delegate': 'A delegated task was handed off further',
 };
 
+/**
+ * Refinements doc §10 — Decision Log "replay": reasoning/outcome/
+ * riskAssessment were already written per entry (Phase 1) but the frontend
+ * never showed them. stateDeltas/causedDecisions are the real causal links
+ * (set server-side by consequence.service.ts, never inferred client-side) —
+ * "Customer email ignored → Customer Trust −12 → Sales escalated" as an
+ * actual traceable chain, not a flat list of unrelated rows.
+ */
 export interface HyrteDecisionLogEntry {
   id: string;
   actor: string;
   actionType: string;
   payload: Record<string, unknown>;
+  reasoning: string | null;
+  alternativesConsidered: string[];
+  riskAssessment: string | null;
+  outcome: string | null;
+  recoveryOfId: string | null;
+  causedByDecisionId: string | null;
   createdAt: string;
+  /** The company-state deltas this specific decision caused. */
+  stateDeltas: { delta: Record<string, number>; reason: string | null; createdAt: string }[];
+  /** Other decision entries this one directly caused. */
+  causedDecisions: { id: string; actionType: string; outcome: string | null; actor: string; createdAt: string }[];
 }
 
 export interface HyrteInterviewTurn {
