@@ -137,12 +137,24 @@ aws ecs wait services-stable --cluster "$PREFIX" --services api web
 ok "both services stable"
 
 # ── Verify ────────────────────────────────────────────────────────────────
+# main.ts excludes 'health' from the global 'api' prefix, so the app's real
+# health route is bare /health — not reachable through the public ALB at all
+# (the listener only forwards /api/* to this service, and the container
+# doesn't answer unprefixed /health from an /api/health request either).
+# ECS's own target-group health check hits it directly, bypassing listener
+# rules — that's the signal to trust, not a public curl. For a real signed
+# response, POST to a live route and expect its actual validation error
+# rather than a routing failure.
 log "Verifying"
+API_TG_ARN=$(aws elbv2 describe-target-groups --names "${PREFIX}-api-tg" --query 'TargetGroups[0].TargetGroupArn' --output text)
 for i in $(seq 1 20); do
-  CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://${ALB_DNS}/api/health" || true)
+  TG_HEALTHY=$(aws elbv2 describe-target-health --target-group-arn "$API_TG_ARN" \
+    --query "length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])" --output text)
+  AUTH_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://${ALB_DNS}/api/auth/login" \
+    -H "Content-Type: application/json" -d '{}' || true)
   WEB_CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://${ALB_DNS}/" || true)
-  echo "  attempt $i: api=$CODE web=$WEB_CODE"
-  [ "$CODE" = "200" ] && [ "$WEB_CODE" = "200" ] && break
+  echo "  attempt $i: api-targets-healthy=$TG_HEALTHY auth-login=$AUTH_CODE web=$WEB_CODE"
+  [ "$TG_HEALTHY" != "0" ] && [ "$AUTH_CODE" = "400" ] && [ "$WEB_CODE" = "200" ] && break
   sleep 10
 done
 
@@ -150,7 +162,7 @@ cat <<SUMMARY
 
   Deployed.
     Web : http://${ALB_DNS}/
-    API : http://${ALB_DNS}/api/health
+    API : http://${ALB_DNS}/api/ (health check is internal-only, see note above)
 
   A CloudFront distribution in front of the ALB is optional — the old
   account used one purely for the HTTPS default domain. Create it with:
