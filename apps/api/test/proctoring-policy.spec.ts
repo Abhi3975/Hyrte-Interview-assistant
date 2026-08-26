@@ -1,4 +1,4 @@
-import { resolvePolicy } from '../src/proctoring/proctoring.service';
+import { resolvePolicy, hardStrikeLevelFor } from '../src/proctoring/proctoring.service';
 import type { Interview } from '@prisma/client';
 
 function fakeInterview(config: unknown): Interview {
@@ -25,5 +25,35 @@ describe('resolvePolicy (P3 §4/§7 — configurable enforcement policy)', () =>
   it('ignores a malformed proctoringPolicy value rather than trusting it blindly', () => {
     expect(resolvePolicy(fakeInterview({ proctoringPolicy: 'DELETE_EVERYTHING' }))).toBe('TERMINATE');
     expect(resolvePolicy(fakeInterview({ selfServe: true, proctoringPolicy: 123 }))).toBe('WARN');
+  });
+});
+
+/**
+ * AI interviewer checklist — "leaving fullscreen / switching tabs must end
+ * a proctored assessment," not slowly nudge the weighted risk curve used for
+ * noisy signals like face detection. hardStrikeLevelFor is the deterministic
+ * strike math ProctoringService.ingest() applies only to FULLSCREEN_EXIT/
+ * TAB_SWITCH (HARD_STRIKE_TYPES), only for non-WARN policies.
+ */
+describe('hardStrikeLevelFor (lockdown violations — fullscreen exit / tab switch)', () => {
+  it('no strikes yet -> no override', () => {
+    expect(hardStrikeLevelFor(0, 3)).toBe(0);
+  });
+
+  it('1st strike -> a warning (level 1), not yet max', () => {
+    expect(hardStrikeLevelFor(1, 3)).toBe(1);
+  });
+
+  it('2nd strike -> immediately jumps to MAX_WARNINGS, whatever that is configured as', () => {
+    expect(hardStrikeLevelFor(2, 3)).toBe(3);
+    expect(hardStrikeLevelFor(2, 5)).toBe(5);
+  });
+
+  it('further strikes stay pinned at MAX_WARNINGS, never escalate past it', () => {
+    expect(hardStrikeLevelFor(10, 3)).toBe(3);
+  });
+
+  it('never returns a negative level for a negative count (defensive)', () => {
+    expect(hardStrikeLevelFor(-1, 3)).toBe(0);
   });
 });

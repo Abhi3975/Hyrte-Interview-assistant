@@ -283,6 +283,18 @@ function InterviewRoomInner() {
   // moment it was checked is what gets logged server-side (consentedAt).
   const [consented, setConsented] = useState(false);
   const consentedAtRef = useRef<string | null>(null);
+  // AI interviewer checklist — "kill your apps before entering the
+  // interview." No web page can actually close another tab or terminate
+  // another application (there is no browser API for it — this is a
+  // deliberate security boundary, not a gap), so the honest equivalent is
+  // an explicit, individually-confirmed pre-flight checklist the candidate
+  // must complete before Start unlocks, same pattern proctored platforms
+  // like Koyo use. The real technical backstop is what already exists:
+  // fullscreen-exit / tab-switch now end the session on the 2nd occurrence
+  // (see HARD_STRIKE_TYPES in proctoring.service.ts) — this screen sets
+  // the expectation, that enforces it.
+  const [preflight, setPreflight] = useState({ tabs: false, apps: false, space: false });
+  const preflightReady = preflight.tabs && preflight.apps && preflight.space;
   // P3 §4 — camera-off specifically PAUSES (not just flags) per the spec's
   // own example: "interview pauses with a warning if camera turns off."
   const [cameraPaused, setCameraPaused] = useState(false);
@@ -410,17 +422,29 @@ function InterviewRoomInner() {
         severity: map.severity,
       })
       .then((res) => {
+        // Lockdown violations (leaving fullscreen, switching tabs) get their
+        // own honest, specific wording — the backend's hard-strike override
+        // (proctoring.service.ts's HARD_STRIKE_TYPES) ends the session on the
+        // 2nd occurrence, so the candidate should know exactly why, not read
+        // the same generic "unusual activity" text used for ambient noise.
+        const isLockdownViolation = key === 'screen' || key === 'tabSwitch';
         if (res.terminated) {
-          setProctorNotice('Your session has been ended due to repeated integrity violations.');
+          setProctorNotice(
+            isLockdownViolation
+              ? 'Your interview has ended — you left the interview window or exited fullscreen more than once.'
+              : 'Your session has been ended due to repeated integrity violations.',
+          );
           endInterview();
           return;
         }
         if (res.warningLevel > 0 && res.warningLevel > lastWarningLevelRef.current) {
           lastWarningLevelRef.current = res.warningLevel;
           setProctorNotice(
-            res.warningLevel >= 2
-              ? 'Final warning — further violations may pause or end your session.'
-              : 'We noticed unusual activity. Please stay focused on the interview.',
+            isLockdownViolation
+              ? 'Stay in fullscreen and on this tab for the rest of the interview — leaving again will end your session immediately.'
+              : res.warningLevel >= 2
+                ? 'Final warning — further violations may pause or end your session.'
+                : 'We noticed unusual activity. Please stay focused on the interview.',
           );
         }
       })
@@ -1148,10 +1172,28 @@ function InterviewRoomInner() {
               <div className="font-semibold">Before you start — this is a proctored exam:</div>
               <ul className="mt-1 space-y-0.5">
                 <li>• You&apos;ll be asked to <b>share your entire screen</b> and the app goes <b>fullscreen</b>.</li>
-                <li>• <b>Close all other tabs and apps</b> — switching away is flagged.</li>
+                <li>• <b>Close all other tabs and apps</b> — leaving fullscreen or switching away <b>ends your interview immediately</b> after one warning.</li>
                 <li>• Camera, microphone, screen and focus are monitored throughout, including background noise, long pauses, and answer-pattern shifts.</li>
                 <li>• If your camera turns off, the interview pauses until it&apos;s back on.</li>
               </ul>
+            </div>
+            {/* AI interviewer checklist — a real pre-flight gate, not just a bullet point above. */}
+            <div className="mt-3 rounded-lg bg-white/5 p-3">
+              <div className="text-xs font-semibold text-white/70">System check — confirm before starting:</div>
+              <div className="mt-2 space-y-1.5">
+                <label className="flex items-start gap-2 text-xs text-white/70">
+                  <input type="checkbox" checked={preflight.tabs} onChange={(e) => setPreflight((p) => ({ ...p, tabs: e.target.checked }))} className="mt-0.5 h-4 w-4 rounded border-white/30 bg-transparent" />
+                  I have closed every other browser tab and window.
+                </label>
+                <label className="flex items-start gap-2 text-xs text-white/70">
+                  <input type="checkbox" checked={preflight.apps} onChange={(e) => setPreflight((p) => ({ ...p, apps: e.target.checked }))} className="mt-0.5 h-4 w-4 rounded border-white/30 bg-transparent" />
+                  I have closed every other application (messaging, notes, email, second devices).
+                </label>
+                <label className="flex items-start gap-2 text-xs text-white/70">
+                  <input type="checkbox" checked={preflight.space} onChange={(e) => setPreflight((p) => ({ ...p, space: e.target.checked }))} className="mt-0.5 h-4 w-4 rounded border-white/30 bg-transparent" />
+                  I&apos;m in a quiet, private space with no one else in view.
+                </label>
+              </div>
             </div>
             {/* P3 §7 — a real, required consent gate, not just informational text. */}
             <label className="mt-3 flex items-start gap-2 text-xs text-white/70">
@@ -1167,7 +1209,14 @@ function InterviewRoomInner() {
               I understand and consent to being monitored as described above.
             </label>
             {error && <p className="mt-3 rounded-lg bg-red-500/10 p-3 text-sm text-red-400">{error}</p>}
-            <button onClick={start} disabled={loading || !consented} title={!consented ? 'Please consent to monitoring first' : undefined} className="btn-primary mt-5 justify-center disabled:cursor-not-allowed disabled:opacity-50">{loading ? 'Requesting camera & mic…' : 'Start interview'}</button>
+            <button
+              onClick={start}
+              disabled={loading || !consented || !preflightReady}
+              title={!preflightReady ? 'Please complete the system check first' : !consented ? 'Please consent to monitoring first' : undefined}
+              className="btn-primary mt-5 justify-center disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {loading ? 'Requesting camera & mic…' : 'Start interview'}
+            </button>
             <button onClick={() => setPhase('setup')} className="mt-2 text-center text-xs text-white/50">← Change role or difficulty</button>
           </div>
         </div>

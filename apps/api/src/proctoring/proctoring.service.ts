@@ -37,6 +37,29 @@ import { IngestEventDto } from './dto/proctoring.dto';
 import { RecordingService } from '../recording/recording.service';
 
 /**
+ * Lockdown requirements (AI interviewer checklist): leaving fullscreen or
+ * switching away from the interview tab must end a real, proctored
+ * assessment — not slowly nudge a statistical risk curve. The weighted
+ * model in risk-weights.ts is deliberately forgiving (a real design choice
+ * for noisy signals like face detection or ambient audio, where one blip
+ * shouldn't cost a candidate their interview), so it's the wrong tool for
+ * "the candidate left the locked-down environment," which is unambiguous
+ * the instant it happens. This is a separate, deterministic strike count
+ * for exactly these two signals: 1st occurrence -> the existing warning
+ * path fires immediately (bypassing the risk threshold), 2nd -> whatever
+ * the session's own policy does at MAX_WARNINGS (terminate/pause) — same
+ * codepath every other max-warning trigger already uses, not a parallel
+ * termination mechanism.
+ */
+const HARD_STRIKE_TYPES = new Set(['FULLSCREEN_EXIT', 'TAB_SWITCH']);
+
+/** Pure so the strike math is unit-testable without the Prisma/Redis DI surface. */
+export function hardStrikeLevelFor(strikeCount: number, maxWarnings: number): number {
+  if (strikeCount <= 0) return 0;
+  return strikeCount >= 2 ? maxWarnings : 1;
+}
+
+/**
  * Proctoring Service — the orchestration layer of the Zero-Trust engine.
  *
  * On every ingested signal it:
@@ -121,7 +144,19 @@ export class ProctoringService {
 
     // 3) Escalate warnings based on weighted risk, not raw event count.
     const policy = resolvePolicy(session.interview);
-    const targetLevel = this.warningLevelForRisk(risk.riskScore);
+    let targetLevel = this.warningLevelForRisk(risk.riskScore);
+
+    // Zero-tolerance override for leaving fullscreen / switching tabs — see
+    // HARD_STRIKE_TYPES above. Self-serve WARN sessions are exempt, same
+    // "never strand a demo candidate with no recruiter watching" reasoning
+    // as resolvePolicy's own default.
+    if (policy !== 'WARN' && HARD_STRIKE_TYPES.has(dto.type)) {
+      const strikeCount = await this.prisma.proctorEvent.count({
+        where: { sessionId: dto.sessionId, type: { in: Array.from(HARD_STRIKE_TYPES) as never[] } },
+      });
+      targetLevel = Math.max(targetLevel, hardStrikeLevelFor(strikeCount, MAX_WARNINGS));
+    }
+
     let terminated = false;
     let warningLevel = session.warningCount;
 
