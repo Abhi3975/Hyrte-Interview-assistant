@@ -221,11 +221,29 @@ export class PracticeService {
    * information. Silent no-op if the candidate has no evidence on file.
    */
   private async buildEvidenceGraphContext(candidateId: string): Promise<string> {
-    const claims = await this.prisma.evidenceObject.findMany({
-      where: { candidateId },
-      orderBy: { createdAt: 'desc' },
-      take: 15,
-    });
+    // Profile-claim evidence (resume/LinkedIn — "who do you claim to be")
+    // fetched separately from behavioral/simulation evidence and always
+    // included first: a candidate with an active HYRTE history can easily
+    // have 30+ SIMULATION_ACTION/STAKEHOLDER_INTERACTION rows (one per
+    // chaos-wave message, escalation, etc.), which would otherwise crowd a
+    // handful of real resume claims out of a single recency-ordered window
+    // — confirmed live: a resume claim about team leadership went unchecked
+    // once real simulation history existed for the same candidate, even
+    // though the claim was on file. Static profile facts are the ones a
+    // live answer most plausibly contradicts, so they get priority.
+    const [profileClaims, otherEvidence] = await Promise.all([
+      this.prisma.evidenceObject.findMany({
+        where: { candidateId, type: { in: ['RESUME_CLAIM', 'LINKEDIN_SIGNAL'] } },
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+      }),
+      this.prisma.evidenceObject.findMany({
+        where: { candidateId, type: { notIn: ['RESUME_CLAIM', 'LINKEDIN_SIGNAL'] } },
+        orderBy: { createdAt: 'desc' },
+        take: 8,
+      }),
+    ]);
+    const claims = [...profileClaims, ...otherEvidence];
     if (claims.length === 0) return '';
 
     const lines = claims.map((c, i) => {
