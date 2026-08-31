@@ -92,6 +92,8 @@ class InterviewTurnDto {
   @IsOptional() @IsObject() currentRound?: CurrentRoundDto;
   @IsOptional() @IsString() nextRoundLabel?: string;
   @IsOptional() forceRoundAdvance?: boolean;
+  // Multi-agent panel doc — reverse interview.
+  @IsOptional() reverseInterviewQuestion?: boolean;
 }
 
 class TestCaseDto {

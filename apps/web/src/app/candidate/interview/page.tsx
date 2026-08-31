@@ -304,6 +304,22 @@ function InterviewRoomInner() {
   // recruiter-assessment room).
   const [proctorNotice, setProctorNotice] = useState<string | null>(null);
   const lastWarningLevelRef = useRef(0);
+  // Multi-agent panel doc — reverse interview: "Before we wrap up, I'd like
+  // to give you an opportunity to interview us." Triggered by a voluntary
+  // end (manual button or timer expiry) — never by a proctoring termination,
+  // which stays punitive and immediate (endInterview() is called directly
+  // there, bypassing this). The offer message itself is a fixed string, not
+  // an LLM call — same "deterministic structural transition" discipline as
+  // the intro/round caps elsewhere in this room.
+  const [reverseInterviewMode, setReverseInterviewMode] = useState(false);
+  const [reverseQuestionsAsked, setReverseQuestionsAsked] = useState(0);
+  const REVERSE_INTERVIEW_MAX_QUESTIONS = 3;
+  // Mirrors for the voice/VAD auto-send callback (defined once via a stable
+  // useCallback — see startListening below), same pattern as sendingRef.
+  const reverseInterviewModeRef = useRef(false);
+  const reverseQuestionsAskedRef = useRef(0);
+  useEffect(() => { reverseInterviewModeRef.current = reverseInterviewMode; }, [reverseInterviewMode]);
+  useEffect(() => { reverseQuestionsAskedRef.current = reverseQuestionsAsked; }, [reverseQuestionsAsked]);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -338,7 +354,6 @@ function InterviewRoomInner() {
   // their first few real answers, compared against later ones.
   const lastSpeechAtRef = useRef<number>(0);
   const answerComplexityBaselineRef = useRef<number[]>([]);
-  const sendTurnRef = useRef<((t?: string, o?: { end?: boolean; behaviorSummary?: string }) => void) | null>(null);
   const sendingRef = useRef(false);
   const micOnRef = useRef(micOn);
   const introStartedAtRef = useRef<number | null>(null);
@@ -596,7 +611,7 @@ function InterviewRoomInner() {
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = setTimeout(() => {
         if (text && words >= 1 && !sendingRef.current && !thinkingRef.current && voiceStateRef.current === 'listening') {
-          sendTurnRef.current?.(text);
+          submitTextRef.current?.(text);
           finalChunk = '';
         }
       }, 1000);
@@ -632,7 +647,7 @@ function InterviewRoomInner() {
       // P3 §4 — camera-off genuinely PAUSES: the countdown itself stops
       // ticking while the camera is off, not just a flag in the background.
       if (!cameraPausedRef.current) {
-        setRemaining((r) => { if (r <= 1) { clearInterval(iv); endInterview(); return 0; } return r - 1; });
+        setRemaining((r) => { if (r <= 1) { clearInterval(iv); offerReverseInterview(); return 0; } return r - 1; });
       }
       if (introStartedAtRef.current && !introForceSentRef.current && Date.now() - introStartedAtRef.current >= INTRO_CAP_MS) {
         introForceSentRef.current = true;
@@ -755,7 +770,7 @@ function InterviewRoomInner() {
   }, [introComplete]);
 
   // ── conversational turn ──
-  const sendTurn = useCallback(async (candidateText?: string, opts?: { end?: boolean; behaviorSummary?: string }) => {
+  const sendTurn = useCallback(async (candidateText?: string, opts?: { end?: boolean; behaviorSummary?: string; reverseInterviewQuestion?: boolean }) => {
     const base = messagesRef.current.slice();
     if (candidateText && candidateText.trim()) {
       const trimmed = candidateText.trim();
@@ -814,6 +829,7 @@ function InterviewRoomInner() {
         candidateName: user?.fullName?.split(' ')[0], resumeContext: resumeContextRef.current,
         transcript: base.map((m) => ({ role: m.role === 'ai' ? 'interviewer' : 'candidate', content: m.text })),
         end: opts?.end ?? false, behaviorSummary: opts?.behaviorSummary,
+        reverseInterviewQuestion: opts?.reverseInterviewQuestion ?? false,
         forceAdvance: shouldForceAdvance,
         currentRound: activeRoundSequence[idx] ? { type: activeRoundSequence[idx].type, label: ROUND_LABELS[activeRoundSequence[idx].type] } : undefined,
         nextRoundLabel: nextRound ? ROUND_LABELS[nextRound.type] : undefined,
@@ -842,11 +858,30 @@ function InterviewRoomInner() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [topic, difficulty, numQuestions, personality, interviewType, experience, company, language, theoryStyle, user, speak, introForced, roundForced, activeRoundSequence]);
-  useEffect(() => { sendTurnRef.current = sendTurn; }, [sendTurn]);
+  /**
+   * Shared candidate-text dispatch — routes through the reverse-interview
+   * branch when active. Both the Send button (via onSend) and the voice/VAD
+   * auto-send path (via submitTextRef, since that callback is defined once
+   * with startListening's stable useCallback and would otherwise close over
+   * a stale reverseInterviewMode) go through this single place, so a
+   * candidate asking their reverse-interview questions by voice gets the
+   * same flag + question cap as one who types them.
+   */
+  function submitText(text: string) {
+    if (!text.trim() || sendingRef.current) return;
+    if (reverseInterviewModeRef.current) {
+      if (reverseQuestionsAskedRef.current >= REVERSE_INTERVIEW_MAX_QUESTIONS) return;
+      setReverseQuestionsAsked((n) => n + 1);
+      sendTurn(text, { reverseInterviewQuestion: true });
+      return;
+    }
+    sendTurn(text);
+  }
+  const submitTextRef = useRef(submitText);
+  useEffect(() => { submitTextRef.current = submitText; });
 
   function onSend() {
-    if (!input.trim() || sending) return;
-    sendTurn(input);
+    submitText(input);
   }
 
   async function runCode() {
@@ -984,6 +1019,16 @@ function InterviewRoomInner() {
   }, [phase]);
 
   function endInterview() { if (!endedRef.current) finalize(); }
+
+  /** Multi-agent panel doc — offer the candidate a chance to ask questions before actually ending. Voluntary ends only; proctoring termination calls endInterview() directly. */
+  function offerReverseInterview() {
+    if (endedRef.current || reverseInterviewMode) return;
+    setReverseInterviewMode(true);
+    setMessages((m) => [
+      ...m,
+      { role: 'ai', text: "Before we wrap up, I'd like to give you a chance to ask me anything about the role, the team, or the company — up to a few questions. Or just click Finish whenever you're ready." },
+    ]);
+  }
 
   async function finalize() {
     if (endedRef.current) return;
@@ -1329,7 +1374,7 @@ function InterviewRoomInner() {
         </div>
         <div className="flex items-center gap-3">
           <span className="tabular-nums rounded-lg bg-white/10 px-3 py-1 text-sm font-medium">{fmt(remaining)}</span>
-          <button onClick={endInterview} className="rounded-lg bg-red-600 px-3 py-1.5 text-sm font-medium hover:bg-red-700">End Interview</button>
+          <button onClick={reverseInterviewMode ? endInterview : offerReverseInterview} className="rounded-lg bg-red-600 px-3 py-1.5 text-sm font-medium hover:bg-red-700">{reverseInterviewMode ? 'Finish Interview' : 'End Interview'}</button>
         </div>
       </div>
 
@@ -1410,15 +1455,33 @@ function InterviewRoomInner() {
                   >
                     {thinking ? "I'm ready" : 'Give me a second'}
                   </button>
-                  <button onClick={() => sendTurn('I\'m a bit stuck — can you explain the question and give me a hint?')} disabled={sending} className="rounded-md bg-white/10 px-2 py-0.5 hover:bg-white/20">I&apos;m stuck — explain</button>
+                  {!reverseInterviewMode && (
+                    <button onClick={() => sendTurn('I\'m a bit stuck — can you explain the question and give me a hint?')} disabled={sending} className="rounded-md bg-white/10 px-2 py-0.5 hover:bg-white/20">I&apos;m stuck — explain</button>
+                  )}
                 </div>
+                {reverseInterviewMode && (
+                  <p className="mb-1.5 px-1 text-xs text-brand-300">
+                    {reverseQuestionsAsked >= REVERSE_INTERVIEW_MAX_QUESTIONS
+                      ? "You've used all your questions — click Finish Interview when ready."
+                      : `Ask us anything (${REVERSE_INTERVIEW_MAX_QUESTIONS - reverseQuestionsAsked} question${REVERSE_INTERVIEW_MAX_QUESTIONS - reverseQuestionsAsked === 1 ? '' : 's'} left), or click Finish Interview.`}
+                  </p>
+                )}
                 <div className="flex items-end gap-2">
-                  <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); } }} onPaste={() => bumpFlag('aiAssist', 800)} rows={2} placeholder="Type your answer, or just speak…" className="min-h-0 flex-1 resize-none rounded-lg bg-black/30 p-2 text-sm outline-none placeholder:text-white/30" />
+                  <textarea
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); } }}
+                    onPaste={() => bumpFlag('aiAssist', 800)}
+                    rows={2}
+                    disabled={reverseInterviewMode && reverseQuestionsAsked >= REVERSE_INTERVIEW_MAX_QUESTIONS}
+                    placeholder={reverseInterviewMode ? 'Ask a question about the role, team, or company…' : 'Type your answer, or just speak…'}
+                    className="min-h-0 flex-1 resize-none rounded-lg bg-black/30 p-2 text-sm outline-none placeholder:text-white/30 disabled:opacity-50"
+                  />
                   <div className="flex flex-col gap-1">
                     <button onClick={() => setMuted((m) => !m)} className="rounded-lg bg-white/10 px-2 py-1 text-xs hover:bg-white/20">{muted ? 'Unmute' : 'Mute'}</button>
                     <button onClick={() => setMicOn((m) => !m)} className="rounded-lg bg-white/10 px-2 py-1 text-xs hover:bg-white/20">{micOn ? 'Mic on' : 'Mic off'}</button>
                   </div>
-                  <button onClick={onSend} disabled={sending || !input.trim()} className="btn-primary text-sm disabled:opacity-50">Send</button>
+                  <button onClick={onSend} disabled={sending || !input.trim() || (reverseInterviewMode && reverseQuestionsAsked >= REVERSE_INTERVIEW_MAX_QUESTIONS)} className="btn-primary text-sm disabled:opacity-50">Send</button>
                 </div>
               </div>
             </>
