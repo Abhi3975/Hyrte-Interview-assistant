@@ -675,29 +675,43 @@ export class PracticeService {
     });
 
     // AI interviewer checklist / multi-agent panel doc — HYRTE's proven
-    // Decision Council, ported for Ally (see InterviewCouncilService). Runs
-    // AFTER the core evaluation is safely persisted so a council failure
-    // (or partial-agent failure — each of the 9 calls is independently
-    // try/caught inside convene()) never costs the candidate their base
-    // evaluation; it only enriches recommendation/confidence on top.
-    try {
-      const brief = await this.buildCouncilEvidenceBrief(candidateId, input.jobRole ?? session.interview.jobRole);
-      const transcriptText = input.answers.map((a) => `Q: ${a.prompt}\nA: ${a.response}`).join('\n\n');
-      const council = await this.council.convene(sessionId, brief, transcriptText);
-      await this.prisma.evaluation.update({
-        where: { sessionId },
-        data: {
-          recommendation: council.recommendation,
-          confidencePercent: council.confidencePercent,
-          nextStepRecommendation: council.nextStepRecommendation,
-        },
-      });
-      evaluation.recommendation = council.recommendation;
-    } catch (e) {
-      this.logger.warn(`Decision Council failed for session ${sessionId}, keeping the base evaluation: ${errMsg(e)}`);
-    }
+    // Decision Council, ported for Ally (see InterviewCouncilService).
+    // Fire-and-forget, not awaited: 9 concurrent LLM calls + a discussion-
+    // synthesis call genuinely can run past a load-balancer's gateway
+    // timeout (confirmed live — a real 504 on this exact call once the
+    // council was added, even though the work completed correctly
+    // server-side seconds later). Matches the doc's own design anyway — "the
+    // candidate never watches the panel debate live... after the interview,
+    // the recruiter gets access to the full deliberation" — there's no
+    // reason the candidate-facing response should ever wait on it. A
+    // council failure (or partial-agent failure — each of the 9 calls is
+    // independently try/caught inside convene()) never costs the candidate
+    // their base evaluation; it only enriches recommendation/confidence on
+    // top, whenever it finishes.
+    this.runDecisionCouncil(candidateId, sessionId, input.jobRole ?? session.interview.jobRole, input.answers).catch((e) =>
+      this.logger.warn(`Decision Council failed for session ${sessionId}, keeping the base evaluation: ${errMsg(e)}`),
+    );
 
     return evaluation;
+  }
+
+  private async runDecisionCouncil(
+    candidateId: string,
+    sessionId: string,
+    jobRole: string,
+    answers: { prompt: string; response: string }[],
+  ): Promise<void> {
+    const brief = await this.buildCouncilEvidenceBrief(candidateId, jobRole);
+    const transcriptText = answers.map((a) => `Q: ${a.prompt}\nA: ${a.response}`).join('\n\n');
+    const council = await this.council.convene(sessionId, brief, transcriptText);
+    await this.prisma.evaluation.update({
+      where: { sessionId },
+      data: {
+        recommendation: council.recommendation,
+        confidencePercent: council.confidencePercent,
+        nextStepRecommendation: council.nextStepRecommendation,
+      },
+    });
   }
 
   /**
