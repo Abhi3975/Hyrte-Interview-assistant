@@ -371,6 +371,14 @@ function InterviewRoomInner() {
   const [roundForced, setRoundForced] = useState(false);
   const [thinking, setThinking] = useState(false); // "give me a second" — suppresses VAD auto-send without penalty
   const thinkingRef = useRef(false);
+  // Real neural TTS (ElevenLabs, via POST /voice/speak) — see the speak()
+  // callback below. audioRef holds the currently-playing clip; speakTokenRef
+  // is a monotonic race guard so a superseded, still-in-flight speak() call
+  // detects it lost the race and doesn't also start playback (mirrors HYRTE's
+  // hyrte/session/[id]/interview/page.tsx, which fixed this exact class of
+  // echo/overlap bug first).
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const speakTokenRef = useRef(0);
 
   const topic = wizardTopic ?? assessmentTopic ?? TOPICS[topicIdx];
   useEffect(() => { messagesRef.current = messages; }, [messages]);
@@ -394,6 +402,7 @@ function InterviewRoomInner() {
     try { recognitionRef.current?.stop?.(); } catch {}
     recognitionRef.current = null;
     try { window.speechSynthesis?.cancel(); } catch {}
+    if (audioRef.current) { try { audioRef.current.pause(); audioRef.current.currentTime = 0; } catch {} audioRef.current = null; }
     audioCtxRef.current?.close?.().catch(() => {});
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
@@ -561,12 +570,10 @@ function InterviewRoomInner() {
     } catch {}
   }
 
-  const speak = useCallback((text: string) => {
+  /** Last-resort fallback only — robotic by nature, used only if the real ElevenLabs call fails (network issue, TTS temporarily unavailable). */
+  const speakBrowser = useCallback((clean: string, token: number) => {
     const synth = typeof window !== 'undefined' ? window.speechSynthesis : null;
-    if (muted || !synth) { setVoiceState('listening'); return; }
-    setVoiceState('speaking');
-    // strip emoji/markdown for cleaner TTS
-    const clean = text.replace(/[#*`_>]/g, '').replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, '');
+    if (!synth) { if (speakTokenRef.current === token) { lastSpeechAtRef.current = Date.now(); setVoiceState('listening'); } return; }
     const u = new SpeechSynthesisUtterance(clean);
     // Prefer a LOCAL female English voice — remote/network voices often play
     // silently. Fall back to any local English voice, then the system default.
@@ -579,13 +586,59 @@ function InterviewRoomInner() {
     if (pick) u.voice = pick;
     u.rate = 1.0;
     u.pitch = 1.2; // slightly higher = more feminine even on a default voice
-    u.onend = () => { lastSpeechAtRef.current = Date.now(); setVoiceState('listening'); };
-    u.onerror = () => { lastSpeechAtRef.current = Date.now(); setVoiceState('listening'); };
+    u.onend = () => { if (speakTokenRef.current === token) { lastSpeechAtRef.current = Date.now(); setVoiceState('listening'); } };
+    u.onerror = () => { if (speakTokenRef.current === token) { lastSpeechAtRef.current = Date.now(); setVoiceState('listening'); } };
+    if (speakTokenRef.current !== token) return; // a superseding speak() call already won the race
     try { synth.resume(); } catch {}
     synth.cancel();
     // Small delay avoids the Chrome bug where speak() right after cancel() is dropped.
-    setTimeout(() => { try { synth.speak(u); } catch { setVoiceState('listening'); } }, 60);
-  }, [muted]);
+    setTimeout(() => {
+      if (speakTokenRef.current !== token) return;
+      try { synth.speak(u); } catch { if (speakTokenRef.current === token) setVoiceState('listening'); }
+    }, 60);
+  }, []);
+
+  /**
+   * Real neural synthesis (ElevenLabs, via POST /voice/speak) — browser
+   * SpeechSynthesis is a hard ceiling on how human it can ever sound, no
+   * amount of pitch/rate tuning changes that, so it's a fallback only (see
+   * speakBrowser above), not the primary path. Ported from HYRTE's
+   * hyrte/session/[id]/interview/page.tsx, which already carries this fix —
+   * this room (the main product surface) had been left on browser TTS the
+   * whole time.
+   */
+  const speak = useCallback(async (text: string) => {
+    // Stop anything already playing/queued BEFORE deciding whether to speak
+    // at all, and mint a token so a slower, now-superseded call can tell it
+    // lost the race and must not also start playback.
+    if (audioRef.current) { try { audioRef.current.pause(); audioRef.current.currentTime = 0; } catch {} audioRef.current = null; }
+    try { window.speechSynthesis?.cancel(); } catch {}
+    const token = ++speakTokenRef.current;
+    // strip emoji/markdown for cleaner TTS
+    const clean = text.replace(/[#*`_>]/g, '').replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, '');
+    if (muted) { setVoiceState('listening'); return; }
+    setVoiceState('speaking');
+    try {
+      const authToken = useAuthStore.getState().accessToken;
+      const res = await fetch('/api/voice/speak', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...(authToken ? { authorization: `Bearer ${authToken}` } : {}) },
+        body: JSON.stringify({ text: clean }),
+      });
+      if (speakTokenRef.current !== token) return; // superseded while the network call was in flight
+      if (!res.ok) throw new Error(`tts ${res.status}`);
+      const blob = await res.blob();
+      if (speakTokenRef.current !== token) return;
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      audio.onended = () => { URL.revokeObjectURL(url); if (speakTokenRef.current === token) { lastSpeechAtRef.current = Date.now(); setVoiceState('listening'); } };
+      audio.onerror = () => { URL.revokeObjectURL(url); if (speakTokenRef.current === token) speakBrowser(clean, token); };
+      await audio.play();
+    } catch {
+      if (speakTokenRef.current === token) speakBrowser(clean, token);
+    }
+  }, [muted, speakBrowser]);
 
   const startListening = useCallback(() => {
     const Ctor = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
