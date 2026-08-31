@@ -209,6 +209,23 @@ const FLAG_EVENT_MAP: Record<keyof Flags, { type: string; severity: 'LOW' | 'MED
 // we force Ally to wrap it up (deterministically, not just via prompt wording)
 // and unlock the Coding tab regardless of what she says next.
 const INTRO_CAP_MS = 90_000;
+/** Dynamic prosody — browser SpeechSynthesis has no style/stability levers like ElevenLabs, so rate/pitch is the only lever available on the fallback path (see speakBrowser). */
+const BROWSER_MOOD_PARAMS: Record<string, { rate: number; pitch: number }> = {
+  neutral: { rate: 1.0, pitch: 1.2 },
+  warm: { rate: 0.95, pitch: 1.15 },
+  curious: { rate: 1.03, pitch: 1.28 },
+  firm: { rate: 1.0, pitch: 1.1 },
+};
+/**
+ * Real-time voice — backchanneling. Short, fixed (never LLM-generated —
+ * that would add latency, defeating the purpose) acknowledgement clips
+ * played immediately once the candidate finishes talking, filling the dead
+ * air while the real interviewer reply is still generating. Deliberately
+ * routed through a separate, disposable Audio element (not the shared
+ * speak()/audioRef/speakTokenRef machinery) so it can never interfere with
+ * voiceState transitions — see playBackchannel below.
+ */
+const BACKCHANNEL_PHRASES = ['Mm-hmm.', 'I see.', 'Got it.', 'Right.', 'Okay.'];
 
 function useHydratedAuth() {
   const { user } = useAuthStore();
@@ -379,6 +396,8 @@ function InterviewRoomInner() {
   // echo/overlap bug first).
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const speakTokenRef = useRef(0);
+  /** Separate from audioRef/speakTokenRef on purpose — see playBackchannel. */
+  const backchannelAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const topic = wizardTopic ?? assessmentTopic ?? TOPICS[topicIdx];
   useEffect(() => { messagesRef.current = messages; }, [messages]);
@@ -403,6 +422,7 @@ function InterviewRoomInner() {
     recognitionRef.current = null;
     try { window.speechSynthesis?.cancel(); } catch {}
     if (audioRef.current) { try { audioRef.current.pause(); audioRef.current.currentTime = 0; } catch {} audioRef.current = null; }
+    if (backchannelAudioRef.current) { try { backchannelAudioRef.current.pause(); } catch {} backchannelAudioRef.current = null; }
     audioCtxRef.current?.close?.().catch(() => {});
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
@@ -571,7 +591,7 @@ function InterviewRoomInner() {
   }
 
   /** Last-resort fallback only — robotic by nature, used only if the real ElevenLabs call fails (network issue, TTS temporarily unavailable). */
-  const speakBrowser = useCallback((clean: string, token: number) => {
+  const speakBrowser = useCallback((clean: string, token: number, mood: string) => {
     const synth = typeof window !== 'undefined' ? window.speechSynthesis : null;
     if (!synth) { if (speakTokenRef.current === token) { lastSpeechAtRef.current = Date.now(); setVoiceState('listening'); } return; }
     const u = new SpeechSynthesisUtterance(clean);
@@ -584,8 +604,9 @@ function InterviewRoomInner() {
     const pick = local.find((v) => femaleNames.some((n) => v.name.toLowerCase().includes(n)))
       ?? local[0] ?? en[0];
     if (pick) u.voice = pick;
-    u.rate = 1.0;
-    u.pitch = 1.2; // slightly higher = more feminine even on a default voice
+    const params = BROWSER_MOOD_PARAMS[mood] ?? BROWSER_MOOD_PARAMS.neutral;
+    u.rate = params.rate;
+    u.pitch = params.pitch;
     u.onend = () => { if (speakTokenRef.current === token) { lastSpeechAtRef.current = Date.now(); setVoiceState('listening'); } };
     u.onerror = () => { if (speakTokenRef.current === token) { lastSpeechAtRef.current = Date.now(); setVoiceState('listening'); } };
     if (speakTokenRef.current !== token) return; // a superseding speak() call already won the race
@@ -607,11 +628,14 @@ function InterviewRoomInner() {
    * this room (the main product surface) had been left on browser TTS the
    * whole time.
    */
-  const speak = useCallback(async (text: string) => {
+  const speak = useCallback(async (text: string, mood: string = 'neutral') => {
     // Stop anything already playing/queued BEFORE deciding whether to speak
     // at all, and mint a token so a slower, now-superseded call can tell it
-    // lost the race and must not also start playback.
+    // lost the race and must not also start playback. Also stop a
+    // still-playing backchannel clip (rare — it's short and usually finishes
+    // well before the real reply arrives, but defensive here costs nothing).
     if (audioRef.current) { try { audioRef.current.pause(); audioRef.current.currentTime = 0; } catch {} audioRef.current = null; }
+    if (backchannelAudioRef.current) { try { backchannelAudioRef.current.pause(); } catch {} backchannelAudioRef.current = null; }
     try { window.speechSynthesis?.cancel(); } catch {}
     const token = ++speakTokenRef.current;
     // strip emoji/markdown for cleaner TTS
@@ -623,7 +647,7 @@ function InterviewRoomInner() {
       const res = await fetch('/api/voice/speak', {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...(authToken ? { authorization: `Bearer ${authToken}` } : {}) },
-        body: JSON.stringify({ text: clean }),
+        body: JSON.stringify({ text: clean, mood }),
       });
       if (speakTokenRef.current !== token) return; // superseded while the network call was in flight
       if (!res.ok) throw new Error(`tts ${res.status}`);
@@ -633,12 +657,43 @@ function InterviewRoomInner() {
       const audio = new Audio(url);
       audioRef.current = audio;
       audio.onended = () => { URL.revokeObjectURL(url); if (speakTokenRef.current === token) { lastSpeechAtRef.current = Date.now(); setVoiceState('listening'); } };
-      audio.onerror = () => { URL.revokeObjectURL(url); if (speakTokenRef.current === token) speakBrowser(clean, token); };
+      audio.onerror = () => { URL.revokeObjectURL(url); if (speakTokenRef.current === token) speakBrowser(clean, token, mood); };
       await audio.play();
     } catch {
-      if (speakTokenRef.current === token) speakBrowser(clean, token);
+      if (speakTokenRef.current === token) speakBrowser(clean, token, mood);
     }
   }, [muted, speakBrowser]);
+
+  /**
+   * Fires immediately once the candidate's turn is submitted, before the
+   * real (slower) interviewer reply comes back — a short "mm-hmm"/"I see"
+   * clip so the candidate hears the interviewer is actually there during the
+   * LLM round-trip, instead of dead air. Never awaited by its caller
+   * (fire-and-forget) and fails silently — this is a decorative UX cue, not
+   * essential, and must never block or error out the real turn submission.
+   */
+  const playBackchannel = useCallback(async () => {
+    if (muted || voiceStateRef.current !== 'listening') return;
+    try {
+      const authToken = useAuthStore.getState().accessToken;
+      const phrase = BACKCHANNEL_PHRASES[Math.floor(Math.random() * BACKCHANNEL_PHRASES.length)];
+      const res = await fetch('/api/voice/speak', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...(authToken ? { authorization: `Bearer ${authToken}` } : {}) },
+        body: JSON.stringify({ text: phrase, mood: 'neutral' }),
+      });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      backchannelAudioRef.current = audio;
+      audio.onended = () => URL.revokeObjectURL(url);
+      audio.onerror = () => URL.revokeObjectURL(url);
+      await audio.play();
+    } catch {
+      // decorative only — never surfaces an error
+    }
+  }, [muted]);
 
   const startListening = useCallback(() => {
     const Ctor = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
@@ -866,6 +921,12 @@ function InterviewRoomInner() {
     setMessages(base);
     setInput('');
     setSending(true);
+    // Real-time voice — backchanneling: fire immediately (fire-and-forget,
+    // never awaited) so it plays while the real reply is still generating.
+    // Only for a genuine mid-interview candidate answer — not the initial
+    // empty-transcript kickoff call, and not the closing turn (which already
+    // has its own deterministic "putting your report together" messaging).
+    if (candidateText && candidateText.trim() && !opts?.end) void playBackchannel();
     const shouldForceAdvance = introForced && !forceAdvanceConsumedRef.current && !opts?.end;
     if (shouldForceAdvance) forceAdvanceConsumedRef.current = true;
     // P2 — round structure: only fires once intro-advance is out of the way
@@ -876,7 +937,7 @@ function InterviewRoomInner() {
     const idx = roundIndexRef.current;
     const nextRound = shouldForceRoundAdvance ? activeRoundSequence[idx + 1] : undefined;
     try {
-      const res = await api.post<{ text: string; hintLevel?: number }>('/practice/interview/turn', {
+      const res = await api.post<{ text: string; hintLevel?: number; mood?: string }>('/practice/interview/turn', {
         jobRole: topic.label, category: topic.category, difficulty, topic: topic.topic,
         count: numQuestions, personality, mode: interviewType, experience, company, language, style: theoryStyle,
         candidateName: user?.fullName?.split(' ')[0], resumeContext: resumeContextRef.current,
@@ -900,7 +961,7 @@ function InterviewRoomInner() {
       }
       if (opts?.end) return res.text;
       setMessages((m) => [...m, { role: 'ai', text: res.text }]);
-      speak(res.text);
+      speak(res.text, res.mood);
       lastAiTsRef.current = Date.now();
       return res.text;
     } catch (err) {
@@ -910,7 +971,7 @@ function InterviewRoomInner() {
       setSending(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [topic, difficulty, numQuestions, personality, interviewType, experience, company, language, theoryStyle, user, speak, introForced, roundForced, activeRoundSequence]);
+  }, [topic, difficulty, numQuestions, personality, interviewType, experience, company, language, theoryStyle, user, speak, playBackchannel, introForced, roundForced, activeRoundSequence]);
   /**
    * Shared candidate-text dispatch — routes through the reverse-interview
    * branch when active. Both the Send button (via onSend) and the voice/VAD

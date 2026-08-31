@@ -96,6 +96,18 @@ function pick<T>(arr: T[]): T {
 }
 const MICRO_ACK_PROBABILITY = 0.3;
 
+/**
+ * Real-time voice — dynamic prosody. A closed set (not free text) so it maps
+ * safely onto a fixed handful of ElevenLabs voice_settings presets
+ * (voice/speech/elevenlabs.tts.ts) rather than trusting arbitrary LLM output
+ * to become a synthesis parameter. Which mood fits a given reply is a
+ * genuine in-context judgment call (same as hintLevel below), not something
+ * deterministic — so it's asked of the LLM as a constrained field on the
+ * same turn-generation call, not inferred client-side from the text.
+ */
+export type InterviewerMood = 'neutral' | 'warm' | 'curious' | 'firm';
+const VALID_MOODS = new Set<InterviewerMood>(['neutral', 'warm', 'curious', 'firm']);
+
 export interface PracticeQuestion {
   id: string;
   title: string;
@@ -294,7 +306,7 @@ export class PracticeService {
     currentRound?: { type: string; label: string };
     nextRoundLabel?: string;
     forceRoundAdvance?: boolean;
-  }, candidateId?: string): Promise<{ text: string; hintLevel?: number }> {
+  }, candidateId?: string): Promise<{ text: string; hintLevel?: number; mood: InterviewerMood }> {
     const [simulation, evidenceGraph] = candidateId
       ? await Promise.all([this.getSimulationContext(candidateId), this.buildEvidenceGraphContext(candidateId)])
       : ['', ''];
@@ -355,7 +367,11 @@ export class PracticeService {
           'Return ONLY JSON: {"reply": string (your next spoken message, no stage directions), ' +
           '"hintLevel": int 1-5 (ONLY include this field on a turn where you actually GAVE a hint per the ' +
           'graduated-hint rules above — omit it entirely on every other turn, including ones where you declined ' +
-          'to give one)}.',
+          'to give one), "mood": one of "neutral"|"warm"|"curious"|"firm" — how THIS reply should sound spoken ' +
+          'aloud: "warm" for genuine encouragement/confidence-building or a warm closing, "curious" for a real ' +
+          'follow-up probe or when genuinely interested in more detail, "firm" for pushing on rigor/edge-cases ' +
+          'or redirecting an off-scope request, "neutral" otherwise — pick the one that actually matches this ' +
+          'reply, not a default}.',
       },
     ];
     if (input.transcript.length === 0) {
@@ -371,9 +387,10 @@ export class PracticeService {
         messages.push({ role: 'user', content: `(Please end the interview now.${behavior})` });
       }
     }
-    const res = await this.ai.completeJson<{ reply?: string; hintLevel?: number }>(messages, { temperature: 0.6, maxTokens: input.end ? 300 : 600 });
+    const res = await this.ai.completeJson<{ reply?: string; hintLevel?: number; mood?: string }>(messages, { temperature: 0.6, maxTokens: input.end ? 300 : 600 });
     const replyRaw = (res.reply ?? '').trim() || "Thanks for walking me through that.";
     const hintLevel = typeof res.hintLevel === 'number' && res.hintLevel >= 1 && res.hintLevel <= 5 ? Math.round(res.hintLevel) : undefined;
+    const mood: InterviewerMood = VALID_MOODS.has(res.mood as InterviewerMood) ? (res.mood as InterviewerMood) : 'neutral';
 
     // P2 — deterministic closing sequence: final answer already acknowledged
     // above by the LLM; the closing line + report-ready notification are
@@ -384,8 +401,12 @@ export class PracticeService {
       : Math.random() < MICRO_ACK_PROBABILITY && input.transcript.length > 0
         ? `${pick(MICRO_ACKS)} ${replyRaw}`
         : replyRaw;
+    // The closing sequence above is a fixed warm sign-off regardless of what
+    // the LLM picked for the acknowledgement sentence that precedes it —
+    // deterministic, same reasoning as the closing text itself.
+    const finalMood: InterviewerMood = input.end ? 'warm' : mood;
 
-    return { text: reply, hintLevel };
+    return { text: reply, hintLevel, mood: finalMood };
   }
 
   async generateCoding(topic: string, difficulty: Difficulty, kind: 'code' | 'sql' = 'code') {

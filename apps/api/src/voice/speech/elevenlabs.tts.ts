@@ -1,4 +1,19 @@
-import { TTSProvider, SpeechLanguage } from './speech.interface';
+import { TTSProvider, SpeechLanguage, TTSMood } from './speech.interface';
+
+/**
+ * Dynamic prosody presets — the standard ElevenLabs levers (stability down /
+ * style up = more expressive; stability up / style down = calmer, steadier)
+ * mapped onto a few real conversational moments this app's interviewer
+ * persona already reasons about (see practice.service.ts's InterviewerMood).
+ * Not full emotional voice acting — a real, working tone shift within what
+ * one TTS call's settings can actually do.
+ */
+const MOOD_VOICE_SETTINGS: Record<TTSMood, { stability: number; similarity_boost: number; style: number; use_speaker_boost: boolean }> = {
+  neutral: { stability: 0.4, similarity_boost: 0.75, style: 0.35, use_speaker_boost: true },
+  warm: { stability: 0.55, similarity_boost: 0.8, style: 0.25, use_speaker_boost: true },
+  curious: { stability: 0.35, similarity_boost: 0.75, style: 0.5, use_speaker_boost: true },
+  firm: { stability: 0.5, similarity_boost: 0.75, style: 0.15, use_speaker_boost: true },
+};
 
 /**
  * ElevenLabs streaming TTS adapter.
@@ -21,7 +36,7 @@ export class ElevenLabsTTS implements TTSProvider {
 
   async *synthesize(
     text: string,
-    opts: { language: SpeechLanguage; voiceId?: string },
+    opts: { language: SpeechLanguage; voiceId?: string; mood?: TTSMood },
   ): AsyncIterable<Buffer> {
     if (!this.apiKey) throw new Error('ElevenLabs not configured');
     const voiceId = opts.voiceId ?? this.defaultVoice;
@@ -34,10 +49,7 @@ export class ElevenLabsTTS implements TTSProvider {
         body: JSON.stringify({
           text,
           model_id: 'eleven_multilingual_v2',
-          // Lower stability + non-zero style is the standard ElevenLabs lever
-          // for natural, expressive speech — stability:0.5/no style (the old
-          // config) trends flat/robotic. speaker_boost adds presence/clarity.
-          voice_settings: { stability: 0.4, similarity_boost: 0.75, style: 0.35, use_speaker_boost: true },
+          voice_settings: MOOD_VOICE_SETTINGS[opts.mood ?? 'neutral'],
         }),
       },
     );

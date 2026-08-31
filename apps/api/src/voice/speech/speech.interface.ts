@@ -33,9 +33,12 @@ export interface STTStream {
   close(): Promise<void>;
 }
 
+/** Dynamic prosody — see practice.service.ts's InterviewerMood; kept as a plain string union here to avoid a cross-module import for one type. */
+export type TTSMood = 'neutral' | 'warm' | 'curious' | 'firm';
+
 export interface TTSProvider {
   readonly name: string;
   isAvailable(): boolean;
   /** Synthesize text to an audio stream (chunked for low-latency playback). */
-  synthesize(text: string, opts: { language: SpeechLanguage; voiceId?: string }): AsyncIterable<Buffer>;
+  synthesize(text: string, opts: { language: SpeechLanguage; voiceId?: string; mood?: TTSMood }): AsyncIterable<Buffer>;
 }

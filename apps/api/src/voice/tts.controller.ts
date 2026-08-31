@@ -1,13 +1,16 @@
 import { Body, Controller, Post, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsString, MaxLength } from 'class-validator';
+import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { ElevenLabsTTS } from './speech/elevenlabs.tts';
+import { TTSMood } from './speech/speech.interface';
 
 class SpeakDto {
   @IsString() @MaxLength(2000) text!: string;
+  /** Dynamic prosody — see practice.service.ts's InterviewerMood / elevenlabs.tts.ts's MOOD_VOICE_SETTINGS. */
+  @IsOptional() @IsIn(['neutral', 'warm', 'curious', 'firm']) mood?: TTSMood;
 }
 
 /**
@@ -36,7 +39,7 @@ export class TtsController {
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Cache-Control', 'no-store');
     try {
-      for await (const chunk of this.tts.synthesize(dto.text, { language: 'en' })) {
+      for await (const chunk of this.tts.synthesize(dto.text, { language: 'en', mood: dto.mood })) {
         res.write(chunk);
       }
       res.end();
