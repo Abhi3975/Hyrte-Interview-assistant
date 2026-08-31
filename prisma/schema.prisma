@@ -448,12 +448,14 @@ model InterviewSession {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  answers           Answer[]
-  evaluation        Evaluation?
-  proctorEvents     ProctorEvent[]
-  warnings          Warning[]
-  riskAssessment    RiskAssessment?
-  codingSubmissions CodingSubmission[]
+  answers                 Answer[]
+  evaluation              Evaluation?
+  proctorEvents           ProctorEvent[]
+  warnings                Warning[]
+  riskAssessment          RiskAssessment?
+  codingSubmissions       CodingSubmission[]
+  councilAgentReports     InterviewCouncilAgentReport[]
+  councilDiscussionEntries InterviewCouncilDiscussionEntry[]
 
   @@index([interviewId])
   @@index([candidateId, status])
@@ -611,7 +613,51 @@ model Evaluation {
   shareToken          String?   @unique
   shareTokenExpiresAt DateTime?
 
+  // AI interviewer multi-agent panel — Ally's own Decision Council (ported
+  // from HYRTE's proven HyrteCouncilAgentReport/HyrteInterviewReport;
+  // InterviewCouncilService.convene overwrites `recommendation` above with
+  // the committee's deterministic vote tally once it runs, same precedent as
+  // HyrteInterviewService's synthesis recommendation being superseded by
+  // DecisionCouncilService.convene). Nullable — absent until the council runs.
+  confidencePercent      Int?
+  nextStepRecommendation String?
+
   @@index([recommendation])
+}
+
+// Ally's Decision Council — same 9 agents/mandates as HYRTE's
+// (council-agents.config.ts, reused as-is), separate tables because they key
+// off InterviewSession rather than HyrteSession. Deliberately does NOT reuse
+// AuditLogService/HyrteAiAuditLog (FK'd to HyrteSession) — a stated scope cut,
+// not an oversight; add a parallel audit table only if per-agent observability
+// for Ally becomes a real need.
+model InterviewCouncilAgentReport {
+  id               String           @id @default(cuid())
+  sessionId        String
+  session          InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  agentKey         String
+  agentName        String
+  stance           CouncilStance?
+  reasoning        String
+  keyPoints        String[]         @default([])
+  citedEvidenceIds String[]         @default([])
+  createdAt        DateTime         @default(now())
+
+  @@unique([sessionId, agentKey])
+  @@index([sessionId])
+}
+
+model InterviewCouncilDiscussionEntry {
+  id                   String           @id @default(cuid())
+  sessionId            String
+  session              InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  agentKey             String
+  statement            String
+  respondingToAgentKey String?
+  ordinal              Int
+  createdAt            DateTime         @default(now())
+
+  @@index([sessionId, ordinal])
 }
 
 // ─────────────────────────────────────────────────────────────

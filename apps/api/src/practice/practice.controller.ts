@@ -1,8 +1,9 @@
-import { Body, Controller, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsArray, IsEnum, IsIn, IsInt, IsNumber, IsObject, IsOptional, IsString, Max, Min } from 'class-validator';
 import { Category, Difficulty } from '@prisma/client';
 import { PracticeService } from './practice.service';
+import { InterviewCouncilService } from './council/interview-council.service';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
@@ -110,7 +111,10 @@ class RunCodingDto {
 @Controller('practice')
 @UseGuards(RolesGuard)
 export class PracticeController {
-  constructor(private readonly practice: PracticeService) {}
+  constructor(
+    private readonly practice: PracticeService,
+    private readonly council: InterviewCouncilService,
+  ) {}
 
   /** Any candidate can start a mock interview themselves — no approval needed. */
   @Post('start')
@@ -141,6 +145,18 @@ export class PracticeController {
     @Body() dto: CompleteSessionDto,
   ) {
     return this.practice.completeSession(user.id, id, dto);
+  }
+
+  /**
+   * AI interviewer multi-agent panel doc — "the candidate never watches the
+   * panel debate live... after the interview, the recruiter gets access to
+   * the full deliberation." Recruiter/org-admin only, deliberately never
+   * exposed to the CANDIDATE role.
+   */
+  @Get('session/:id/council')
+  @Roles('RECRUITER', 'ORG_ADMIN')
+  getCouncilReport(@Param('id') id: string) {
+    return this.council.getReport(id);
   }
 
   /** P4 — a presigned URL the candidate's browser PUTs its recorded session to directly. */

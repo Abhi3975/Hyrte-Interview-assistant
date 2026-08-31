@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError } from '@/lib/api';
 
 // ── shapes returned by GET /evaluation/sessions/:id/report and
@@ -24,6 +24,90 @@ export interface ReportEvaluation {
   perQuestion: PerQuestionScore[];
   shareToken?: string | null;
   shareTokenExpiresAt?: string | null;
+  /** Decision Council aggregate (InterviewCouncilService.convene) — absent until the council has run. */
+  confidencePercent?: number | null;
+  nextStepRecommendation?: string | null;
+}
+
+interface CouncilAgentReport {
+  agentKey: string;
+  agentName: string;
+  stance: 'HIRE' | 'LEAN_HIRE' | 'LEAN_NO_HIRE' | 'NO_HIRE' | null;
+  reasoning: string;
+  keyPoints: string[];
+}
+interface CouncilDiscussionEntry {
+  agentKey: string;
+  statement: string;
+  respondingToAgentKey: string | null;
+  ordinal: number;
+}
+const STANCE_LABEL: Record<string, string> = { HIRE: 'Hire', LEAN_HIRE: 'Lean Hire', LEAN_NO_HIRE: 'Lean No Hire', NO_HIRE: 'No Hire' };
+const STANCE_COLOR: Record<string, string> = {
+  HIRE: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400', LEAN_HIRE: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+  LEAN_NO_HIRE: 'bg-amber-500/15 text-amber-600 dark:text-amber-400', NO_HIRE: 'bg-red-500/15 text-red-600 dark:text-red-400',
+};
+
+/**
+ * AI interviewer multi-agent panel doc — "the candidate never watches the
+ * panel debate live... after the interview, the recruiter gets access to the
+ * full deliberation." Fetches lazily and only ever renders for mode
+ * 'recruiter' (see the call site below) — never reachable from the
+ * candidate/public report views.
+ */
+function DecisionCouncilSection({ sessionId }: { sessionId: string }) {
+  const [data, setData] = useState<{ agentReports: CouncilAgentReport[]; discussion: CouncilDiscussionEntry[] } | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    api
+      .get<{ agentReports: CouncilAgentReport[]; discussion: CouncilDiscussionEntry[] }>(`/practice/session/${sessionId}/council`)
+      .then(setData)
+      .catch(() => setData({ agentReports: [], discussion: [] }))
+      .finally(() => setLoading(false));
+  }, [sessionId]);
+
+  if (loading) return null;
+  if (!data || data.agentReports.length === 0) return null;
+
+  const byKey = new Map(data.agentReports.map((r) => [r.agentKey, r]));
+  return (
+    <div className="print-break card">
+      <h3 className="font-semibold">Decision Council</h3>
+      <p className="mt-0.5 text-xs text-black/50 dark:text-white/50">
+        Nine independent AI committee members reviewed this interview separately, then discussed their notes — the candidate never saw this.
+      </p>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        {data.agentReports.map((r) => (
+          <div key={r.agentKey} className="rounded-lg border border-black/5 p-3 dark:border-white/10">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-medium">{r.agentName}</span>
+              {r.stance && <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${STANCE_COLOR[r.stance] ?? ''}`}>{STANCE_LABEL[r.stance] ?? r.stance}</span>}
+            </div>
+            <p className="mt-1 text-xs text-black/70 dark:text-white/70">{r.reasoning}</p>
+            {r.keyPoints.length > 0 && (
+              <ul className="mt-1 space-y-0.5 text-[11px] text-black/50 dark:text-white/50">{r.keyPoints.map((k, i) => <li key={i}>· {k}</li>)}</ul>
+            )}
+          </div>
+        ))}
+      </div>
+      {data.discussion.length > 0 && (
+        <div className="mt-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-black/50 dark:text-white/50">Committee discussion</div>
+          <ol className="mt-2 space-y-2">
+            {data.discussion.map((d, i) => (
+              <li key={i} className="rounded-lg bg-black/5 p-2.5 text-xs dark:bg-white/5">
+                <span className="font-medium">{byKey.get(d.agentKey)?.agentName ?? d.agentKey}</span>
+                {d.respondingToAgentKey && (
+                  <span className="text-black/40 dark:text-white/40"> → responding to {byKey.get(d.respondingToAgentKey)?.agentName ?? d.respondingToAgentKey}</span>
+                )}
+                <p className="mt-0.5 text-black/70 dark:text-white/70">{d.statement}</p>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+    </div>
+  );
 }
 export interface ReportSession {
   startedAt: string | null;
@@ -187,6 +271,12 @@ export function ReportView({ evaluation: ev, session, mode, sessionId, recording
           <div className="text-xs font-semibold uppercase tracking-wide text-black/50 dark:text-white/50">Overall score</div>
           <Gauge value={ev.overallScore} />
           <span className={`mt-2 inline-block rounded-full px-3 py-1 text-xs font-semibold ${REC_COLOR[ev.recommendation] ?? 'bg-black/10'}`}>{REC_LABEL[ev.recommendation] ?? ev.recommendation}</span>
+          {typeof ev.confidencePercent === 'number' && (
+            <p className="mt-2 text-[11px] text-black/50 dark:text-white/50">Committee confidence: {ev.confidencePercent}%</p>
+          )}
+          {ev.nextStepRecommendation && (
+            <p className="mt-0.5 text-[11px] text-black/50 dark:text-white/50">Next step: {ev.nextStepRecommendation}</p>
+          )}
         </div>
         <div className="card">
           <h3 className="font-semibold">Summary</h3>
@@ -222,6 +312,8 @@ export function ReportView({ evaluation: ev, session, mode, sessionId, recording
           {ev.radar?.length > 0 && <p className="text-center text-[10px] text-black/40">Dashed line = target bar for this role/level, not a population average.</p>}
         </div>
       )}
+
+      {mode === 'recruiter' && sessionId && <DecisionCouncilSection sessionId={sessionId} />}
 
       {ev.parameterScores?.length > 0 && (
         <div className="print-break card">

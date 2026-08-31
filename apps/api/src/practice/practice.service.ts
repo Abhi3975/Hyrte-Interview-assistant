@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Category, Difficulty, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { QuestionService } from '../questions/question.service';
@@ -6,6 +6,7 @@ import { EvaluationService } from '../evaluation/evaluation.service';
 import { AIService } from '../ai/ai.service';
 import { PistonClient } from './piston.client';
 import { RecordingService } from '../recording/recording.service';
+import { InterviewCouncilService } from './council/interview-council.service';
 
 /** Persona + protocol for the conversational AI interviewer. */
 const INTERVIEWER_SYSTEM = `# ROLE
@@ -109,6 +110,8 @@ export interface PracticeQuestion {
  */
 @Injectable()
 export class PracticeService {
+  private readonly logger = new Logger(PracticeService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly questions: QuestionService,
@@ -116,6 +119,7 @@ export class PracticeService {
     private readonly ai: AIService,
     private readonly piston: PistonClient,
     private readonly recording: RecordingService,
+    private readonly council: InterviewCouncilService,
   ) {}
 
   /**
@@ -596,7 +600,52 @@ export class PracticeService {
       });
     });
 
+    // AI interviewer checklist / multi-agent panel doc — HYRTE's proven
+    // Decision Council, ported for Ally (see InterviewCouncilService). Runs
+    // AFTER the core evaluation is safely persisted so a council failure
+    // (or partial-agent failure — each of the 9 calls is independently
+    // try/caught inside convene()) never costs the candidate their base
+    // evaluation; it only enriches recommendation/confidence on top.
+    try {
+      const brief = await this.buildCouncilEvidenceBrief(candidateId, input.jobRole ?? session.interview.jobRole);
+      const transcriptText = input.answers.map((a) => `Q: ${a.prompt}\nA: ${a.response}`).join('\n\n');
+      const council = await this.council.convene(sessionId, brief, transcriptText);
+      await this.prisma.evaluation.update({
+        where: { sessionId },
+        data: {
+          recommendation: council.recommendation,
+          confidencePercent: council.confidencePercent,
+          nextStepRecommendation: council.nextStepRecommendation,
+        },
+      });
+      evaluation.recommendation = council.recommendation;
+    } catch (e) {
+      this.logger.warn(`Decision Council failed for session ${sessionId}, keeping the base evaluation: ${errMsg(e)}`);
+    }
+
     return evaluation;
+  }
+
+  /**
+   * "Shared Candidate Brain" doc — pulls the candidate's own resume/LinkedIn/
+   * GitHub Evidence Graph (profile-ingestion.service.ts's output; EvidenceObject
+   * is candidate-scoped, not tied to any one HyrteSession) into the Decision
+   * Council's evidence brief. A candidate who never ran profile ingestion just
+   * gets an empty section — the council still runs on the transcript alone.
+   */
+  private async buildCouncilEvidenceBrief(candidateId: string, jobRole: string): Promise<string> {
+    const claims = await this.prisma.evidenceObject.findMany({
+      where: { candidateId, hyrteSessionId: null },
+      orderBy: { createdAt: 'desc' },
+      take: 12,
+    });
+    const evidenceLines = claims.map((c, i) => `EV${i + 1} [${c.type}, confidence ${c.confidenceScore}]: ${c.rawText}`);
+    return (
+      `Candidate is interviewing for: ${jobRole}.\n` +
+      (evidenceLines.length
+        ? `Evidence from the candidate's resume/profile (independent of this interview):\n${evidenceLines.join('\n')}`
+        : 'No independently-verified resume/profile evidence is on file for this candidate — reason from the transcript alone.')
+    );
   }
 
   /** Score a completed mock interview and return decision-ready feedback. */
@@ -624,4 +673,8 @@ function shuffle<T>(arr: T[]): T[] {
     [a[i], a[j]] = [a[j], a[i]];
   }
   return a;
+}
+
+function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
 }
