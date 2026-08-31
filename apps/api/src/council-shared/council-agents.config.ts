@@ -2,6 +2,11 @@
  * §6 Decision Council — the nine agent mandates, verbatim to the doc's table.
  * Five vote a hire/no-hire lean; four are oversight roles that challenge or
  * aggregate the other five's reasoning rather than voting themselves.
+ *
+ * Shared by both HYRTE's DecisionCouncilService and Ally's
+ * InterviewCouncilService — moved here (out of hyrte/council/) once the two
+ * councils' orchestration logic was merged into CouncilCoreService, so the
+ * agent roster genuinely belongs to neither product surface specifically.
  */
 export interface CouncilAgentDef {
   key: string;

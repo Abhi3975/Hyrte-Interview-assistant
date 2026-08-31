@@ -30,7 +30,7 @@ const NAV: Record<'candidate' | 'recruiter' | 'admin' | 'hyrte', NavItem[]> = {
     { href: '/recruiter/interviews', label: 'Assessments' },
     { href: '/recruiter/questions', label: 'Question Bank' },
     { href: '/recruiter/proctoring', label: 'Live Proctoring' },
-    { href: '/recruiter/hyrte-council', label: 'HYRTE Council' },
+    { href: '/recruiter/council', label: 'Decision Council' },
     { href: '/recruiter/hyrte-live', label: 'HYRTE Live Console' },
     { href: '/recruiter/hyrte-sessions/new', label: 'New HYRTE Session' },
   ],

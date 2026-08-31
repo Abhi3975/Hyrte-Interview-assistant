@@ -710,6 +710,7 @@ export class PracticeService {
         recommendation: council.recommendation,
         confidencePercent: council.confidencePercent,
         nextStepRecommendation: council.nextStepRecommendation,
+        predictions: council.predictions as unknown as Prisma.InputJsonValue,
       },
     });
   }

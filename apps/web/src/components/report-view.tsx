@@ -27,6 +27,8 @@ export interface ReportEvaluation {
   /** Decision Council aggregate (InterviewCouncilService.convene) — absent until the council has run. */
   confidencePercent?: number | null;
   nextStepRecommendation?: string | null;
+  /** Prediction Engine parity (see interview-council.service.ts) — 4-6 role-shape/environment success-likelihood reads from the Decision Cortex agent. */
+  predictions?: { dimension: string; likelihood: string; reasoning: string }[];
 }
 
 interface CouncilAgentReport {
@@ -314,6 +316,26 @@ export function ReportView({ evaluation: ev, session, mode, sessionId, recording
       )}
 
       {mode === 'recruiter' && sessionId && <DecisionCouncilSection sessionId={sessionId} />}
+
+      {mode === 'recruiter' && ev.predictions && ev.predictions.length > 0 && (
+        <div className="print-break card">
+          <h3 className="font-semibold">Predicted success by environment</h3>
+          <p className="mt-0.5 text-xs text-black/50 dark:text-white/50">
+            The Decision Council&apos;s read on how this candidate is likely to perform in different role-shapes, grounded in what they actually showed — not a fixed rubric.
+          </p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {ev.predictions.map((p, i) => (
+              <div key={i} className="rounded-lg border border-black/5 p-3 dark:border-white/10">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-medium">{p.dimension}</span>
+                  <span className="shrink-0 text-xs font-semibold text-brand-600 dark:text-brand-400">{p.likelihood}</span>
+                </div>
+                <p className="mt-1 text-[11px] text-black/60 dark:text-white/60">{p.reasoning}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {ev.parameterScores?.length > 0 && (
         <div className="print-break card">

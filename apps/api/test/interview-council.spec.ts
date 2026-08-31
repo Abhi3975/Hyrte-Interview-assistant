@@ -1,5 +1,6 @@
 import { InterviewCouncilService } from '../src/practice/council/interview-council.service';
-import { COUNCIL_AGENTS } from '../src/hyrte/council/council-agents.config';
+import { COUNCIL_AGENTS } from '../src/council-shared/council-agents.config';
+import { CouncilCoreService } from '../src/council-shared/council-core.service';
 
 /**
  * AI interviewer multi-agent panel doc — Ally's Decision Council, ported
@@ -14,7 +15,10 @@ describe('InterviewCouncilService.convene (multi-agent panel doc)', () => {
     expect(VOTERS).toEqual(['interviewLead', 'hiringManager', 'functionalExpert', 'futureTeammate', 'executiveFounder']);
   });
 
-  function buildService(stanceByAgentKey: Record<string, string | undefined>, cortexOverrides: { confidencePercent?: number; nextStepRecommendation?: string } = {}) {
+  function buildService(
+    stanceByAgentKey: Record<string, string | undefined>,
+    cortexOverrides: { confidencePercent?: number; nextStepRecommendation?: string; predictions?: unknown } = {},
+  ) {
     const upsertCalls: unknown[] = [];
     const prisma = {
       interviewCouncilAgentReport: { upsert: jest.fn((args) => { upsertCalls.push(args); return Promise.resolve(undefined); }) },
@@ -34,13 +38,20 @@ describe('InterviewCouncilService.convene (multi-agent panel doc)', () => {
         const agent = COUNCIL_AGENTS.find((a) => systemContent.includes(`"${a.name}"`));
         if (!agent) return Promise.resolve({});
         if (agent.key === 'decisionCortex') {
-          return Promise.resolve({ reasoning: 'synthesis', keyPoints: [], confidencePercent: cortexOverrides.confidencePercent ?? 70, nextStepRecommendation: cortexOverrides.nextStepRecommendation ?? 'proceed' });
+          return Promise.resolve({
+            reasoning: 'synthesis',
+            keyPoints: [],
+            confidencePercent: cortexOverrides.confidencePercent ?? 70,
+            nextStepRecommendation: cortexOverrides.nextStepRecommendation ?? 'proceed',
+            predictions: cortexOverrides.predictions ?? [{ dimension: 'Startup', likelihood: 'Strong (78%)', reasoning: 'Showed comfort with ambiguity.' }],
+          });
         }
         const stance = stanceByAgentKey[agent.key];
         return Promise.resolve(stance ? { stance, reasoning: 'r', keyPoints: [] } : { reasoning: 'r', keyPoints: [] });
       }),
     };
-    const service = new InterviewCouncilService(prisma as any, ai as any);
+    const core = new CouncilCoreService(ai as any);
+    const service = new InterviewCouncilService(prisma as any, core);
     return { service, prisma, upsertCalls };
   }
 
@@ -79,6 +90,48 @@ describe('InterviewCouncilService.convene (multi-agent panel doc)', () => {
     expect(result.nextStepRecommendation).toBe('targeted follow-up on ownership');
   });
 
+  // Prediction Engine parity — Decision Cortex produces the same
+  // {dimension, likelihood, reasoning}[] shape HYRTE's dedicated Prediction
+  // Engine does, as part of its own single call (see interview-council.service.ts).
+  it("derives predictions from the Decision Cortex agent's own output", async () => {
+    const stances = Object.fromEntries(VOTERS.map((k) => [k, 'HIRE']));
+    const predictions = [
+      { dimension: 'Startup (fast-moving, ambiguous)', likelihood: 'Strong (78%)', reasoning: 'Showed comfort proposing a solution with incomplete information.' },
+      { dimension: 'Enterprise (structured, process-heavy)', likelihood: 'Moderate (55%)', reasoning: 'No evidence of navigating multi-stakeholder approval processes.' },
+    ];
+    const { service } = buildService(stances, { predictions });
+    const result = await service.convene('s1', 'brief', 'transcript');
+    expect(result.predictions).toEqual(predictions);
+  });
+
+  it('caps predictions at 6 entries even if the model overproduces', async () => {
+    const stances = Object.fromEntries(VOTERS.map((k) => [k, 'HIRE']));
+    const predictions = Array.from({ length: 10 }, (_, i) => ({ dimension: `Dimension ${i}`, likelihood: 'Strong (70%)', reasoning: 'r' }));
+    const { service } = buildService(stances, { predictions });
+    const result = await service.convene('s1', 'brief', 'transcript');
+    expect(result.predictions).toHaveLength(6);
+  });
+
+  it('drops malformed prediction entries (missing dimension/likelihood) rather than persisting garbage', async () => {
+    const stances = Object.fromEntries(VOTERS.map((k) => [k, 'HIRE']));
+    const predictions = [
+      { dimension: 'Startup', likelihood: 'Strong (78%)', reasoning: 'r' },
+      { dimension: '', likelihood: 'Strong (78%)', reasoning: 'r' },
+      { dimension: 'Enterprise', reasoning: 'r' },
+    ];
+    const { service } = buildService(stances, { predictions });
+    const result = await service.convene('s1', 'brief', 'transcript');
+    expect(result.predictions).toHaveLength(1);
+    expect(result.predictions[0].dimension).toBe('Startup');
+  });
+
+  it('no predictions from Decision Cortex -> empty array, never throws or returns undefined', async () => {
+    const stances = Object.fromEntries(VOTERS.map((k) => [k, 'HIRE']));
+    const { service } = buildService(stances, { predictions: [] });
+    const result = await service.convene('s1', 'brief', 'transcript');
+    expect(result.predictions).toEqual([]);
+  });
+
   it('clamps an out-of-range confidencePercent into 0-100', async () => {
     const stances = Object.fromEntries(VOTERS.map((k) => [k, 'HIRE']));
     const { service } = buildService(stances, { confidencePercent: 150 });
@@ -100,7 +153,8 @@ describe('InterviewCouncilService.convene (multi-agent panel doc)', () => {
         return Promise.resolve({ stance: 'HIRE', reasoning: 'r', keyPoints: [] });
       }),
     };
-    const service = new InterviewCouncilService(prisma as any, ai as any);
+    const core = new CouncilCoreService(ai as any);
+    const service = new InterviewCouncilService(prisma as any, core);
     await expect(service.convene('s1', 'brief', 'transcript')).resolves.toBeDefined();
     // Every agent (including the one whose call rejected) still gets a persisted row.
     expect(upsertCalls.length).toBe(COUNCIL_AGENTS.length);

@@ -621,6 +621,14 @@ model Evaluation {
   // DecisionCouncilService.convene). Nullable — absent until the council runs.
   confidencePercent      Int?
   nextStepRecommendation String?
+  // Prediction Engine parity — HYRTE's Decision Cortex consumes a dedicated
+  // 2-LLM-call Prediction Engine (ReportIntelligenceService) that needs
+  // inputs Ally genuinely doesn't have (a Decision Graph accumulated over a
+  // simulated workday, company culture weights). Rather than fake those,
+  // Ally's Decision Cortex agent produces this same shape directly as part
+  // of its own single call (see interview-council.service.ts) — real parity
+  // in output, not a copied subsystem with fabricated inputs.
+  predictions Json @default("[]") // [{ dimension, likelihood, reasoning }]
 
   @@index([recommendation])
 }

@@ -6,9 +6,10 @@ import { QuestionsModule } from '../questions/questions.module';
 import { EvaluationModule } from '../evaluation/evaluation.module';
 import { RecordingModule } from '../recording/recording.module';
 import { InterviewCouncilService } from './council/interview-council.service';
+import { CouncilSharedModule } from '../council-shared/council-shared.module';
 
 @Module({
-  imports: [QuestionsModule, EvaluationModule, RecordingModule],
+  imports: [QuestionsModule, EvaluationModule, RecordingModule, CouncilSharedModule],
   controllers: [PracticeController],
   providers: [PracticeService, PistonClient, InterviewCouncilService],
 })
