@@ -665,6 +665,32 @@ function InterviewRoomInner() {
   }, [muted, speakBrowser]);
 
   /**
+   * Barge-in — lets the candidate interrupt Ally mid-sentence instead of
+   * always waiting for her to finish. Deliberately does NOT start a second,
+   * separate SpeechRecognition/mic capture while she's talking (that would
+   * reopen the exact echo bug the mic-only-on-candidate's-turn design above
+   * was built to fix). Instead it reuses the RMS analyser in start()'s
+   * meter() loop — the same continuous audio-level monitor already proven
+   * safe as the secondVoice proctoring signal, on the same getUserMedia
+   * stream (browser default echoCancellation applies to it) — as the
+   * trigger. When it detects sustained real speech while voiceState is
+   * 'speaking', it calls this to cut Ally off and flip to 'listening',
+   * which the existing mic-gating effect then picks up on its own and
+   * starts SpeechRecognition exactly as it would at the natural end of her
+   * turn. Not foolproof — this environment has no way to test real acoustic
+   * echo — but it inherits whatever real-world reliability that existing
+   * signal already has, rather than an untested new capture path.
+   */
+  const triggerBargeIn = useCallback(() => {
+    if (audioRef.current) { try { audioRef.current.pause(); audioRef.current.currentTime = 0; } catch {} audioRef.current = null; }
+    if (backchannelAudioRef.current) { try { backchannelAudioRef.current.pause(); } catch {} backchannelAudioRef.current = null; }
+    try { window.speechSynthesis?.cancel(); } catch {}
+    speakTokenRef.current++; // supersede any in-flight speak() so it can't also start playback once its network call resolves
+    lastSpeechAtRef.current = Date.now();
+    setVoiceState('listening');
+  }, []);
+
+  /**
    * Fires immediately once the candidate's turn is submitted, before the
    * real (slower) interviewer reply comes back — a short "mm-hmm"/"I see"
    * clip so the candidate hears the interviewer is actually there during the
@@ -1081,13 +1107,22 @@ function InterviewRoomInner() {
         const ctx: AudioContext = new Ctx(); audioCtxRef.current = ctx;
         const src = ctx.createMediaStreamSource(stream); const analyser = ctx.createAnalyser();
         analyser.fftSize = 512; src.connect(analyser);
-        const buf = new Uint8Array(analyser.frequencyBinCount); let loud = 0; let ambientHigh = 0;
+        const buf = new Uint8Array(analyser.frequencyBinCount); let loud = 0; let ambientHigh = 0; let bargeIn = 0;
         const meter = () => {
           if (endedRef.current) return;
           analyser.getByteTimeDomainData(buf);
           let sum = 0; for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v; }
           const rms = Math.sqrt(sum / buf.length);
-          if (voiceStateRef.current === 'speaking' && rms > 0.14) { loud++; if (loud > 25) { bumpFlag('secondVoice', 6000); loud = 0; } } else loud = Math.max(0, loud - 1);
+          if (voiceStateRef.current === 'speaking' && rms > 0.14) {
+            // Barge-in fires on a much shorter sustained-loud run than
+            // secondVoice's flag threshold below, so by the time secondVoice
+            // would trigger, voiceState has already flipped to 'listening'
+            // and its guard no longer holds — a genuine interruption never
+            // also earns a false secondVoice ding.
+            bargeIn++;
+            if (bargeIn > 6 && micOnRef.current) { triggerBargeIn(); bargeIn = 0; loud = 0; }
+            else { loud++; if (loud > 25) { bumpFlag('secondVoice', 6000); loud = 0; } }
+          } else { loud = Math.max(0, loud - 1); bargeIn = 0; }
           // P3 — background noise: a lower, longer-SUSTAINED threshold than
           // secondVoice's short loud burst — a fan, traffic, or room chatter
           // during the candidate's own turn, not a discrete second speaker.
