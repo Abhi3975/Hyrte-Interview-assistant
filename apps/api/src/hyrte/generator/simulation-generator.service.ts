@@ -224,8 +224,21 @@ export class HyrteSimulationGeneratorService {
     // Real, deterministic per-industry bias — a guarantee, not a prompt hope.
     const companyState = applyIndustryBias(sanitizeCompanyState(companyOrg.companyState), dto.industry);
     const missionBrief = sanitizeMissionBrief(companyOrg.missionBrief);
+    // Live-caught bug: the prompt's own JSON template puts baselineChallenge
+    // as a top-level sibling of missionBrief, but the model has been
+    // observed nesting it INSIDE missionBrief instead — a real
+    // instruction-following slip, same class of unreliability this codebase
+    // already works around elsewhere (see PracticeService's deterministic
+    // closing lines / paraphraseCallback). Reading the top-level field
+    // silently, ALWAYS discarded a real, JD-grounded scenario+options+
+    // warmupQuestions and substituted the hardcoded generic fallback +
+    // all-fallback warmup questions — for every session, not an edge case.
+    // Accept either shape rather than betting on the model following the
+    // template exactly.
+    const rawBaselineChallenge =
+      companyOrg.baselineChallenge ?? (companyOrg.missionBrief as { baselineChallenge?: unknown } | undefined)?.baselineChallenge;
     const baselineChallenge = sanitizeBaselineChallenge(
-      companyOrg.baselineChallenge,
+      rawBaselineChallenge,
       WARMUP_COUNT_BY_DIFFICULTY[dto.difficulty] ?? WARMUP_COUNT_BY_DIFFICULTY.MEDIUM,
     );
     // Never touches missionBrief — see distributeHiddenRisks below for where this actually lands.

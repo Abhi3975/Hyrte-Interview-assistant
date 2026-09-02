@@ -64,6 +64,39 @@ describe('generateAmbientInbox / generateAmbientSlack', () => {
     const distinctSubjects = new Set(inbox.map((m) => m.subject));
     expect(distinctSubjects.size).toBeGreaterThan(3);
   });
+
+  // Live-caught bug: two DIFFERENT roster members could end up with
+  // byte-for-byte identical filler text (e.g. Mark Johnson and Julia Lee
+  // both sending "Hey — just flagging that the item we discussed got
+  // bumped to next sprint...", verbatim, in the same session) — the naive
+  // index-based template pick had no idea two different people had already
+  // "said" the same static line. Two different named people appearing to
+  // send the exact same email at the exact same moment reads as obviously
+  // fake, not "a real company's routine noise."
+  it('never sends two DIFFERENT senders byte-identical filler text in one batch', () => {
+    const roster: RosterEntry[] = [
+      { key: 'a', name: 'Mark Johnson', role: 'Product Owner', department: 'Product' },
+      { key: 'b', name: 'Julia Lee', role: 'Operations Manager', department: 'Operations' },
+      { key: 'c', name: 'Aaron Smith', role: 'Senior Product Designer', department: 'Product' },
+      { key: 'd', name: 'Laura Garcia', role: 'Engineering Team Lead', department: 'Engineering' },
+      { key: 'e', name: 'Sam Patel', role: 'Sales Lead', department: 'Sales' },
+    ];
+    const seenTextToSender = new Map<string, string>();
+    const inbox = generateAmbientInbox(roster, 'CatalystFlow', 16);
+    for (const m of inbox) {
+      const key = `${m.subject}::${m.body}`;
+      const priorSender = seenTextToSender.get(key);
+      expect(priorSender === undefined || priorSender === m.fromKey).toBe(true);
+      seenTextToSender.set(key, m.fromKey);
+    }
+    const seenSlackToSender = new Map<string, string>();
+    const slack = generateAmbientSlack(roster, 10);
+    for (const m of slack) {
+      const priorSender = seenSlackToSender.get(m.body);
+      expect(priorSender === undefined || priorSender === m.fromKey).toBe(true);
+      seenSlackToSender.set(m.body, m.fromKey);
+    }
+  });
 });
 
 describe('ensureUpcomingMeeting (refinements doc §20 — "a meeting starting in 20 minutes")', () => {

@@ -79,16 +79,42 @@ function pick<T>(arr: T[], i: number): T {
   return arr[i % arr.length];
 }
 
+/**
+ * Live-caught bug: `pick(pool, i)` chose purely by loop index, independent
+ * of which sender the item was attributed to. Two of the four
+ * personalInboxTemplates entries (and most slackTemplates entries) have no
+ * name/dept interpolation at all, so whenever two DIFFERENT senders' index
+ * cycles landed on the same template slot, they sent byte-for-byte
+ * identical emails/messages — two named people appearing to say the exact
+ * same thing at the exact same moment, which reads as obviously fake rather
+ * than "real company noise." This scans forward from the natural index for
+ * the first template whose rendered (subject+body) text hasn't already gone
+ * out to someone else in this same generation batch; only once the whole
+ * pool is exhausted does a genuine repeat become unavoidable.
+ */
+function pickUnused<T extends { subject: string; body: string }>(pool: T[], startIdx: number, used: Set<string>): T {
+  for (let offset = 0; offset < pool.length; offset++) {
+    const candidate = pool[(startIdx + offset) % pool.length];
+    const key = `${candidate.subject}::${candidate.body}`;
+    if (!used.has(key)) {
+      used.add(key);
+      return candidate;
+    }
+  }
+  return pool[startIdx % pool.length];
+}
+
 export function generateAmbientInbox(roster: RosterEntry[], companyName: string, count: number): FixtureInboxMessage[] {
   if (count <= 0 || roster.length === 0) return [];
   const companyItems = inboxTemplates(companyName);
   const out: FixtureInboxMessage[] = [];
+  const used = new Set<string>();
   for (let i = 0; i < count; i++) {
     // Roughly a third company-wide/admin noise, the rest routine personal FYIs from real roster members.
     const useCompanyWide = i % 3 === 0;
     const sender = pick(roster, i);
     const dept = sender.department ?? sender.role;
-    const template = useCompanyWide ? pick(companyItems, i) : pick(personalInboxTemplates(sender.name, dept), i);
+    const template = pickUnused(useCompanyWide ? companyItems : personalInboxTemplates(sender.name, dept), i, used);
     out.push({
       fromKey: useCompanyWide ? roster[0].key : sender.key,
       subject: template.subject,
@@ -104,10 +130,12 @@ export function generateAmbientSlack(roster: RosterEntry[], count: number): Fixt
   if (count <= 0 || roster.length === 0) return [];
   const channels = ['#general', '#product', '#engineering', '#random'];
   const out: FixtureSlackMessage[] = [];
+  const used = new Set<string>();
   for (let i = 0; i < count; i++) {
     const sender = pick(roster, i);
     const dept = sender.department ?? sender.role;
-    const body = pick(slackTemplates(sender.name, dept), i);
+    const pool = slackTemplates(sender.name, dept).map((body) => ({ subject: '', body }));
+    const { body } = pickUnused(pool, i, used);
     out.push({
       channel: pick(channels, i),
       fromKey: sender.key,
