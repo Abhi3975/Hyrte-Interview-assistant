@@ -7,6 +7,7 @@ import { applyIndustryBias, industryGroundingNote } from './industry-templates';
 import { resolveSignatureArtifact } from './signature-artifacts';
 import { enforceWarmupVariety, pickAxes } from './question-variety';
 import { ambientInboxTargetCount, ambientSlackTargetCount, ensureUpcomingMeeting, generateAmbientInbox, generateAmbientSlack } from './ambient-noise';
+import { resolveCompanyPersona, personaDirective, lockedDocTarget, type CompanyPersona } from './company-persona';
 import {
   FixtureCalendarEvent,
   FixtureDepartment,
@@ -223,6 +224,10 @@ export class HyrteSimulationGeneratorService {
     // vocabulary/stakeholder-archetypes/typical-crises), not just the
     // industry's name dropped into a sentence.
     const industryNote = industryGroundingNote(dto.industry);
+    // The company type stops being an adjective in a sentence and becomes a
+    // set of properties the world has to actually have — see company-persona.ts.
+    const persona = resolveCompanyPersona(dto.companyType);
+    const personaNote = personaDirective(persona);
 
     // Step 2 — Company + Organization + Company State.
     const companyOrg = await this.step<CompanyOrgResult>(
@@ -234,7 +239,7 @@ export class HyrteSimulationGeneratorService {
         `starting company-state numbers are and how many things are simultaneously on fire. Company ` +
         `culture: ${dto.culture} — reflect this only in tone/flavor, not the numeric state. Invent a ` +
         `unique fictional company name — do not reuse common example names like Acme, Nimbus, or ` +
-        `TechCorp. Variety seed: ${nonce}.${varietyNote}${groundingNote}${industryNote}`,
+        `TechCorp. Variety seed: ${nonce}.${varietyNote}${groundingNote}${industryNote}${personaNote}`,
       () => ({
         companyName: 'Unnamed Co',
         companyState: {},
@@ -322,7 +327,7 @@ export class HyrteSimulationGeneratorService {
         'knowledge',
         artifacts,
         KNOWLEDGE_SYSTEM,
-        `Company: ${companyName}. Roster: ${JSON.stringify(roster)}. Role: ${dto.role} (${dto.industry}).${industryNote}`,
+        `Company: ${companyName}. Roster: ${JSON.stringify(roster)}. Role: ${dto.role} (${dto.industry}).${industryNote}${personaNote}`,
         () => ({ knowledgeDocs: [] }),
       ),
       this.step<WorkplaceAssetsResult>(
@@ -349,7 +354,7 @@ export class HyrteSimulationGeneratorService {
         () => ({ title: '', description: '' }),
       ),
     ]);
-    const knowledgeDocs = sanitizeKnowledgeDocs(knowledgeRaw.knowledgeDocs);
+    const knowledgeDocs = sanitizeKnowledgeDocs(knowledgeRaw.knowledgeDocs, persona);
     const signatureArtifact = sanitizeSignatureArtifact(signatureArtifactRaw, artifactTemplate.label, companyName);
     const validKeys = new Set(stakeholders.map((s) => s.key));
     const resolveKey = (k: unknown) => (typeof k === 'string' && validKeys.has(k) ? k : roster[Math.floor(Math.random() * roster.length)].key);
@@ -828,7 +833,7 @@ const VALID_UNLOCK_TRIGGER = /^(meeting:any|task:any|stakeholder:[\w-]+)$/;
 /** Never lock a candidate out of orienting themselves — these stay visible whatever the model says. */
 const NEVER_LOCKED_CATEGORIES = new Set(['wiki', 'roadmap', 'financial_report']);
 
-function sanitizeKnowledgeDocs(raw: unknown): FixtureKnowledgeDoc[] {
+function sanitizeKnowledgeDocs(raw: unknown, persona: CompanyPersona): FixtureKnowledgeDoc[] {
   const docs = asRecords(raw)
     .filter((k) => typeof k.title === 'string' && typeof k.body === 'string')
     .slice(0, CAPS.knowledgeDocs)
@@ -847,18 +852,37 @@ function sanitizeKnowledgeDocs(raw: unknown): FixtureKnowledgeDoc[] {
       };
     });
 
-  // Guarantee at least a couple of unlocked documents even if the model locked
-  // almost everything — a candidate who opens the KB and finds nothing readable
-  // has been given a puzzle, not a workplace.
-  const unlockedCount = docs.filter((d) => !d.locked).length;
-  if (unlockedCount < 2) {
-    for (const d of docs) {
-      if (docs.filter((x) => !x.locked).length >= 2) break;
-      if (d.locked) {
-        d.locked = false;
-        delete d.unlockHint;
-        delete d.unlockTrigger;
-      }
+  // How much of this company is written down is a property of the company, not
+  // a number in a prompt: at a startup the answer usually lives in someone's
+  // head, in government it is all on the record. The prompt asks for roughly
+  // the right shape; this guarantees it, and also guarantees a candidate can
+  // always orient themselves — a KB with nothing readable is a puzzle, not a
+  // workplace.
+  const target = lockedDocTarget(persona, docs.length);
+  const unlock = (d: FixtureKnowledgeDoc) => {
+    d.locked = false;
+    delete d.unlockHint;
+    delete d.unlockTrigger;
+  };
+
+  let lockedNow = docs.filter((d) => d.locked).length;
+  for (const d of docs) {
+    if (lockedNow <= target) break;
+    if (d.locked) {
+      unlock(d);
+      lockedNow--;
+    }
+  }
+  // Locking more than the model chose is only safe where a real unlock route
+  // exists, so this promotes documents that already carry a valid trigger
+  // rather than inventing one — the hint and the trigger must agree, and a
+  // hint invented here could not.
+  for (const d of docs) {
+    if (lockedNow >= target) break;
+    const trigger = typeof d.unlockTrigger === 'string' ? d.unlockTrigger : '';
+    if (!d.locked && !NEVER_LOCKED_CATEGORIES.has(d.category.toLowerCase()) && VALID_UNLOCK_TRIGGER.test(trigger)) {
+      d.locked = true;
+      lockedNow++;
     }
   }
   return docs;

@@ -6,7 +6,10 @@ import { api, ApiError } from '@/lib/api';
 import { INDUSTRY_CATEGORIES, INDUSTRY_VERTICAL_LABELS } from '@/lib/hyrte-industries';
 
 const EXPERIENCE_LEVELS = ['Intern', 'Junior', 'Mid', 'Senior', 'Lead/Manager'];
-const COMPANY_TYPES = ['Startup', 'SME', 'Enterprise', 'Consulting', 'Government'];
+// Kept in step with generator/company-persona.ts, which resolves these (and
+// any free text a recruiter types) into the properties the world is actually
+// built from — approval depth, documentation culture, political load.
+const COMPANY_TYPES = ['Startup', 'Scale-up', 'SME', 'Enterprise', 'Consulting', 'Agency', 'Government', 'Non-profit', 'Research'];
 const DIFFICULTIES = ['EASY', 'MEDIUM', 'HARD', 'EXPERT'];
 
 interface CapabilityRequirement {

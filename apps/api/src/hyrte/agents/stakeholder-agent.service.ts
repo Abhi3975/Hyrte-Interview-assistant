@@ -8,6 +8,7 @@ import { DecisionGraphService } from '../dig/decision-graph.service';
 import { inferContextFromRole } from '../dig/behavior-context.util';
 import { getVisibleStateKeys } from '../dig/info-scope.util';
 import { OMIT_HIDDEN_INTENTION, toCandidateStakeholder } from '../dig/hidden-intention.util';
+import { personaStakeholderDirective, resolveCompanyPersona } from '../generator/company-persona';
 
 /** §4.17 Decision Cost — a relationship shift this negative reframes the exchange as conflict, not routine peer/manager chat. */
 const CONFLICT_TRUST_SHIFT_THRESHOLD = -5;
@@ -92,7 +93,7 @@ export class HyrteStakeholderAgentService {
 
       const result = await this.ai.completeJson<AgentJsonResponse>(
         [
-          { role: 'system', content: this.buildSystemPrompt(stakeholder, companyState, session.companyName, stakeholder.hiddenIntention, stakeholder.privateKnowledge) },
+          { role: 'system', content: this.buildSystemPrompt(stakeholder, companyState, session.companyName, stakeholder.hiddenIntention, stakeholder.privateKnowledge, session.companyType) },
           {
             role: 'user',
             content:
@@ -190,7 +191,7 @@ export class HyrteStakeholderAgentService {
 
       const result = await this.ai.completeJson<AgentJsonResponse>(
         [
-          { role: 'system', content: this.buildSystemPrompt(reactor, companyState, session.companyName, reactor.hiddenIntention, reactor.privateKnowledge) },
+          { role: 'system', content: this.buildSystemPrompt(reactor, companyState, session.companyName, reactor.hiddenIntention, reactor.privateKnowledge, session.companyType) },
           {
             role: 'user',
             content:
@@ -253,6 +254,7 @@ export class HyrteStakeholderAgentService {
     companyName: string,
     hiddenIntention: string | null,
     privateKnowledge: string[],
+    companyType?: string | null,
   ): string {
     const personality = JSON.stringify(stakeholder.personality ?? {});
     // §4.13 Hidden Information System / §4.12 Layer 2 — scoped: each
@@ -283,6 +285,11 @@ export class HyrteStakeholderAgentService {
       `in a workplace simulation. Your traits/goals: ${personality}.${hiddenIntentionClause}${privateKnowledgeClause} ` +
       `Your current emotional state (0-100): stress ${stakeholder.stress}, urgency ${stakeholder.urgency}, ` +
       `patience ${stakeholder.patience}, motivation ${stakeholder.motivation}. ` +
+      // The company persona has to survive into behaviour, or it is just a
+      // word in the world-generation prompt: who you need sign-off from,
+      // how much of your real reasoning you say out loud, and whether you
+      // can point at a document — see generator/company-persona.ts.
+      `${personaStakeholderDirective(resolveCompanyPersona(companyType))} ` +
       `Your relationship with this candidate (0-100): trust ${stakeholder.trust}, respect ${stakeholder.respect}, ` +
       `cooperation ${stakeholder.cooperation}, influence ${stakeholder.influence}. ` +
       `Company metrics YOU can see from your role (others may know different things you don't — if asked ` +
