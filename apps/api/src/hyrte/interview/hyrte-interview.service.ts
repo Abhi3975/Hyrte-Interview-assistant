@@ -7,6 +7,7 @@ import { getBaseTone, getCompanyVoice, matchOffScript, requestsBossModeExit } fr
 import { isRepetitive } from './repetition-detector';
 import { DecisionCouncilService } from '../council/decision-council.service';
 import { ReportIntelligenceService } from '../evaluation/report-intelligence.service';
+import { LiveCortexService } from '../../interview-intelligence/live-cortex.service';
 
 const BASELINE = 50; // every stakeholder relationship field starts here (see HyrteStakeholder defaults)
 const MAX_EVIDENCE_IN_BRIEF = 20;
@@ -71,6 +72,12 @@ interface TurnResponse {
   needsInvestigation?: boolean;
   /** §3.1 probe_candidates — concrete follow-up questions that would verify the claim (e.g. "What was the baseline?"), only when needsInvestigation is true. */
   probeCandidates?: string[];
+  /**
+   * Live committee steering — the panel's per-competency read on the answer
+   * just given. Rides along on this call rather than a second round trip, so
+   * the committee costs no extra latency. See interview-intelligence/.
+   */
+  evidenceAssessment?: { competencyKey?: unknown; strength?: unknown; note?: unknown }[];
 }
 
 interface ReportResponse {
@@ -165,6 +172,7 @@ export class HyrteInterviewService {
     private readonly evidence: EvidenceGraphService,
     private readonly council: DecisionCouncilService,
     private readonly reportIntelligence: ReportIntelligenceService,
+    private readonly cortex: LiveCortexService,
   ) {}
 
   private async assertOwnership(sessionId: string, candidateId: string) {
@@ -315,6 +323,10 @@ export class HyrteInterviewService {
 
   async startInterview(sessionId: string, candidateId: string, bossMode = false) {
     const session = await this.assertOwnership(sessionId, candidateId);
+    // Live committee steering — builds the hidden per-competency state and
+    // seeds it from the Investigation Plan, so the interview does not spend
+    // questions re-establishing what the simulation already demonstrated.
+    await this.cortex.ensureStarted('hyrte', sessionId, session.role).catch((e) => this.logger.warn(e));
     const { text: brief } = await this.buildEvidenceBrief(sessionId);
     const tone = getBaseTone(session.difficulty);
     const continuity = await this.getPracticeContinuityContext(candidateId, sessionId, session.sessionType);
@@ -437,6 +449,14 @@ export class HyrteInterviewService {
         ? "Boss Level's jab budget is used up for this session — stay calm, supportive, and constructive for the rest."
         : '';
 
+    // Live committee steering. The panel has been silently tracking which
+    // competencies are and are not yet evidenced; this is where it tells the
+    // Interview Lead what the next question needs to achieve. `turnsRemaining`
+    // lets it stop opening new ground it has no time to finish.
+    const liveState = await this.cortex.ensureStarted('hyrte', sessionId, session.role).catch(() => null);
+    const steering = liveState ? this.cortex.buildDirectiveBlock(liveState, targetMax - candidateTurns) : null;
+    const assessmentInstruction = liveState ? this.cortex.buildAssessmentInstruction(liveState) : '';
+
     const result = await this.ai.completeJson<TurnResponse>(
       [
         {
@@ -468,7 +488,11 @@ export class HyrteInterviewService {
             'answer — do NOT write your own closing statement or mention a report, that is handled ' +
             'separately. Return ONLY JSON: {"reply": string, "done": boolean, "contradictsEvidenceRef": ' +
             'string (optional), "contradictionNote": string (optional), "wasJab": boolean (optional), ' +
-            '"needsInvestigation": boolean (optional), "probeCandidates": string[] (optional)}.',
+            '"needsInvestigation": boolean (optional), "probeCandidates": string[] (optional), ' +
+            '"evidenceAssessment": [{"competencyKey": string, "strength": "none"|"weak"|"medium"|"strong"|' +
+            '"conflicting", "note": string}] (optional)}.' +
+            (steering?.promptBlock ?? '') +
+            assessmentInstruction,
         },
         { role: 'user', content: `${brief}\n\nConversation so far:\n${transcriptText}` },
       ],
@@ -504,6 +528,19 @@ export class HyrteInterviewService {
         : llmReply;
 
     transcript.push({ role: 'interviewer', content: reply });
+
+    // Fold the panel's read of this answer into the hidden state and pick the
+    // next objective. A cortex failure degrades the interview to "unsteered",
+    // never breaks the conversation (see LiveCortexService.recordTurn).
+    if (liveState) {
+      await this.cortex.recordTurn(
+        'hyrte',
+        sessionId,
+        result.evidenceAssessment,
+        steering?.directive.targetCompetencyKey ?? null,
+        targetMax - candidateTurns,
+      );
+    }
 
     // §5.2 — the candidate's statement becomes graph evidence, and a
     // confirmed contradiction becomes a real edge (which also recomputes

@@ -5,6 +5,7 @@ import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 
 import { loadConfig } from './config/configuration';
 import { PrismaModule } from './prisma/prisma.module';
+import { InterviewIntelligenceModule } from './interview-intelligence/interview-intelligence.module';
 import { RedisModule } from './redis/redis.module';
 import { AuditModule } from './common/audit/audit.module';
 import { AIModule } from './ai/ai.module';
@@ -39,6 +40,8 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     AuditModule,
     AIModule,
     NotificationsModule,
+    // Live committee steering — @Global, shared by both interview surfaces.
+    InterviewIntelligenceModule,
 
     // Feature modules
     AuthModule,

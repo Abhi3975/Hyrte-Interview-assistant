@@ -7,6 +7,7 @@ import { AIService } from '../ai/ai.service';
 import { PistonClient } from './piston.client';
 import { RecordingService } from '../recording/recording.service';
 import { InterviewCouncilService } from './council/interview-council.service';
+import { LiveCortexService } from '../interview-intelligence/live-cortex.service';
 
 /** Persona + protocol for the conversational AI interviewer. */
 const INTERVIEWER_SYSTEM = `# ROLE
@@ -135,6 +136,7 @@ export class PracticeService {
     private readonly piston: PistonClient,
     private readonly recording: RecordingService,
     private readonly council: InterviewCouncilService,
+    private readonly cortex: LiveCortexService,
   ) {}
 
   /**
@@ -306,6 +308,8 @@ export class PracticeService {
     currentRound?: { type: string; label: string };
     nextRoundLabel?: string;
     forceRoundAdvance?: boolean;
+    /** Live committee steering — see LiveCortexService. Absent means the room runs unsteered. */
+    sessionId?: string;
   }, candidateId?: string): Promise<{ text: string; hintLevel?: number; mood: InterviewerMood }> {
     const [simulation, evidenceGraph] = candidateId
       ? await Promise.all([this.getSimulationContext(candidateId), this.buildEvidenceGraphContext(candidateId)])
@@ -325,6 +329,16 @@ export class PracticeService {
         : input.mode === 'coding'
           ? '\n\nINTERVIEW TYPE: CODING FOCUSED. Center the interview on the live coding challenge and their code/approach; keep conceptual questions minimal.'
           : '';
+    // Live committee steering — the silent panel tracks which competencies
+    // this role actually needs evidenced and tells the interviewer what the
+    // next question should settle. Never on the reverse-interview turn (the
+    // candidate is asking, not answering) or the closing turn.
+    const steerable = !!input.sessionId && !input.end && !input.reverseInterviewQuestion;
+    const liveState = steerable ? await this.cortex.ensureStarted('interview', input.sessionId!, input.jobRole).catch(() => null) : null;
+    const candidateTurnsSoFar = input.transcript.filter((t) => t.role === 'candidate').length;
+    const steering = liveState ? this.cortex.buildDirectiveBlock(liveState, (input.count ?? 5) - candidateTurnsSoFar) : null;
+    const assessmentInstruction = liveState ? this.cortex.buildAssessmentInstruction(liveState) : '';
+
     const persona = PERSONALITIES[input.personality ?? 'professional'] ?? PERSONALITIES.professional;
     const resume = input.resumeContext
       ? `\n\nCANDIDATE RESUME CONTEXT (ask some questions grounded in their REAL projects/skills; verify their claims): ${input.resumeContext}`
@@ -371,7 +385,13 @@ export class PracticeService {
           'aloud: "warm" for genuine encouragement/confidence-building or a warm closing, "curious" for a real ' +
           'follow-up probe or when genuinely interested in more detail, "firm" for pushing on rigor/edge-cases ' +
           'or redirecting an off-scope request, "neutral" otherwise — pick the one that actually matches this ' +
-          'reply, not a default}.',
+          'reply, not a default}' +
+          (liveState
+            ? ', "evidenceAssessment": [{"competencyKey": string, "strength": "none"|"weak"|"medium"|"strong"|"conflicting", "note": string}] (optional)'
+            : '') +
+          '.' +
+          (steering?.promptBlock ?? '') +
+          assessmentInstruction,
       },
     ];
     if (input.transcript.length === 0) {
@@ -387,7 +407,22 @@ export class PracticeService {
         messages.push({ role: 'user', content: `(Please end the interview now.${behavior})` });
       }
     }
-    const res = await this.ai.completeJson<{ reply?: string; hintLevel?: number; mood?: string }>(messages, { temperature: 0.6, maxTokens: input.end ? 300 : 600 });
+    const res = await this.ai.completeJson<{
+      reply?: string;
+      hintLevel?: number;
+      mood?: string;
+      evidenceAssessment?: { competencyKey?: unknown; strength?: unknown; note?: unknown }[];
+    }>(messages, { temperature: 0.6, maxTokens: input.end ? 300 : 600 });
+
+    if (liveState && input.sessionId) {
+      await this.cortex.recordTurn(
+        'interview',
+        input.sessionId,
+        res.evidenceAssessment,
+        steering?.directive.targetCompetencyKey ?? null,
+        (input.count ?? 5) - candidateTurnsSoFar,
+      );
+    }
     const replyRaw = (res.reply ?? '').trim() || "Thanks for walking me through that.";
     const hintLevel = typeof res.hintLevel === 'number' && res.hintLevel >= 1 && res.hintLevel <= 5 ? Math.round(res.hintLevel) : undefined;
     const mood: InterviewerMood = VALID_MOODS.has(res.mood as InterviewerMood) ? (res.mood as InterviewerMood) : 'neutral';

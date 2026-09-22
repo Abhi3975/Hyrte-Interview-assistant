@@ -974,6 +974,9 @@ function InterviewRoomInner() {
         currentRound: activeRoundSequence[idx] ? { type: activeRoundSequence[idx].type, label: ROUND_LABELS[activeRoundSequence[idx].type] } : undefined,
         nextRoundLabel: nextRound ? ROUND_LABELS[nextRound.type] : undefined,
         forceRoundAdvance: shouldForceRoundAdvance,
+        // Live committee steering — lets the silent panel keep per-competency
+        // state across turns (this endpoint is otherwise stateless).
+        sessionId: sessionIdRef.current ?? undefined,
       });
       if (typeof res.hintLevel === 'number') behaviorRef.current.hints++;
       if (shouldForceRoundAdvance) {

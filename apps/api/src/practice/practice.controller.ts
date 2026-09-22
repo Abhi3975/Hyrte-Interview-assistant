@@ -94,6 +94,11 @@ class InterviewTurnDto {
   @IsOptional() forceRoundAdvance?: boolean;
   // Multi-agent panel doc — reverse interview.
   @IsOptional() reverseInterviewQuestion?: boolean;
+  // Live committee steering — the InterviewSession this turn belongs to, so
+  // the silent panel's per-competency state persists across turns. Optional:
+  // the room works unsteered without it (session creation can fail), it just
+  // loses the committee.
+  @IsOptional() @IsString() sessionId?: string;
 }
 
 class TestCaseDto {

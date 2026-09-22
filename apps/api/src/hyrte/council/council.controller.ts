@@ -6,6 +6,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { DecisionCortexService } from './decision-cortex.service';
 import { AuditLogService } from '../dig/audit-log.service';
+import { LiveCortexService } from '../../interview-intelligence/live-cortex.service';
 import { AskDecisionCortexDto } from '../dto/hyrte.dto';
 
 /**
@@ -33,6 +34,7 @@ export class CouncilController {
     private readonly prisma: PrismaService,
     private readonly cortex: DecisionCortexService,
     private readonly auditLog: AuditLogService,
+    private readonly liveCortex: LiveCortexService,
   ) {}
 
   private async assertConvened(id: string) {
@@ -65,6 +67,19 @@ export class CouncilController {
   }
 
   /** §8 Hardening — bias-auditor coverage review: did every agent actually run for this session? */
+  /**
+   * "Live multi agent Interviewer panel" doc — "the panel should observe
+   * silently… then, after the interview, the recruiter gets access to the full
+   * deliberation." This is that deliberation: the per-competency evidence
+   * state the committee maintained live, and the background exchange that
+   * actually drove each redirection. Recruiter-only, like the rest of this
+   * controller — the candidate never sees any of it.
+   */
+  @Get('live-deliberation')
+  async liveDeliberation(@Param('id') id: string) {
+    return this.liveCortex.getDeliberation('hyrte', id);
+  }
+
   @Get('audit')
   async audit(@Param('id') id: string) {
     await this.assertConvened(id);
