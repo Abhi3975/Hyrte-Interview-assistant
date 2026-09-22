@@ -7,6 +7,7 @@ import {
   benchmarkForRole,
   levelForScore,
 } from '../src/evaluation/evaluation.service';
+import { buildProctoringContext } from '../src/evaluation/proctoring-signals';
 
 describe('P5 — parameter taxonomy is fixed in code, not invented per call', () => {
   it('has exactly 84 parameters across the 7 documented groups', () => {
@@ -77,11 +78,20 @@ describe('benchmarkForRole (deterministic target bar, not fabricated population 
 });
 
 describe('EvaluationService.normalize (repairs malformed/partial LLM output, never trusts it blindly)', () => {
-  // normalize() has no dependency on prisma/ai — safe to call directly against a bare instance.
-  const service = new EvaluationService({} as never, {} as never) as unknown as {
-    normalize: (core: any, params: any, context: { jobRole: string; category: string; difficulty: string }, items: { prompt: string; occurredAt?: string }[]) => any;
+  // normalize() has no dependency on prisma/ai/riskEngine — safe to call directly against a bare instance.
+  const service = new EvaluationService({} as never, {} as never, {} as never) as unknown as {
+    normalize: (
+      core: any,
+      params: any,
+      context: { jobRole: string; category: string; difficulty: string },
+      items: { prompt: string; occurredAt?: string }[],
+      proctoring: ReturnType<typeof buildProctoringContext>,
+    ) => any;
   };
   const context = { jobRole: 'Backend Engineer', category: 'ENGINEERING', difficulty: 'MEDIUM' };
+  // These cases are about repairing malformed model output, not about
+  // proctoring — the no-proctoring context is the honest default.
+  const noProctoring = buildProctoringContext([], null);
 
   it('clamps out-of-range scores and defaults an invalid recommendation to NO_HIRE', () => {
     const result = service.normalize(
@@ -89,6 +99,7 @@ describe('EvaluationService.normalize (repairs malformed/partial LLM output, nev
       { scores: {} },
       context,
       [],
+      noProctoring,
     );
     expect(result.overallScore).toBe(100);
     expect(result.competencies.communication).toBe(0);
@@ -101,6 +112,7 @@ describe('EvaluationService.normalize (repairs malformed/partial LLM output, nev
       { scores: {} },
       context,
       [],
+      noProctoring,
     );
     expect(result.parameterScores).toHaveLength(84);
     // every entry still carries a non-empty interpretation, per the "never a bare number" rule
@@ -113,6 +125,7 @@ describe('EvaluationService.normalize (repairs malformed/partial LLM output, nev
       { scores: {} },
       context,
       [],
+      noProctoring,
     );
     expect(result.skillCards).toHaveLength(6);
     const comm = result.skillCards.find((c: any) => c.key === 'communication');
@@ -129,6 +142,7 @@ describe('EvaluationService.normalize (repairs malformed/partial LLM output, nev
       { scores: {} },
       context,
       items,
+      noProctoring,
     );
     expect(result.perQuestion).toHaveLength(2);
     expect(result.perQuestion[0].score).toBe(5);
@@ -143,6 +157,7 @@ describe('EvaluationService.normalize (repairs malformed/partial LLM output, nev
       { scores: {} },
       context,
       [],
+      noProctoring,
     );
     expect(result.perQuestion).toBeUndefined();
   });

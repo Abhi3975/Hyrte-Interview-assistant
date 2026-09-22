@@ -5,7 +5,16 @@ import { api, ApiError } from '@/lib/api';
 
 // ── shapes returned by GET /evaluation/sessions/:id/report and
 // GET /evaluation/shared/:token — both wrap { evaluation, session }. ──
-export interface ParameterScore { key: string; group: string; label: string; score: number; interpretation: string; weight: number }
+export interface ParameterScore {
+  key: string;
+  group: string;
+  label: string;
+  score: number;
+  interpretation: string;
+  weight: number;
+  /** False when nothing was actually observed — see evaluation/proctoring-signals.ts. Absent on reports generated before that existed. */
+  measured?: boolean;
+}
 export interface SkillCard { key: string; label: string; level: 'Weak' | 'Decent' | 'Good' | 'Strong'; instanceNote: string }
 export interface RadarAxis { axis: string; score: number; benchmark: number }
 export interface PerQuestionScore { score: number; max: number; notes: string; occurredAt?: string }
@@ -167,14 +176,22 @@ function ReportRadar({ axes }: { axes: RadarAxis[] }) {
 }
 
 function ParamBar({ p }: { p: ParameterScore }) {
+  // A parameter nothing was observed for must not look like a finding. Showing
+  // "100" next to a full green bar for a session that was never proctored
+  // reads as a clean result rather than an absent one.
+  const unmeasured = p.measured === false;
   return (
     <div className="py-1.5">
       <div className="flex items-center justify-between gap-2 text-xs">
         <span className="text-black/70 dark:text-white/70">{p.label}</span>
-        <span className="tabular-nums font-medium" style={{ color: scoreColor(p.score) }}>{p.score}</span>
+        {unmeasured ? (
+          <span className="text-black/40 dark:text-white/40">Not measured</span>
+        ) : (
+          <span className="tabular-nums font-medium" style={{ color: scoreColor(p.score) }}>{p.score}</span>
+        )}
       </div>
       <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-black/5 dark:bg-white/10">
-        <div className="h-full rounded-full" style={{ width: `${p.score}%`, background: scoreColor(p.score) }} />
+        {!unmeasured && <div className="h-full rounded-full" style={{ width: `${p.score}%`, background: scoreColor(p.score) }} />}
       </div>
       <p className="mt-0.5 text-[11px] text-black/50 dark:text-white/50">{p.interpretation}</p>
     </div>

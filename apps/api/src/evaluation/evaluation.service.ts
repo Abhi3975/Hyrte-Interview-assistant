@@ -3,6 +3,8 @@ import { Prisma, Recommendation } from '@prisma/client';
 import { randomBytes } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIService } from '../ai/ai.service';
+import { buildProctoringContext, PROCTORING_MEASURED_KEYS, type ProctoringContext } from './proctoring-signals';
+import { RiskEngine } from '../proctoring/risk-engine.service';
 
 /** Competency dimensions scored by the engine (0-100 each) — legacy shape, kept for backward compat (still read by the in-session inline result view). */
 const COMPETENCIES = [
@@ -197,6 +199,12 @@ export interface ParameterScore {
   score: number;
   interpretation: string;
   weight: number;
+  /**
+   * False when the parameter describes something that was not observed at all
+   * — today only `proctoring_risk` on a session with no proctoring. Optional,
+   * so every parameter written before this existed still reads as measured.
+   */
+  measured?: boolean;
 }
 export interface SkillCard {
   key: string;
@@ -254,6 +262,7 @@ export class EvaluationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly ai: AIService,
+    private readonly riskEngine: RiskEngine,
   ) {}
 
   /**
@@ -285,8 +294,17 @@ export class EvaluationService {
       })
       .join('\n\n');
 
+    // Multi-modal: the proctoring observations this session actually
+    // produced. A recruiter-run session has them; practice mode does not, and
+    // buildProctoringContext says so rather than letting a number be invented.
+    const proctorEvents = await this.prisma.proctorEvent.findMany({
+      where: { sessionId },
+      orderBy: { occurredAt: 'asc' },
+    });
+    const proctoring = buildProctoringContext(proctorEvents, proctorEvents.length ? this.riskEngine.compute(proctorEvents) : null);
+
     const context = { jobRole: session.interview.jobRole, category: session.interview.category, difficulty: session.interview.difficulty };
-    const evaluation = await this.buildRichEvaluation(context, transcript, items);
+    const evaluation = await this.buildRichEvaluation(context, transcript, items, proctoring);
     await this.persist(sessionId, evaluation);
     return evaluation;
   }
@@ -381,6 +399,7 @@ export class EvaluationService {
     context: { jobRole: string; category: string; difficulty: string },
     transcript: string,
     items: { prompt: string; occurredAt?: string }[],
+    proctoring: ProctoringContext = buildProctoringContext([], null),
   ): Promise<EvaluationJson> {
     const questionCount = items.length;
 
@@ -413,6 +432,10 @@ export class EvaluationService {
       "For parameters explicitly marked '(lower is better)', still score 0-100 in the SAME direction as everything else (100 = best/least risky) — you are not inverting the scale, just noting what 'good' means for that one.",
       'Parameters, by group:',
       ...PARAMETER_GROUPS.map((g) => `[${g}]: ${PARAMETER_TAXONOMY[g].map((p) => p.key).join(', ')}.`),
+      // The multi-modal half: what the camera and screen actually saw. Until
+      // now this prompt scored proctoring and coaching from the transcript
+      // alone, having never been shown a single observation.
+      proctoring.observationBlock,
       'Return ONLY JSON: {"scores": {"<parameter key>": {"score": number, "interpretation": string}, ...}} — one entry per key listed above, using the EXACT key strings given.',
     ].join(' ');
 
@@ -440,7 +463,7 @@ export class EvaluationService {
       throw err;
     }
 
-    return this.normalize(core, paramsRaw, context, items);
+    return this.normalize(core, paramsRaw, context, items, proctoring);
   }
 
   private async persist(sessionId: string, evaluation: EvaluationJson): Promise<void> {
@@ -473,6 +496,7 @@ export class EvaluationService {
     paramsRaw: ParameterResponse,
     context: { jobRole: string; category: string; difficulty: string },
     items: { prompt: string; occurredAt?: string }[],
+    proctoring: ProctoringContext,
   ): EvaluationJson {
     const clamp = (n: unknown) => Math.max(0, Math.min(100, Math.round(Number(n) || 0)));
     const competencies: Record<string, number> = {};
@@ -484,6 +508,22 @@ export class EvaluationService {
     const parameterScores: ParameterScore[] = [];
     for (const group of PARAMETER_GROUPS) {
       for (const { key, label } of PARAMETER_TAXONOMY[group]) {
+        // A measurement comes from the thing that measured it. RiskEngine
+        // already computes this deterministically, time-decayed and
+        // explainable; the model's guess at it is discarded rather than
+        // averaged in.
+        if ((PROCTORING_MEASURED_KEYS as readonly string[]).includes(key)) {
+          parameterScores.push({
+            key,
+            group,
+            label,
+            score: proctoring.proctoringScore,
+            interpretation: proctoring.interpretation,
+            weight: weights[group],
+            measured: proctoring.measured,
+          });
+          continue;
+        }
         const entry = scores[key];
         const score = clamp(entry?.score);
         const interpretation = (entry?.interpretation ?? '').toString().trim().slice(0, 240) || `${label}: ${score}/100 — no further detail returned.`;
