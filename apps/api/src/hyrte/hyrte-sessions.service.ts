@@ -565,6 +565,13 @@ export class HyrteSessionsService {
     };
   }
 
+  /** §14 — the guided walkthrough is a one-time thing; this is what makes it one-time. */
+  async completeOnboarding(id: string, candidateId: string) {
+    await this.getById(id, candidateId);
+    await this.prisma.hyrteSession.update({ where: { id }, data: { onboardingDoneAt: new Date() } });
+    return { onboardingDoneAt: new Date().toISOString() };
+  }
+
   async getCompanyState(id: string, candidateId: string) {
     await this.getById(id, candidateId); // ownership check
     const state = await this.prisma.hyrteCompanyState.findUnique({ where: { sessionId: id } });

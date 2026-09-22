@@ -58,6 +58,12 @@ export class HyrteSessionsController {
     return this.sessions.advancePastMissionBrief(id, user.id);
   }
 
+  /** §14 — marks the in-workspace guided walkthrough finished (or skipped) so it runs once. */
+  @Post(':id/onboarding/complete')
+  completeOnboarding(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.sessions.completeOnboarding(id, user.id);
+  }
+
   @Post(':id/baseline-challenge/submit')
   submitBaselineChallenge(
     @Param('id') id: string,

@@ -8,6 +8,7 @@ import { Meter } from '@/components/hyrte/meter';
 import { HyrteSessionInfoCard } from '@/components/hyrte/session-info-card';
 import { SessionClock } from '@/components/hyrte/session-clock';
 import { PacingBanner } from '@/components/hyrte/pacing-banner';
+import { GuidedOnboarding } from '@/components/hyrte/guided-onboarding';
 import { useHyrteNav } from '@/lib/hyrte-nav';
 import { ActivityCenter } from '@/components/hyrte/activity-center';
 import { api } from '@/lib/api';
@@ -25,6 +26,7 @@ import {
   HyrteWorkItem,
   HyrteActivityEntry,
   HyrteActivityFeed,
+  HeroTaskList,
 } from '@/lib/hyrte-types';
 
 const ATTENTION_SOURCE_LABEL: Record<HyrteActivityEntry['source'], string> = {
@@ -121,6 +123,10 @@ export default function HyrteHome({ params }: { params: Promise<{ id: string }> 
   // used to list urgent INBOX messages only, so a blocked engineer on Slack, a
   // colleague waiting on a review, or a meeting about to start were all
   // invisible here. Same unified feed the bell and the sidebar badges use.
+  const { data: heroTasks } = useQuery({
+    queryKey: ['hyrte', 'my-tasks', id, taskVersion],
+    queryFn: () => api.get<HeroTaskList>(`/hyrte/sessions/${id}/my-tasks`),
+  });
   const { data: activity } = useQuery({
     queryKey: ['hyrte', 'activity', id, inboxVersion, slackVersion, taskVersion, meetingVersion],
     queryFn: () => api.get<HyrteActivityFeed>(`/hyrte/sessions/${id}/activity?limit=8`),
@@ -174,6 +180,10 @@ export default function HyrteHome({ params }: { params: Promise<{ id: string }> 
       backHref="/candidate"
       backLabel="Exit"
     >
+      {/* §14 — "the first 5-10 minutes should be guided." Steps 5-7 of the
+          doc's seven; 1-4 are the Mission Brief they just read. */}
+      {session && <GuidedOnboarding session={session} activity={activity} tasks={heroTasks} />}
+
       {session && (
         <div className="mb-4 flex flex-wrap items-center gap-3">
           <div className="min-w-[260px] flex-1">

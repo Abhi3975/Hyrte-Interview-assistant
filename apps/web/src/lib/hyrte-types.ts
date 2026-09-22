@@ -124,6 +124,8 @@ export interface HyrteSession {
   startedAt: string;
   /** When the candidate actually entered the workspace — the pacing clock's zero point. Null before unlock. */
   workspaceUnlockedAt: string | null;
+  /** §14 — set once the guided walkthrough is finished or skipped. */
+  onboardingDoneAt?: string | null;
   pacing?: HyrtePacing;
   missionBrief: HyrteMissionBrief | null;
   baselineChallenge: HyrteBaselineChallenge | null;

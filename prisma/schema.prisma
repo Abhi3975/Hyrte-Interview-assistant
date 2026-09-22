@@ -929,6 +929,10 @@ model HyrteSession {
   // time, and every in-session timer must be measured from here, not from
   // startedAt. Null until the workspace unlocks.
   workspaceUnlockedAt DateTime?
+  // §14 — "The onboarding must be MUCH slower… don't throw the user into a
+  // world and expect them to figure out the UI." Set when the candidate
+  // finishes (or skips) the in-workspace guided walkthrough, so it runs once.
+  onboardingDoneAt    DateTime?
   // Activity Center (Refinements doc §4 "Notifications need one unified
   // system"). Map of surface name -> ISO timestamp the candidate last looked
   // at it, e.g. {"slack":"2026-09-22T10:04:00Z"}. Inbox has its own per-message
