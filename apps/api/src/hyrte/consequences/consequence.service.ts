@@ -378,6 +378,8 @@ export class HyrteConsequenceService {
         hop >= MAX_ESCALATION_HOPS ? candidates.reduce((a, b) => ((b.authorityLevel ?? 50) > (a.authorityLevel ?? 50) ? b : a)) : undefined;
       const roster = (forcedEscalator ? [forcedEscalator] : candidates).map((s) => ({ key: s.id, name: s.name, role: s.role }));
 
+      const candidateName = (await this.prisma.user.findUnique({ where: { id: session.candidateId }, select: { fullName: true } }))?.fullName?.split(' ')[0] ?? null;
+
       const hopFraming =
         hop === 1
           ? 'This is the FIRST escalation (of up to 3) after the candidate ignored an urgent message — a colleague ' +
@@ -398,7 +400,16 @@ export class HyrteConsequenceService {
             role: 'system',
             content:
               'You are generating a consequence event for a workplace simulation: the candidate ignored an ' +
-              `urgent message, now escalating. ${hopFraming} Pick ONE stakeholder from the given roster (by ` +
+              `urgent message, now escalating. ${hopFraming} ` +
+              // Live-caught bug: the user prompt names the ignored message's
+              // SENDER, and with no stated recipient the model addressed the
+              // escalation to that sender — producing "Alice, this is now
+              // critical…" in an email FROM Alice. The escalation goes to the
+              // CANDIDATE, who is the one who ignored it.
+              'CRITICAL: this message is addressed TO the candidate' +
+              `${candidateName ? ` (${candidateName})` : ''} — the person who did not respond. The original ` +
+              'sender named below is who was ignored, NOT the recipient; never address the message to them. ' +
+              'Pick ONE stakeholder from the given roster (by ' +
               '"key"). Return ONLY JSON: {"stakeholderKey": string (must match a roster key), "message": ' +
               'string (2-4 sentences, tone matching the escalation stage described), "companyStateDelta": ' +
               `{<at most 2 of: ${COMPANY_STATE_KEYS.join(', ')}, each -${stateCap}..${stateCap}>}, ` +
