@@ -48,19 +48,15 @@ export default function HyrteEntry() {
         companyType,
         difficulty,
         culture,
+        // §13 — sent WITH the create, not after it. Previously this went as a
+        // second call once the session already existed, by which point world
+        // generation had started from the six selects alone: the JD only ever
+        // reached the evaluation model, never the company, team or tasks the
+        // candidate actually walked into. The server now decomposes it before
+        // generating, the same way a recruiter-launched session does.
+        jobDescriptionText: jobDescriptionText.trim() || undefined,
+        companyContext: companyContext.trim() || undefined,
       });
-      // §0/§3.3 — if a real JD was pasted, replace the synthetic Job Success
-      // Model (built from the six selects above) with one decomposed from
-      // the actual text. Best-effort: a failure here shouldn't block entry.
-      if (jobDescriptionText.trim()) {
-        await api
-          .post('/profile/ingest/job-description', {
-            jobDescriptionText,
-            companyContext: companyContext || undefined,
-            sessionId: session.id,
-          })
-          .catch(() => undefined);
-      }
       router.push(`/hyrte/session/${session.id}/mission-brief`);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Could not start the simulation');

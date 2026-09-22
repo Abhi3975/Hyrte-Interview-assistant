@@ -18,6 +18,14 @@ export class CreateHyrteSessionDto {
   @IsEnum(Difficulty) difficulty!: Difficulty;
   @IsString() culture!: string;
   @IsOptional() @IsEnum(HyrteSessionType) sessionType?: HyrteSessionType;
+  /**
+   * Refinements doc §13 — "Candidate practice should use the SAME engine…
+   * Candidate: upload JD / paste company / paste role. Same engine generates."
+   * When present, the world itself is built from this, not just the six seeds
+   * above — see HyrteSessionsService.populateWorld.
+   */
+  @IsOptional() @IsString() jobDescriptionText?: string;
+  @IsOptional() @IsString() companyContext?: string;
 }
 
 export class ReplyInboxDto {

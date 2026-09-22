@@ -22,6 +22,7 @@ import { DecisionGraphService } from './dig/decision-graph.service';
 import { EvidenceGraphService } from './dig/evidence-graph.service';
 import { HyrteWorkTickService } from './work/work-tick.service';
 import { HyrteHeroTaskService } from './work/hero-task.service';
+import { JobSuccessModelService } from './dig/job-success-model.service';
 import { ORIENTATION_UNTIL_FRACTION, elapsedFraction, meetingStartDelayMs, orientationEndMs, phaseDescriptorAt, plannedDurationMs, rampedDelayMs, scheduledEventDelayMs } from './pacing/session-pacing';
 
 /** Part F8 What-Changed — camelCase KPI key → readable label. */
@@ -54,6 +55,7 @@ export class HyrteSessionsService {
     private readonly ai: AIService,
     private readonly workTicks: HyrteWorkTickService,
     private readonly heroTasks: HyrteHeroTaskService,
+    private readonly jobSuccessModel: JobSuccessModelService,
   ) {}
 
   /**
@@ -75,6 +77,47 @@ export class HyrteSessionsService {
     const session = await this.createPlaceholder(dto, candidateId, {});
     this.populateWorld(session.id, dto, candidateId, { variety }).catch((e) => this.logger.error(`populateWorld failed for session ${session.id}: ${e instanceof Error ? e.message : String(e)}`));
     return session;
+  }
+
+  /**
+   * Refinements doc §13 — "Candidate practice should use the SAME engine. This
+   * is potentially a huge differentiator. Recruiter: upload JD + company
+   * website → HYRTE generates simulation. Candidate: upload JD / paste company
+   * / paste role. Same engine generates… Candidate enters the company world."
+   *
+   * It did not. A candidate could paste a job description, but the frontend
+   * sent it AFTER creating the session — so world generation had already begun
+   * from the six dropdowns, and the JD only ever reached the Job Success Model
+   * that feeds the interview and report. The company, the team, the tasks and
+   * the inbox were all still generic-role output. The recruiter path has always
+   * passed real grounding into the generator; this gives the candidate path the
+   * same thing, from the same decomposition, through the same code.
+   *
+   * Runs inside the background populate rather than before it, so creating a
+   * session still returns immediately instead of blocking on an LLM call.
+   *
+   * The session's own `role` stays authoritative (it drives role tasks,
+   * competencies and the signature artifact, and it is what the session row
+   * says) — the JD enriches WHAT the world is about, exactly as it does for a
+   * recruiter-launched session.
+   */
+  private async groundingFromJobDescription(
+    sessionId: string,
+    jobDescriptionText: string,
+    companyContext: string | undefined,
+  ): Promise<JobSuccessModelGrounding | undefined> {
+    try {
+      const model = await this.jobSuccessModel.generateFromText(jobDescriptionText, companyContext, sessionId);
+      const capabilities = (model.capabilityRequirements ?? []) as unknown as JobSuccessModelGrounding['capabilityRequirements'];
+      const themes = ((model.industryContext as { probeThemes?: string[] } | null)?.probeThemes ?? []) as string[];
+      if (model.coreOutcomes.length === 0 && capabilities.length === 0) return undefined;
+      return { coreOutcomes: model.coreOutcomes, capabilityRequirements: capabilities, industryProbeThemes: themes };
+    } catch (e) {
+      // A JD that cannot be decomposed degrades to the six-seed world it would
+      // have produced anyway — never a failed session.
+      this.logger.warn(`Job-description grounding failed for session ${sessionId}, generating from seeds only: ${e instanceof Error ? e.message : String(e)}`);
+      return undefined;
+    }
   }
 
   /**
@@ -202,9 +245,16 @@ export class HyrteSessionsService {
     candidateId: string,
     options: { grounding?: JobSuccessModelGrounding; variety?: WorldVariety },
   ) {
+    // §13 — a candidate-pasted JD grounds the WORLD, not just the evaluation.
+    const grounding =
+      options.grounding ??
+      (dto.jobDescriptionText?.trim()
+        ? await this.groundingFromJobDescription(sessionId, dto.jobDescriptionText, dto.companyContext)
+        : undefined);
+
     let world: GeneratedWorld;
     try {
-      world = await this.generator.generate(dto, options.grounding, options.variety);
+      world = await this.generator.generate(dto, grounding, options.variety);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (dto.sessionType === 'ASSESSMENT') {
