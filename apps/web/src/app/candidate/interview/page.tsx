@@ -17,6 +17,7 @@ import { useAuthStore } from '@/store/auth';
 import { api } from '@/lib/api';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { MicIcon, SpeakerIcon, ShieldIcon, AlertIcon, CheckIcon, XIcon, CodeIcon } from '@/components/icons';
+import { classifySilence, shouldInterject, silencePrompt } from '@interviewai/conversation';
 
 const TOPICS: { label: string; category: string; topic: string; blurb: string }[] = [
   { label: 'Software Engineer', category: 'DSA', topic: 'Data Structures and Algorithms', blurb: 'DSA, problem solving & complexity' },
@@ -148,6 +149,8 @@ function computeRoundSequence(wType: string, codeEligible: boolean): { type: Rou
 const ROUND_INTRO_RESERVE_SEC = 90; // matches INTRO_CAP_MS below
 /** P3 — silence during the candidate's own turn beyond this, without "give me a second" active, is flagged. */
 const LONG_PAUSE_MS = 20_000;
+/** How often a running silence is re-read. Fine enough to feel responsive, coarse enough to cost nothing. */
+const SILENCE_TICK_MS = 400;
 const WIZARD_STEPS = ['Category', 'Topic', 'Type', 'Level', 'Company', 'Duration', 'Language', 'Review'];
 const PERSONALITIES: { id: string; label: string }[] = [
   { id: 'friendly', label: 'Friendly' },
@@ -371,6 +374,17 @@ function InterviewRoomInner() {
   // their first few real answers, compared against later ones.
   const lastSpeechAtRef = useRef<number>(0);
   const answerComplexityBaselineRef = useRef<number[]>([]);
+  // Voice layers 10 & 11. The two "did we already do this" flags are per-turn
+  // (reset when the candidate's turn is sent); the interjection count is
+  // per-session, which is what keeps Ally from talking over a verbose
+  // candidate all interview.
+  const scaffoldedThisTurnRef = useRef(false);
+  const awayCheckedThisTurnRef = useRef(false);
+  const interjectionsRef = useRef(0);
+  const turnStartedAtRef = useRef<number>(Date.now());
+  /** The question on the table, so a scaffold can be about something. */
+  const currentQuestionRef = useRef<string | null>(null);
+  const playBackchannelRef = useRef<((override?: string, mood?: string) => void) | null>(null);
   const sendingRef = useRef(false);
   const micOnRef = useRef(micOn);
   const introStartedAtRef = useRef<number | null>(null);
@@ -698,15 +712,24 @@ function InterviewRoomInner() {
    * (fire-and-forget) and fails silently — this is a decorative UX cue, not
    * essential, and must never block or error out the real turn submission.
    */
-  const playBackchannel = useCallback(async () => {
+  /**
+   * Also the channel for voice layers 10 and 11 — the scaffold offered to a
+   * stuck candidate, the check-in when they have gone quiet, and Ally coming
+   * in over a ramble. All of those have to reach the candidate WITHOUT
+   * flipping voiceState to 'speaking', because that gates the mic off and
+   * would throw away the answer they are in the middle of giving. Speaking
+   * over someone while their mic stays open is also just what interrupting
+   * actually sounds like.
+   */
+  const playBackchannel = useCallback(async (override?: string, mood: string = 'neutral') => {
     if (muted || voiceStateRef.current !== 'listening') return;
     try {
       const authToken = useAuthStore.getState().accessToken;
-      const phrase = BACKCHANNEL_PHRASES[Math.floor(Math.random() * BACKCHANNEL_PHRASES.length)];
+      const phrase = override ?? BACKCHANNEL_PHRASES[Math.floor(Math.random() * BACKCHANNEL_PHRASES.length)];
       const res = await fetch('/api/voice/speak', {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...(authToken ? { authorization: `Bearer ${authToken}` } : {}) },
-        body: JSON.stringify({ text: phrase, mood: 'neutral' }),
+        body: JSON.stringify({ text: phrase, mood }),
       });
       if (!res.ok) return;
       const blob = await res.blob();
@@ -720,6 +743,10 @@ function InterviewRoomInner() {
       // decorative only — never surfaces an error
     }
   }, [muted]);
+
+  useEffect(() => {
+    playBackchannelRef.current = playBackchannel;
+  }, [playBackchannel]);
 
   const startListening = useCallback(() => {
     const Ctor = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
@@ -738,17 +765,53 @@ function InterviewRoomInner() {
       const words = text.split(/\s+/).filter(Boolean).length;
       setInput(text);
       if (text) lastSpeechAtRef.current = Date.now();
-      // P2 — patient listening: "give me a second" (thinkingRef) suppresses
-      // the ~1s VAD auto-send entirely, no penalty — the candidate resumes
-      // it explicitly (see the toggle button) rather than a timeout deciding
-      // for them.
+      // Voice layer 11 — Ally comes in over a genuine ramble. Routed through
+      // the backchannel so the candidate's mic stays open and nothing they
+      // have said is lost.
+      const interjection = shouldInterject({
+        wordCount: words,
+        msSpeaking: Date.now() - turnStartedAtRef.current,
+        interjectionsSoFar: interjectionsRef.current,
+        candidateSpeaking: true,
+      });
+      if (interjection && !sendingRef.current && voiceStateRef.current === 'listening') {
+        interjectionsRef.current += 1;
+        playBackchannelRef.current?.(interjection.line, interjection.mood);
+      }
+
+      // Voice layer 10 — what this silence MEANS, re-read as it lengthens
+      // rather than decided once by a flat timer. The old 1s timeout sent
+      // half-sentences from anyone who paused mid-thought; "give me a second"
+      // (thinkingRef) still suppresses auto-send entirely, now as one input
+      // to the classifier rather than a special case around it.
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-      silenceTimerRef.current = setTimeout(() => {
-        if (text && words >= 1 && !sendingRef.current && !thinkingRef.current && voiceStateRef.current === 'listening') {
+      const assessSilence = () => {
+        if (sendingRef.current || voiceStateRef.current !== 'listening') return;
+        const kind = classifySilence({
+          msSilent: Date.now() - lastSpeechAtRef.current,
+          partialTranscript: text,
+          requestedTime: thinkingRef.current,
+        });
+
+        if (kind === 'FINISHED' && text && words >= 1) {
           submitTextRef.current?.(text);
           finalChunk = '';
+          return;
         }
-      }, 1000);
+        // Each of these lands at most once per turn — a scaffold repeated
+        // every few seconds is nagging, not help.
+        if (kind === 'STUCK' && !scaffoldedThisTurnRef.current) {
+          scaffoldedThisTurnRef.current = true;
+          const line = silencePrompt('STUCK', currentQuestionRef.current);
+          if (line) playBackchannelRef.current?.(line, 'warm');
+        } else if (kind === 'AWAY' && !awayCheckedThisTurnRef.current) {
+          awayCheckedThisTurnRef.current = true;
+          const line = silencePrompt('AWAY', null);
+          if (line) playBackchannelRef.current?.(line, 'warm');
+        }
+        silenceTimerRef.current = setTimeout(assessSilence, SILENCE_TICK_MS);
+      };
+      silenceTimerRef.current = setTimeout(assessSilence, SILENCE_TICK_MS);
     };
     rec.onerror = () => {};
     recognitionRef.current = rec;
@@ -906,6 +969,12 @@ function InterviewRoomInner() {
   // ── conversational turn ──
   const sendTurn = useCallback(async (candidateText?: string, opts?: { end?: boolean; behaviorSummary?: string; reverseInterviewQuestion?: boolean }) => {
     const base = messagesRef.current.slice();
+    // A new turn begins: the scaffold and check-in are offered afresh, and the
+    // ramble clock restarts. The interjection COUNT deliberately does not
+    // reset — it is a session budget.
+    scaffoldedThisTurnRef.current = false;
+    awayCheckedThisTurnRef.current = false;
+    turnStartedAtRef.current = Date.now();
     if (candidateText && candidateText.trim()) {
       const trimmed = candidateText.trim();
       base.push({ role: 'you', text: trimmed, ts: Date.now() });
@@ -990,6 +1059,8 @@ function InterviewRoomInner() {
       }
       if (opts?.end) return res.text;
       setMessages((m) => [...m, { role: 'ai', text: res.text }]);
+      // What a stuck candidate would be scaffolded about.
+      currentQuestionRef.current = res.text;
       speak(res.text, res.mood);
       lastAiTsRef.current = Date.now();
       return res.text;

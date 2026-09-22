@@ -6,6 +6,9 @@ WORKDIR /app
 # ── deps: install with the schema present so `prisma generate` can run ──
 FROM base AS deps
 COPY package.json package-lock.json* ./
+# Workspace package consumed as source by both apps — must exist before install
+# so npm can link it (see packages/conversation/README.md).
+COPY packages ./packages
 COPY apps/api/package.json apps/api/package.json
 COPY prisma ./prisma
 RUN npm install --workspace @interviewai/api --include-workspace-root
@@ -14,6 +17,7 @@ RUN npm install --workspace @interviewai/api --include-workspace-root
 FROM base AS build
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./
+COPY packages ./packages
 COPY prisma ./prisma
 COPY apps/api ./apps/api
 RUN npx prisma generate --schema=prisma/schema.prisma

@@ -8,6 +8,7 @@ import { PistonClient } from './piston.client';
 import { RecordingService } from '../recording/recording.service';
 import { InterviewCouncilService } from './council/interview-council.service';
 import { LiveCortexService } from '../interview-intelligence/live-cortex.service';
+import { paceDirective, pickMicroReaction, profilePace } from '@interviewai/conversation';
 
 /** Persona + protocol for the conversational AI interviewer. */
 const INTERVIEWER_SYSTEM = `# ROLE
@@ -79,7 +80,10 @@ const PERSONALITIES: Record<string, string> = {
  * hyrte-interview.service.ts (same technique, but that file is
  * simulation-side and out of bounds for this product).
  */
-const MICRO_ACKS = ['Got it.', 'I see.', 'That makes sense.', 'Interesting.', 'Okay.', 'Understood.', 'Alright.'];
+// Layer 12 — micro-reactions now come from `pickMicroReaction`, which reads
+// what the candidate actually said. The bag this replaced was a 30% coin flip
+// over seven generic lines, which is how "Interesting." ended up landing on
+// top of someone saying their launch was cancelled.
 const CLOSING_LINES = [
   "That wraps up our conversation today — thanks for walking me through your thinking.",
   "That's everything I wanted to cover. Thanks for being so thorough with your answers.",
@@ -95,7 +99,9 @@ const REPORT_READY_MESSAGES = [
 function pick<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
-const MICRO_ACK_PROBABILITY = 0.3;
+
+/** How many past reactions to keep out of the running, so Ally does not loop. */
+const REACTION_MEMORY = 4;
 
 /**
  * Real-time voice — dynamic prosody. A closed set (not free text) so it maps
@@ -373,11 +379,15 @@ export class PracticeService {
           ? `This round's time budget is up. In THIS reply: wrap up the current round in ONE short sentence (do not ask a further question in this round), then transition naturally to the next round — ${input.nextRoundLabel ?? 'the next part of the interview'} — and ask its first question.`
           : 'Continue the interview naturally. Keep it conversational and reasonably brief (it is read aloud by TTS), EXCEPT when giving structured code review/feedback which can be longer. Ask ONE thing at a time and wait.';
 
+    // Layer 7 — match Ally's delivery to the candidate's. Read off turn
+    // length, which is already in the transcript and needs no audio analysis.
+    const pacing = paceDirective(profilePace(input.transcript.filter((t) => t.role === 'candidate').map((t) => t.content)));
+
     const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
       {
         role: 'system',
         content:
-          `${INTERVIEWER_SYSTEM}\n\n${persona}\n\n${ctx}${resume}${evidenceGraph}${simulation}${modeNote}\n\n${directive}\n\n` +
+          `${INTERVIEWER_SYSTEM}\n\n${persona}\n\n${ctx}${resume}${evidenceGraph}${simulation}${modeNote}\n\n${directive}\n\n${pacing}\n\n` +
           'Return ONLY JSON: {"reply": string (your next spoken message, no stage directions), ' +
           '"hintLevel": int 1-5 (ONLY include this field on a turn where you actually GAVE a hint per the ' +
           'graduated-hint rules above — omit it entirely on every other turn, including ones where you declined ' +
@@ -431,10 +441,20 @@ export class PracticeService {
     // above by the LLM; the closing line + report-ready notification are
     // fixed-bank, never LLM-phrased, so they're guaranteed to actually
     // happen rather than hoping the model remembers to say them.
+    // Layer 12 — react to what they just said, not to a dice roll. Recent
+    // reactions are read back off the transcript so Ally does not land the
+    // same three words turn after turn.
+    const lastCandidateTurn = [...input.transcript].reverse().find((t) => t.role === 'candidate')?.content ?? '';
+    const recentReactions = input.transcript
+      .filter((t) => t.role === 'interviewer')
+      .slice(-REACTION_MEMORY)
+      .map((t) => t.content.split(/(?<=[.!?])\s/)[0]?.trim() ?? '');
+    const reaction = input.end ? null : pickMicroReaction(lastCandidateTurn, recentReactions);
+
     const reply = input.end
       ? `${replyRaw} ${pick(CLOSING_LINES)} ${pick(REPORT_READY_MESSAGES)}`.trim()
-      : Math.random() < MICRO_ACK_PROBABILITY && input.transcript.length > 0
-        ? `${pick(MICRO_ACKS)} ${replyRaw}`
+      : reaction
+        ? `${reaction} ${replyRaw}`
         : replyRaw;
     // The closing sequence above is a fixed warm sign-off regardless of what
     // the LLM picked for the acknowledgement sentence that precedes it —

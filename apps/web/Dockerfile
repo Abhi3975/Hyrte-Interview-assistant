@@ -5,12 +5,16 @@ WORKDIR /app
 
 FROM base AS deps
 COPY package.json package-lock.json* ./
+# Workspace package consumed as source by both apps — must exist before install
+# so npm can link it (see packages/conversation/README.md).
+COPY packages ./packages
 COPY apps/web/package.json apps/web/package.json
 RUN npm install --workspace @interviewai/web --include-workspace-root
 
 FROM base AS build
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./
+COPY packages ./packages
 COPY apps/web ./apps/web
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build --workspace @interviewai/web
