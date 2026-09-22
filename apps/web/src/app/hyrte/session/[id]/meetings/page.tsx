@@ -11,6 +11,7 @@ import { api } from '@/lib/api';
 import { useHyrteStore } from '@/store/hyrte';
 import { deriveStakeholderStatus, STATUS_DOT, STATUS_LABEL } from '@/lib/hyrte-status';
 import { HyrteCalendarEvent, HyrteInboxMessage, HyrteMeetingMessage, HyrteStakeholder } from '@/lib/hyrte-types';
+import { PreMeetingBriefCard } from '@/components/hyrte/pre-meeting-brief';
 
 /** Part E2 — "Meetings: join screen + attendee rail with presence/mood as subtle avatar treatment (never numeric labels)."
  * Refinements doc §7 — now also a real live multi-stakeholder discussion the candidate can watch/join, plus
@@ -23,6 +24,10 @@ export default function HyrteMeetings({ params }: { params: Promise<{ id: string
   useMarkActivitySeen(id, 'meetings', meetingVersion);
   const queryClient = useQueryClient();
   const [joinedId, setJoinedId] = useState<string | null>(null);
+  // Refinements doc §7 — context BEFORE the meeting. Opening a meeting now
+  // shows its brief first; joining is a second, deliberate step.
+  const [briefingId, setBriefingId] = useState<string | null>(null);
+  const [joining, setJoining] = useState(false);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
 
@@ -48,10 +53,16 @@ export default function HyrteMeetings({ params }: { params: Promise<{ id: string
   const joinedEvent = events?.find((e) => e.id === joinedId);
 
   async function join(eventId: string) {
-    setJoinedId(eventId);
-    await api.post(`/hyrte/sessions/${id}/calendar/${eventId}/attend`);
-    queryClient.invalidateQueries({ queryKey: ['hyrte', 'decision-log', id] });
-    queryClient.invalidateQueries({ queryKey: ['hyrte', 'calendar', id] });
+    setJoining(true);
+    try {
+      setJoinedId(eventId);
+      setBriefingId(null);
+      await api.post(`/hyrte/sessions/${id}/calendar/${eventId}/attend`);
+      queryClient.invalidateQueries({ queryKey: ['hyrte', 'decision-log', id] });
+      queryClient.invalidateQueries({ queryKey: ['hyrte', 'calendar', id] });
+    } finally {
+      setJoining(false);
+    }
   }
 
   async function speak() {
@@ -82,6 +93,7 @@ export default function HyrteMeetings({ params }: { params: Promise<{ id: string
         {events?.map((e) => {
           const attendees = e.attendeeStakeholderIds.map((sid) => byId.get(sid)).filter((s): s is HyrteStakeholder => !!s);
           const isJoined = joinedId === e.id;
+          const isBriefing = briefingId === e.id;
           return (
             <div key={e.id} className="card">
               <div className="flex items-center justify-between">
@@ -92,16 +104,29 @@ export default function HyrteMeetings({ params }: { params: Promise<{ id: string
                     {new Date(e.endAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </div>
                 </div>
-                {!isJoined ? (
-                  <button className="btn-primary" onClick={() => join(e.id)}>
-                    {e.notesGeneratedAt ? 'Open' : e.startedAt ? 'Rejoin' : 'Join'}
-                  </button>
-                ) : (
+                {isJoined ? (
                   <button className="btn-ghost" onClick={() => setJoinedId(null)}>
                     Leave meeting
                   </button>
+                ) : e.notesGeneratedAt ? (
+                  <button className="btn-primary" onClick={() => join(e.id)}>
+                    Open
+                  </button>
+                ) : isBriefing ? (
+                  <button className="btn-ghost" onClick={() => setBriefingId(null)}>
+                    Close
+                  </button>
+                ) : (
+                  /* §7 — never straight into the room. Context first. */
+                  <button className="btn-primary" onClick={() => setBriefingId(e.id)}>
+                    {e.startedAt ? 'Rejoin' : 'Prepare & join'}
+                  </button>
                 )}
               </div>
+
+              {isBriefing && !isJoined && (
+                <PreMeetingBriefCard sessionId={id} eventId={e.id} onJoin={() => join(e.id)} joining={joining} />
+              )}
 
               {isJoined && (
                 <div className="mt-4 border-t pt-4" style={{ borderColor: 'var(--hos-border, rgba(0,0,0,0.05))' }}>

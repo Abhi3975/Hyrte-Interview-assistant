@@ -658,6 +658,12 @@ export class HyrteWorkplaceService {
   }
 
   /** Part E2 Meetings — "join" is a real logged action, same pattern as listKnowledgeBase's KB-consultation evidence. */
+  /** Refinements doc §7 — the context the candidate should walk in already knowing. Ownership-checked, then delegated to the meeting service. */
+  async getPreMeetingBrief(sessionId: string, eventId: string, candidateId: string) {
+    await this.assertOwnership(sessionId, candidateId);
+    return this.meetings.getPreMeetingBrief(sessionId, eventId);
+  }
+
   async attendMeeting(sessionId: string, eventId: string, candidateId: string) {
     await this.assertOwnership(sessionId, candidateId);
     const event = await this.prisma.hyrteCalendarEvent.findFirst({ where: { id: eventId, sessionId } });

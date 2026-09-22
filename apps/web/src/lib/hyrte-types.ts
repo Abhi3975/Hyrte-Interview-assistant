@@ -545,3 +545,26 @@ export interface LiveDeliberation {
   directives: LiveCortexDirective[];
   overallConfidence: number;
 }
+
+// ── Pre-meeting brief (Refinements doc §7) ──
+// "Team messages should appear BEFORE the meeting. Incoming context →
+// Messages → Documents → Meeting → Decision → Execution."
+
+export interface PreMeetingStatement {
+  speaker: string;
+  at: string;
+  body: string;
+}
+
+export interface PreMeetingBrief {
+  id: string;
+  title: string;
+  agenda: string | null;
+  startAt: string;
+  endAt: string;
+  alreadyStarted: boolean;
+  concluded: boolean;
+  attendees: { id: string; name: string; role: string; department: string | null }[];
+  recentStatements: PreMeetingStatement[];
+  relatedDocs: { id: string; title: string; category: string }[];
+}

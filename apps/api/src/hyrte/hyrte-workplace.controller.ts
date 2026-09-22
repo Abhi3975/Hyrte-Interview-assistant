@@ -173,6 +173,20 @@ export class HyrteWorkplaceController {
     return this.workplace.listCalendar(sessionId, user.id);
   }
 
+  /**
+   * Refinements doc §7 — "Team messages should appear BEFORE the meeting…
+   * Incoming context → Messages → Documents → Meeting → Decision → Execution.
+   * Not: Meeting → AI explains everything."
+   */
+  @Get('calendar/:eventId/brief')
+  preMeetingBrief(
+    @Param('sessionId') sessionId: string,
+    @Param('eventId') eventId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.workplace.getPreMeetingBrief(sessionId, eventId, user.id);
+  }
+
   @Post('calendar/:eventId/attend')
   attendMeeting(
     @Param('sessionId') sessionId: string,
