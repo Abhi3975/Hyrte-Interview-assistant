@@ -760,7 +760,12 @@ export class HyrteSessionsService {
     await Promise.all(
       meetings.map((m, i) => {
         const delay = meetingStartDelayMs(i, meetings.length, session.difficulty);
-        const durationMs = Math.max(10 * 60_000, m.endAt.getTime() - m.startAt.getTime());
+        // The generator's durationMins is written for a real working day, so
+        // it can exceed the whole session — a 45-minute meeting inside a
+        // 40-minute simulation displays an end time past the end of the
+        // session. Capped to a sensible slice of the session, floored at 10.
+        const generatedMs = m.endAt.getTime() - m.startAt.getTime();
+        const durationMs = Math.min(Math.max(10 * 60_000, generatedMs), plannedDurationMs(session.difficulty) * 0.25);
         const startAt = new Date(unlockedAt + delay);
         return this.prisma.hyrteCalendarEvent.update({
           where: { id: m.id },
