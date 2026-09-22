@@ -4,6 +4,7 @@ import { IsArray, IsEnum, IsIn, IsInt, IsNumber, IsObject, IsOptional, IsString,
 import { Category, Difficulty } from '@prisma/client';
 import { PracticeService } from './practice.service';
 import { InterviewCouncilService } from './council/interview-council.service';
+import { LiveCortexService } from '../interview-intelligence/live-cortex.service';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
@@ -121,6 +122,7 @@ export class PracticeController {
   constructor(
     private readonly practice: PracticeService,
     private readonly council: InterviewCouncilService,
+    private readonly liveCortex: LiveCortexService,
   ) {}
 
   /** Any candidate can start a mock interview themselves — no approval needed. */
@@ -164,6 +166,26 @@ export class PracticeController {
   @Roles('RECRUITER', 'ORG_ADMIN')
   getCouncilReport(@Param('id') id: string) {
     return this.council.getReport(id);
+  }
+
+  /**
+   * The LIVE half of the same doc requirement — what the committee was doing
+   * DURING the interview, not the debrief after it: the hidden per-competency
+   * evidence state and the background exchange that actually drove each
+   * redirection (interview-intelligence/live-cortex.service.ts).
+   *
+   * Mirrors HYRTE's `hyrte/sessions/:id/council/live-deliberation`. Ally
+   * sessions were recording this state from the day it shipped but had no way
+   * to read it back, so a recruiter could see the post-interview debrief for a
+   * direct interview-room session and not the reasoning that shaped it.
+   *
+   * Recruiter/org-admin only — same as the council report above, and
+   * deliberately never exposed to the CANDIDATE role.
+   */
+  @Get('session/:id/live-deliberation')
+  @Roles('RECRUITER', 'ORG_ADMIN')
+  getLiveDeliberation(@Param('id') id: string) {
+    return this.liveCortex.getDeliberation('interview', id);
   }
 
   /** P4 — a presigned URL the candidate's browser PUTs its recorded session to directly. */
