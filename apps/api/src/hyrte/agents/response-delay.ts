@@ -29,24 +29,40 @@ export interface ResponseDelayInput {
   messageUrgent: boolean;
 }
 
+/**
+ * Timescale note — these were originally written against a real working day
+ * (an engineer at 90s, an exec at 120s, a 5-minute ceiling, plus up to 90s of
+ * workload on top). A HYRTE session runs 30-60 MINUTES, so a single "can you
+ * take a look at this?" could burn four of them with the candidate staring at
+ * a typing indicator. Reported from a live run: a DM to an Engineering Lead
+ * appeared to get no answer at all, because the answer was still minutes away.
+ *
+ * The numbers below are compressed to the simulation's own timescale while
+ * keeping the RELATIVE ordering that was the point of the feature: a support
+ * rep still answers noticeably faster than a CFO, a stressed and overloaded
+ * person still takes longer than an idle one, and an urgent message still
+ * jumps the queue. The waiting is still real — it just costs seconds, not a
+ * tenth of the session.
+ */
 const ROLE_BASE_DELAY_MS: { pattern: RegExp; baseMs: number }[] = [
   // Customer-facing/responsive-by-trade roles reply fastest — answering quickly IS the job.
-  { pattern: /support|customer success|success manager|account manager/i, baseMs: 20_000 },
-  { pattern: /sales|\bsdr\b|\bbdr\b|business development/i, baseMs: 30_000 },
+  { pattern: /support|customer success|success manager|account manager/i, baseMs: 5_000 },
+  { pattern: /sales|\bsdr\b|\bbdr\b|business development/i, baseMs: 7_000 },
   // Process/approval-heavy roles are the slowest — a real answer needs a real check first.
-  { pattern: /finance|accounting|\bfp&a\b|legal|compliance/i, baseMs: 150_000 },
-  { pattern: /\bhr\b|human resources|people (partner|ops)|recruiter|talent acquisition/i, baseMs: 100_000 },
+  { pattern: /finance|accounting|\bfp&a\b|legal|compliance/i, baseMs: 26_000 },
+  { pattern: /\bhr\b|human resources|people (partner|ops)|recruiter|talent acquisition/i, baseMs: 18_000 },
   // Busy, context-switching, many competing demands.
-  { pattern: /\bceo\b|\bcto\b|\bcfo\b|\bcoo\b|founder|\bvp\b|vice president|director|head of|\bmanager\b/i, baseMs: 120_000 },
+  { pattern: /\bceo\b|\bcto\b|\bcfo\b|\bcoo\b|founder|\bvp\b|vice president|director|head of|\bmanager\b/i, baseMs: 21_000 },
   // Investigation-heavy ICs — need to dig in before they can say anything real.
-  { pattern: /engineer|developer|\bqa\b|\bsre\b|devops|data scientist|machine learning|\bml\b|data analyst|analytics/i, baseMs: 90_000 },
+  { pattern: /engineer|developer|\bqa\b|\bsre\b|devops|data scientist|machine learning|\bml\b|data analyst|analytics/i, baseMs: 16_000 },
 ];
-const DEFAULT_BASE_MS = 60_000;
+const DEFAULT_BASE_MS = 11_000;
 
-const MIN_DELAY_MS = 10_000;
-const MAX_DELAY_MS = 300_000;
-const WORKLOAD_MS_PER_OPEN_ITEM = 10_000;
-const MAX_WORKLOAD_CONTRIBUTION_MS = 90_000;
+const MIN_DELAY_MS = 4_000;
+// Nobody waits longer than this, however senior, stressed and overloaded.
+const MAX_DELAY_MS = 30_000;
+const WORKLOAD_MS_PER_OPEN_ITEM = 2_000;
+const MAX_WORKLOAD_CONTRIBUTION_MS = 16_000;
 const URGENT_MESSAGE_MULTIPLIER = 0.4;
 
 function roleBaseDelayMs(role: string): number {

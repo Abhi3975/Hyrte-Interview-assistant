@@ -34,6 +34,9 @@ export default function HyrteSlack({ params }: { params: Promise<{ id: string }>
   const queryClient = useQueryClient();
   const searchParams = useSearchParams();
   const [channel, setChannel] = useState(CHANNELS[0]);
+  // A DM channel's key is "dm:<stakeholderId>" — an internal id, which was
+  // being rendered as the conversation title and inside the composer
+  // placeholder ("Message dm:cmud0qnui006ltz01nohcsfcg"). Show the person.
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
 
@@ -99,6 +102,9 @@ export default function HyrteSlack({ params }: { params: Promise<{ id: string }>
 
   const visibleMessages = messages?.filter((m) => !pendingIds.has(m.id));
   const typingStakeholder = stakeholders?.find((s) => s.id === typingFor);
+  const channelLabel = channel.startsWith('dm:')
+    ? stakeholders?.find((s) => s.id === channel.slice(3))?.name ?? 'Direct message'
+    : channel;
 
   async function send() {
     if (!draft.trim()) return;
@@ -164,7 +170,7 @@ export default function HyrteSlack({ params }: { params: Promise<{ id: string }>
         </div>
 
         <div className="card flex h-[calc(100vh-9rem)] flex-col">
-          <div className="mb-3 font-semibold">{channel}</div>
+          <div className="mb-3 font-semibold">{channelLabel}</div>
           <div className="flex-1 space-y-3 overflow-y-auto">
             {visibleMessages?.map((m) => (
               <div key={m.id} className="text-sm">
@@ -182,7 +188,7 @@ export default function HyrteSlack({ params }: { params: Promise<{ id: string }>
                 )}
               </div>
             ))}
-            {!visibleMessages?.length && <p className="text-sm text-black/50 dark:text-white/50">No messages in {channel} yet.</p>}
+            {!visibleMessages?.length && <p className="text-sm text-black/50 dark:text-white/50">No messages with {channelLabel} yet.</p>}
             {typingStakeholder && (
               <div className="flex items-center gap-1.5 text-xs text-black/40 dark:text-white/40">
                 <span className="flex gap-0.5">
@@ -197,7 +203,7 @@ export default function HyrteSlack({ params }: { params: Promise<{ id: string }>
           <div className="mt-3 flex gap-2">
             <input
               className="flex-1 rounded-lg border border-black/10 bg-transparent px-3 py-2 text-sm dark:border-white/10"
-              placeholder={`Message ${channel}`}
+              placeholder={`Message ${channelLabel}`}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && send()}
