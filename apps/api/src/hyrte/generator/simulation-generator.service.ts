@@ -327,7 +327,11 @@ export class HyrteSimulationGeneratorService {
         'knowledge',
         artifacts,
         KNOWLEDGE_SYSTEM,
-        `Company: ${companyName}. Roster: ${JSON.stringify(roster)}. Role: ${dto.role} (${dto.industry}).${industryNote}${personaNote}`,
+        `Company: ${companyName}. Roster: ${JSON.stringify(roster)}. Role: ${dto.role} (${dto.industry}).${industryNote}${personaNote}` +
+          `\nLOCKED COUNT: mark exactly ${lockedDocTarget(persona, TYPICAL_KNOWLEDGE_DOCS)} of these documents "locked": true — ` +
+          `this company's documentation culture is "${persona.documentationCulture}", and how much a new joiner is simply ` +
+          `handed versus has to go and ask for is the difference between working at one of these and the other. Each ` +
+          `locked document still needs an "unlockHint" that points at exactly where its "unlockTrigger" leads.`,
         () => ({ knowledgeDocs: [] }),
       ),
       this.step<WorkplaceAssetsResult>(
@@ -828,6 +832,9 @@ function assignDepartmentHeads(departments: FixtureDepartment[], stakeholders: F
   }
 }
 
+/** What KNOWLEDGE_SYSTEM asks for (6-8), used to turn the persona's locked fraction into a count for the prompt. */
+const TYPICAL_KNOWLEDGE_DOCS = 7;
+
 /** §8 — the only trigger vocabulary the unlock code actually matches; anything else is treated as unlocked rather than stranding a document forever. */
 const VALID_UNLOCK_TRIGGER = /^(meeting:any|task:any|stakeholder:[\w-]+)$/;
 /** Never lock a candidate out of orienting themselves — these stay visible whatever the model says. */
@@ -865,24 +872,20 @@ function sanitizeKnowledgeDocs(raw: unknown, persona: CompanyPersona): FixtureKn
     delete d.unlockTrigger;
   };
 
+  // Only the ceiling is enforced here, and deliberately so. Locking MORE than
+  // the model produced would mean inventing an unlock route for a document
+  // that has none — and a hint that disagrees with its trigger is the exact
+  // drift bug this codebase already fixed once (a doc saying "check in with
+  // Alice" whose trigger pointed somewhere else, unopenable however many
+  // people the candidate asked). The floor is handled where it can be handled
+  // honestly: the generation prompt is told the target, so the documents come
+  // back already carrying hints that match their routes.
   let lockedNow = docs.filter((d) => d.locked).length;
   for (const d of docs) {
     if (lockedNow <= target) break;
     if (d.locked) {
       unlock(d);
       lockedNow--;
-    }
-  }
-  // Locking more than the model chose is only safe where a real unlock route
-  // exists, so this promotes documents that already carry a valid trigger
-  // rather than inventing one — the hint and the trigger must agree, and a
-  // hint invented here could not.
-  for (const d of docs) {
-    if (lockedNow >= target) break;
-    const trigger = typeof d.unlockTrigger === 'string' ? d.unlockTrigger : '';
-    if (!d.locked && !NEVER_LOCKED_CATEGORIES.has(d.category.toLowerCase()) && VALID_UNLOCK_TRIGGER.test(trigger)) {
-      d.locked = true;
-      lockedNow++;
     }
   }
   return docs;
