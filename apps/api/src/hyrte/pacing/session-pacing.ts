@@ -211,6 +211,29 @@ export function rampedDelayMs(baseMs: number, session: { workspaceUnlockedAt?: D
  * investigate band was silent. Relative spacing between events — which the
  * generator does use deliberately — is preserved either way.
  */
+/**
+ * Where a meeting should actually land in the session.
+ *
+ * The generator thinks in "startInHours" — a meeting two hours out — which was
+ * persisted literally as `Date.now() + hours`. A session runs 30-60 MINUTES, so
+ * no generated meeting had ever begun while a candidate was in the workspace:
+ * meetings could only be entered by browsing to them, and §5's "when the
+ * meeting starts it should come like a call" was unreachable by construction.
+ *
+ * Meetings are mapped into §19's own stakeholder band (its 30-40 minute slot of
+ * a 60-minute session — "Stakeholder interaction / meeting"), spread evenly and
+ * ordered by the generator's intended sequence. The first one lands a little
+ * before that band so the candidate has met the room before the busiest stretch.
+ */
+export function meetingStartDelayMs(index: number, total: number, difficulty: string): number {
+  const planned = plannedDurationMs(difficulty);
+  const windowStart = Math.max(orientationEndMs(difficulty), planned * 0.4);
+  const windowEnd = planned * 0.72;
+  if (total <= 1) return Math.round(windowStart);
+  const step = (windowEnd - windowStart) / (total - 1);
+  return Math.round(windowStart + index * step);
+}
+
 export function scheduledEventDelayMs(rawOffsetSeconds: number, minRawOffsetSeconds: number, maxRawOffsetSeconds: number, difficulty: string): number {
   const planned = plannedDurationMs(difficulty);
   const windowStart = orientationEndMs(difficulty);

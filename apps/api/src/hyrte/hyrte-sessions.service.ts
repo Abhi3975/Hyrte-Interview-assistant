@@ -22,7 +22,7 @@ import { DecisionGraphService } from './dig/decision-graph.service';
 import { EvidenceGraphService } from './dig/evidence-graph.service';
 import { HyrteWorkTickService } from './work/work-tick.service';
 import { HyrteHeroTaskService } from './work/hero-task.service';
-import { ORIENTATION_UNTIL_FRACTION, elapsedFraction, orientationEndMs, phaseDescriptorAt, plannedDurationMs, rampedDelayMs, scheduledEventDelayMs } from './pacing/session-pacing';
+import { ORIENTATION_UNTIL_FRACTION, elapsedFraction, meetingStartDelayMs, orientationEndMs, phaseDescriptorAt, plannedDurationMs, rampedDelayMs, scheduledEventDelayMs } from './pacing/session-pacing';
 
 /** Part F8 What-Changed — camelCase KPI key → readable label. */
 function humanizeKey(key: string): string {
@@ -745,7 +745,31 @@ export class HyrteSessionsService {
       setTimeout(() => this.fireScheduledEvent(sessionId, event.id).catch((err) => this.logger.warn(err)), delay);
     }
 
-    // 2. Ignored-message clocks for the urgent content that was already
+    // 2. Meetings, re-timed into the real session. They were persisted at
+    //    generation as `now + startInHours`, which put every one of them
+    //    hours past the end of a 30-60 minute session — so no generated
+    //    meeting had ever started while a candidate was actually in the
+    //    workspace. Now spread across §19's stakeholder band, preserving the
+    //    generator's intended order.
+    const meetings = await this.prisma.hyrteCalendarEvent.findMany({
+      where: { sessionId, startedAt: null },
+      orderBy: { startAt: 'asc' },
+      select: { id: true, startAt: true, endAt: true },
+    });
+    const unlockedAt = session.workspaceUnlockedAt?.getTime() ?? Date.now();
+    await Promise.all(
+      meetings.map((m, i) => {
+        const delay = meetingStartDelayMs(i, meetings.length, session.difficulty);
+        const durationMs = Math.max(10 * 60_000, m.endAt.getTime() - m.startAt.getTime());
+        const startAt = new Date(unlockedAt + delay);
+        return this.prisma.hyrteCalendarEvent.update({
+          where: { id: m.id },
+          data: { startAt, endAt: new Date(startAt.getTime() + durationMs) },
+        });
+      }),
+    );
+
+    // 3. Ignored-message clocks for the urgent content that was already
     //    waiting when the candidate walked in. These used to be armed at
     //    generation time, so they had typically already expired before the
     //    candidate ever saw the message.
@@ -757,15 +781,15 @@ export class HyrteSessionsService {
       this.consequences.scheduleIgnoredCheck(sessionId, m.id, rampedDelayMs(randomIgnoredWindow(), session));
     }
 
-    // 3. Chaos Engine (§4.5), scaled by the calibration score (§4/Step 9's
+    // 4. Chaos Engine (§4.5), scaled by the calibration score (§4/Step 9's
     //    "adjust event difficulty weights") — now also paced, so a wave cannot
     //    land during the orientation window.
     this.consequences.scheduleChaosWave(sessionId, calibrationScore);
 
-    // 4. Part F3 Orchestrator — periodic Manager/CEO context reviews.
+    // 5. Part F3 Orchestrator — periodic Manager/CEO context reviews.
     this.workTicks.scheduleOrchestratorReview(sessionId);
 
-    // 5. Refinements doc §4 — ambient AI-to-AI Slack chatter.
+    // 6. Refinements doc §4 — ambient AI-to-AI Slack chatter.
     this.consequences.scheduleAmbientChatter(sessionId);
   }
 

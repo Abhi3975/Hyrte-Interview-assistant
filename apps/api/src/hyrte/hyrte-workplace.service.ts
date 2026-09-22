@@ -679,6 +679,54 @@ export class HyrteWorkplaceService {
     return this.meetings.getPreMeetingBrief(sessionId, eventId);
   }
 
+  /**
+   * §5 — "when the meeting starts it should come like a call", and a call can
+   * be declined. No candidate action is free (§4.17): the room notices, the
+   * most senior attendee follows up about it, and the choice is on the record.
+   * Deliberately NOT punished with a scripted penalty — declining a meeting to
+   * protect focus is sometimes the right call, and the evaluation should be
+   * able to see it either way.
+   */
+  async declineMeeting(sessionId: string, eventId: string, candidateId: string) {
+    await this.assertOwnership(sessionId, candidateId);
+    const event = await this.prisma.hyrteCalendarEvent.findFirst({ where: { id: eventId, sessionId } });
+    if (!event) throw new NotFoundException('Meeting not found');
+
+    const decision = await this.logDecision(
+      sessionId,
+      candidateId,
+      'meeting.decline',
+      { eventId },
+      `Declined the meeting "${event.title}"`,
+    );
+    this.evidence
+      .createEvidence({
+        hyrteSessionId: sessionId,
+        candidateId,
+        source: 'SIMULATION',
+        type: 'SIMULATION_DECISION',
+        rawText: `Declined the meeting "${event.title}" while it was starting, rather than joining.`,
+        metadata: { eventId },
+      })
+      .catch((e) => this.logger.warn(e));
+
+    // The room reacts in the candidate's inbox, in character — the same
+    // agent path every other stakeholder reaction uses.
+    const attendees = await this.prisma.hyrteStakeholder.findMany({ where: { id: { in: event.attendeeStakeholderIds } } });
+    if (attendees.length > 0) {
+      const host = attendees.reduce((a, b) => ((b.authorityLevel ?? 50) > (a.authorityLevel ?? 50) ? b : a));
+      this.scheduleAgentRespond(
+        sessionId,
+        host.id,
+        `(You were hosting "${event.title}" and the candidate declined as it started. React the way you actually would — ` +
+          `depending on how much you needed them there, that might be a shrug, a request for their input in writing, or ` +
+          `genuine irritation. Do not lecture.)`,
+        { kind: 'inbox', subject: `Re: ${event.title}` },
+      );
+    }
+    return { declined: true, decisionId: decision?.id ?? null };
+  }
+
   async attendMeeting(sessionId: string, eventId: string, candidateId: string) {
     await this.assertOwnership(sessionId, candidateId);
     const event = await this.prisma.hyrteCalendarEvent.findFirst({ where: { id: eventId, sessionId } });

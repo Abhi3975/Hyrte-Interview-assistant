@@ -196,6 +196,19 @@ export class HyrteWorkplaceController {
     return this.workplace.attendMeeting(sessionId, eventId, user.id);
   }
 
+  /**
+   * §5 — declining a call is a real choice with a real consequence, not a
+   * dismiss button. The people in that room notice.
+   */
+  @Post('calendar/:eventId/decline')
+  declineMeeting(
+    @Param('sessionId') sessionId: string,
+    @Param('eventId') eventId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.workplace.declineMeeting(sessionId, eventId, user.id);
+  }
+
   @Get('calendar/:eventId/messages')
   listMeetingMessages(
     @Param('sessionId') sessionId: string,

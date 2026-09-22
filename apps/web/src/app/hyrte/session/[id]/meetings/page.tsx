@@ -1,6 +1,7 @@
 'use client';
 
-import { use, useState } from 'react';
+import { use, useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { DashboardShell } from '@/components/dashboard-shell';
 import { HyrteSessionInfoCard } from '@/components/hyrte/session-info-card';
@@ -28,6 +29,11 @@ export default function HyrteMeetings({ params }: { params: Promise<{ id: string
   // shows its brief first; joining is a second, deliberate step.
   const [briefingId, setBriefingId] = useState<string | null>(null);
   const [joining, setJoining] = useState(false);
+  // §5 — arriving from the incoming call goes straight into the room; the
+  // call itself was the context beat, so the pre-meeting brief would just be
+  // a second gate on something already ringing.
+  const searchParams = useSearchParams();
+  const autoJoined = useRef(false);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
 
@@ -76,6 +82,16 @@ export default function HyrteMeetings({ params }: { params: Promise<{ id: string
       setSending(false);
     }
   }
+
+  useEffect(() => {
+    const target = searchParams.get('join');
+    if (!target || autoJoined.current || !events?.some((e) => e.id === target)) return;
+    autoJoined.current = true;
+    void join(target);
+    // `join` is stable enough for this one-shot effect; re-running it on every
+    // render would re-enter the meeting.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, events]);
 
   return (
     <DashboardShell
