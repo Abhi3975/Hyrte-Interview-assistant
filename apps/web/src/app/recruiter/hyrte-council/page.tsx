@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { DashboardShell } from '@/components/dashboard-shell';
+import { LiveDeliberationPanel } from '@/components/recruiter/live-deliberation';
 import { CheckIcon, AlertIcon, XIcon } from '@/components/icons';
 import { api, ApiError } from '@/lib/api';
 import {
@@ -98,8 +99,21 @@ export default function HyrteCouncilPage() {
 
       {!activeId && <div className="card text-sm text-black/60 dark:text-white/60">Load a session to see its Decision Council output.</div>}
 
+      {/* Deliberately OUTSIDE the notConvened gate: the live committee records
+          from the first interview question onward, so it has something to show
+          long before the post-interview council convenes — which is most of its
+          value to a recruiter watching a session in progress. */}
+      {activeId && (
+        <div className="mx-auto mb-6 max-w-4xl">
+          <LiveDeliberationPanel
+            endpoint={`/hyrte/sessions/${activeId}/council/live-deliberation`}
+            queryKey={['hyrte-council', 'live-deliberation', activeId]}
+          />
+        </div>
+      )}
+
       {activeId && notConvened && (
-        <div className="card text-sm text-black/60 dark:text-white/60">
+        <div className="card mx-auto max-w-4xl text-sm text-black/60 dark:text-white/60">
           The Decision Council hasn&apos;t convened for this session yet — it runs automatically once the candidate
           finishes their reflection interview.
         </div>

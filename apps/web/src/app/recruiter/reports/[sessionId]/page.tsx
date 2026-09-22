@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { DashboardShell } from '@/components/dashboard-shell';
 import { api } from '@/lib/api';
 import { ReportView, type ReportEvaluation, type ReportSession } from '@/components/report-view';
+import { LiveDeliberationPanel } from '@/components/recruiter/live-deliberation';
 
 interface ReportResponse { evaluation: ReportEvaluation; session: ReportSession }
 interface Timeline { recordingUrl: string | null }
@@ -36,6 +37,17 @@ export default function RecruiterReportPage({ params }: { params: Promise<{ sess
           <ReportView evaluation={data.evaluation} session={data.session} mode="recruiter" sessionId={sessionId} recordingUrl={timeline?.recordingUrl} />
         </div>
       )}
+
+      {/* The live committee's reasoning during the interview — rendered
+          regardless of whether the evaluation above is ready, since the
+          committee records from the first question onward. `no-print`: this is
+          internal reasoning, not part of the candidate-shareable report. */}
+      <div className="no-print mx-auto mt-8 max-w-4xl">
+        <LiveDeliberationPanel
+          endpoint={`/practice/session/${sessionId}/live-deliberation`}
+          queryKey={['ally-live-deliberation', sessionId]}
+        />
+      </div>
     </DashboardShell>
   );
 }

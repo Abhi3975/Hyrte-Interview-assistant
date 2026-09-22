@@ -504,3 +504,44 @@ export interface HeroTaskWorkspace {
   companyName: string;
   role: string;
 }
+
+// ── Live committee deliberation (interview-intelligence/) ──
+// What the silent panel was doing DURING the interview, as opposed to the
+// post-interview council debrief. Recruiter-only.
+
+export interface LiveCompetencyState {
+  key: string;
+  label: string;
+  priority: 'critical' | 'high' | 'medium';
+  evidenceLooksLike: string;
+  probe: boolean;
+  strength: 'none' | 'weak' | 'medium' | 'strong' | 'conflicting';
+  confidence: number;
+  turnsSpent: number;
+  notes: string[];
+  observations: string[];
+}
+
+export interface LiveDeliberationEntry {
+  atTurn: number;
+  speaker: string;
+  message: string;
+}
+
+export interface LiveCortexDirective {
+  atTurn: number;
+  targetCompetencyKey: string | null;
+  targetLabel: string | null;
+  objective: string;
+  probeAngle: string;
+  rationale: string;
+  readyToConclude: boolean;
+  overallConfidence: number;
+}
+
+export interface LiveDeliberation {
+  competencies: LiveCompetencyState[];
+  deliberation: LiveDeliberationEntry[];
+  directives: LiveCortexDirective[];
+  overallConfidence: number;
+}
