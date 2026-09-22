@@ -1,5 +1,6 @@
 import { Global, Module } from '@nestjs/common';
 import { LiveCortexService } from './live-cortex.service';
+import { CandidateMemoryService } from './candidate-memory.service';
 
 /**
  * Live committee steering, shared by HYRTE's reflection interview and Ally's
@@ -8,7 +9,7 @@ import { LiveCortexService } from './live-cortex.service';
  */
 @Global()
 @Module({
-  providers: [LiveCortexService],
-  exports: [LiveCortexService],
+  providers: [LiveCortexService, CandidateMemoryService],
+  exports: [LiveCortexService, CandidateMemoryService],
 })
 export class InterviewIntelligenceModule {}

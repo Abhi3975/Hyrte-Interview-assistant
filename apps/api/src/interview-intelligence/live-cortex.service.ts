@@ -2,8 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CompetencyDef, competenciesFromJobSuccessModel, resolveCompetencies } from './competency-model';
+import { CandidateMemoryService } from './candidate-memory.service';
 import {
   CortexDirective,
+  applyHistoricalScrutiny,
   EvidenceStrength,
   LiveInterviewState,
   TurnAssessment,
@@ -49,7 +51,10 @@ export type SessionKind = 'hyrte' | 'interview';
 export class LiveCortexService {
   private readonly logger = new Logger(LiveCortexService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly memory: CandidateMemoryService,
+  ) {}
 
   private async load(kind: SessionKind, sessionId: string): Promise<LiveInterviewState | null> {
     const row =
@@ -86,11 +91,19 @@ export class LiveCortexService {
    * simulation already demonstrated — the doc's Step 6 feeding Step 10, which
    * is the connection that was missing entirely.
    */
-  async ensureStarted(kind: SessionKind, sessionId: string, role: string): Promise<LiveInterviewState> {
+  async ensureStarted(kind: SessionKind, sessionId: string, role: string, candidateId?: string): Promise<LiveInterviewState> {
     const existing = await this.load(kind, sessionId);
     if (existing) return existing;
 
     let state = initLiveState(await this.resolveFor(kind, sessionId, role));
+
+    // Checklist #9 — what this candidate has repeatedly been marked down on
+    // before makes the committee MORE sceptical there, not less. Applied once
+    // at the start so it colours the whole interview.
+    if (candidateId) {
+      const weaknesses = await this.memory.getRecurringWeaknesses(candidateId, sessionId);
+      state = applyHistoricalScrutiny(state, this.memory.matchWeaknessesToCompetencies(weaknesses, state.competencies));
+    }
 
     if (kind === 'hyrte') {
       const plan = await this.prisma.investigationPlan.findUnique({ where: { hyrteSessionId: sessionId }, select: { areas: true } });

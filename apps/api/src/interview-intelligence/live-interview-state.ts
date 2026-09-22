@@ -43,6 +43,13 @@ export interface CompetencyState {
   label: string;
   priority: CompetencyPriority;
   evidenceLooksLike: string;
+  /**
+   * Checklist #9 — this candidate has been marked down on this across previous
+   * sessions. The committee treats it as needing MORE corroboration than usual
+   * before accepting it, not less: a recurring weakness that suddenly looks
+   * fine on one answer is exactly the claim worth testing hardest.
+   */
+  scrutinised?: boolean;
   /** False = assessed from how they answer, never the target of a question. See CompetencyDef.probe. */
   probe: boolean;
   strength: EvidenceStrength;
@@ -105,6 +112,9 @@ export const PROVEN_CONFIDENCE = 75;
  */
 export const MAX_TURNS_PER_COMPETENCY = 3;
 
+/** Checklist #9 — extra ground a historically-weak competency must make up before it counts as proven. */
+const SCRUTINY_PENALTY = 12;
+
 const PRIORITY_WEIGHT: Record<CompetencyPriority, number> = { critical: 1, high: 0.75, medium: 0.5 };
 
 /**
@@ -137,6 +147,18 @@ export function initLiveState(competencies: CompetencyDef[]): LiveInterviewState
     deliberation: [],
     turn: 0,
   };
+}
+
+/**
+ * Checklist #9 — marks the competencies this candidate has a history of being
+ * marked down on, so the committee holds them to a higher bar for the rest of
+ * the interview. A recurring weakness that suddenly looks fine on one answer is
+ * exactly the claim worth testing hardest.
+ */
+export function applyHistoricalScrutiny(state: LiveInterviewState, competencyKeys: string[]): LiveInterviewState {
+  if (competencyKeys.length === 0) return state;
+  const keys = new Set(competencyKeys);
+  return { ...state, competencies: state.competencies.map((c) => (keys.has(c.key) ? { ...c, scrutinised: true } : c)) };
 }
 
 /**
@@ -237,7 +259,7 @@ export function applyAssessments(state: LiveInterviewState, assessments: TurnAss
     if (!assessed) return { ...c, turnsSpent };
 
     const observations = [...c.observations, assessed.strength];
-    const confidence = computeConfidence(observations);
+    const confidence = Math.max(0, computeConfidence(observations) - (c.scrutinised ? SCRUTINY_PENALTY : 0));
     return {
       ...c,
       // A contradiction latches until a later observation resolves it — the

@@ -8,6 +8,7 @@ import { isRepetitive } from './repetition-detector';
 import { DecisionCouncilService } from '../council/decision-council.service';
 import { ReportIntelligenceService } from '../evaluation/report-intelligence.service';
 import { LiveCortexService } from '../../interview-intelligence/live-cortex.service';
+import { CandidateMemoryService } from '../../interview-intelligence/candidate-memory.service';
 
 const BASELINE = 50; // every stakeholder relationship field starts here (see HyrteStakeholder defaults)
 const MAX_EVIDENCE_IN_BRIEF = 20;
@@ -173,6 +174,7 @@ export class HyrteInterviewService {
     private readonly council: DecisionCouncilService,
     private readonly reportIntelligence: ReportIntelligenceService,
     private readonly cortex: LiveCortexService,
+    private readonly memory: CandidateMemoryService,
   ) {}
 
   private async assertOwnership(sessionId: string, candidateId: string) {
@@ -326,7 +328,7 @@ export class HyrteInterviewService {
     // Live committee steering — builds the hidden per-competency state and
     // seeds it from the Investigation Plan, so the interview does not spend
     // questions re-establishing what the simulation already demonstrated.
-    await this.cortex.ensureStarted('hyrte', sessionId, session.role).catch((e) => this.logger.warn(e));
+    await this.cortex.ensureStarted('hyrte', sessionId, session.role, candidateId).catch((e) => this.logger.warn(e));
     const { text: brief } = await this.buildEvidenceBrief(sessionId);
     const tone = getBaseTone(session.difficulty);
     const continuity = await this.getPracticeContinuityContext(candidateId, sessionId, session.sessionType);
@@ -453,8 +455,18 @@ export class HyrteInterviewService {
     // competencies are and are not yet evidenced; this is where it tells the
     // Interview Lead what the next question needs to achieve. `turnsRemaining`
     // lets it stop opening new ground it has no time to finish.
-    const liveState = await this.cortex.ensureStarted('hyrte', sessionId, session.role).catch(() => null);
+    const liveState = await this.cortex.ensureStarted('hyrte', sessionId, session.role, candidateId).catch(() => null);
     const steering = liveState ? this.cortex.buildDirectiveBlock(liveState, targetMax - candidateTurns) : null;
+
+    // Checklist #9 / Layer 3 — long-term memory. Delivered as text to say
+    // rather than a fact to optionally notice, and aimed at whatever the
+    // committee is probing right now so it lands as coaching rather than as a
+    // remark. Once per interview: a callback repeated is a criticism.
+    const alreadyCalledBackToHistory = /previous session|last time you|you have been working on/i.test(priorInterviewerText);
+    const historyCallback =
+      !alreadyCalledBackToHistory && candidateTurns >= 2
+        ? this.memory.buildCallback(await this.memory.getRecurringWeaknesses(candidateId, sessionId), steering?.directive.targetLabel)
+        : null;
     const assessmentInstruction = liveState ? this.cortex.buildAssessmentInstruction(liveState) : '';
 
     const result = await this.ai.completeJson<TurnResponse>(
@@ -492,6 +504,7 @@ export class HyrteInterviewService {
             '"evidenceAssessment": [{"competencyKey": string, "strength": "none"|"weak"|"medium"|"strong"|' +
             '"conflicting", "note": string}] (optional)}.' +
             (steering?.promptBlock ?? '') +
+            (historyCallback ? `\n\n${historyCallback}` : '') +
             assessmentInstruction,
         },
         { role: 'user', content: `${brief}\n\nConversation so far:\n${transcriptText}` },

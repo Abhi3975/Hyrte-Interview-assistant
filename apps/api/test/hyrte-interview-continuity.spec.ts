@@ -44,7 +44,14 @@ describe('HyrteInterviewService practice-continuity gate (Multi-Day Memory)', ()
       buildAssessmentInstruction: jest.fn().mockReturnValue(''),
       recordTurn: jest.fn().mockResolvedValue(null),
     };
-    return new HyrteInterviewService(prisma as any, ai as any, evidence as any, council as any, reportIntelligence as any, cortex as any);
+    // Checklist #9 long-term memory — this spec covers same-session
+    // continuity, so cross-session history is stubbed empty.
+    const memory = {
+      getRecurringWeaknesses: jest.fn().mockResolvedValue([]),
+      buildCallback: jest.fn().mockReturnValue(null),
+      matchWeaknessesToCompetencies: jest.fn().mockReturnValue([]),
+    };
+    return new HyrteInterviewService(prisma as any, ai as any, evidence as any, council as any, reportIntelligence as any, cortex as any, memory as any);
   }
 
   it('never queries cross-session history for an ASSESSMENT session', async () => {
