@@ -348,13 +348,30 @@ export class HyrteSessionsService {
     });
 
     await this.prisma.hyrteKnowledgeDoc.createMany({
-      data: fixture.knowledgeDocs.map((k) => ({
-        sessionId: session.id,
-        title: k.title,
-        body: k.body,
-        category: k.category,
-        relevantRoles: resolveRelevantRoles(k.category),
-      })),
+      data: fixture.knowledgeDocs.map((k) => {
+        // §8 — a "stakeholder:<rosterKey>" trigger has to become a real
+        // stakeholder id here, since roster keys only exist during
+        // generation. An unresolvable key would strand the document
+        // permanently, so it falls back to unlocked rather than unreachable.
+        const rawTrigger = k.unlockTrigger ?? '';
+        const resolved = rawTrigger.startsWith('stakeholder:')
+          ? (() => {
+              const id = keyToId.get(rawTrigger.slice('stakeholder:'.length));
+              return id ? `stakeholder:${id}` : null;
+            })()
+          : rawTrigger || null;
+        const locked = !!k.locked && !!resolved;
+        return {
+          sessionId: session.id,
+          title: k.title,
+          body: k.body,
+          category: k.category,
+          relevantRoles: resolveRelevantRoles(k.category),
+          locked,
+          unlockHint: locked ? k.unlockHint ?? null : null,
+          unlockTrigger: locked ? resolved : null,
+        };
+      }),
     });
     // createMany doesn't return the created rows — re-fetch once so every
     // message-creation site below can deterministically link to a real doc

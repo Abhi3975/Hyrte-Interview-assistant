@@ -249,6 +249,12 @@ export interface HyrteMeetingMessage {
 }
 
 export interface HyrteKnowledgeDoc {
+  /** §8 — visible as a titled, hinted placeholder until a real event surfaces it. Body is redacted server-side while locked. */
+  locked?: boolean;
+  unlockHint?: string | null;
+  unlockedBy?: string | null;
+  /** §9 — set on documents written back by a concluded meeting rather than seeded at generation. */
+  sourceEventId?: string | null;
   id: string;
   title: string;
   body: string;

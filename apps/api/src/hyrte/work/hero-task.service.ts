@@ -6,6 +6,7 @@ import { HyrteGateway } from '../hyrte.gateway';
 import { EvidenceGraphService } from '../dig/evidence-graph.service';
 import { DecisionGraphService } from '../dig/decision-graph.service';
 import { DeliverableSection, RoleTaskTemplate, findRoleTask, resolveRoleTasks } from '../generator/role-tasks';
+import { KnowledgeDiscoveryService } from '../knowledge/knowledge-discovery.service';
 
 /**
  * Founder feedback (WhatsApp, 7 Sep):
@@ -96,6 +97,7 @@ export class HyrteHeroTaskService {
     private readonly gateway: HyrteGateway,
     private readonly evidence: EvidenceGraphService,
     private readonly decisionGraph: DecisionGraphService,
+    private readonly discovery: KnowledgeDiscoveryService,
   ) {}
 
   private async assertOwnership(sessionId: string, candidateId: string) {
@@ -442,6 +444,12 @@ export class HyrteHeroTaskService {
       },
     });
     this.gateway.broadcast(sessionId, { type: 'task:update', task: updated });
+
+    // §8 — "something you only see once you are doing the work." Submitting a
+    // real deliverable is that moment.
+    await this.discovery
+      .unlock(sessionId, candidateId, ['task:any'], `Doing the work on "${item.title}"`)
+      .catch((e) => this.logger.warn(e));
 
     // The work itself is the strongest evidence this simulation produces — it
     // is the candidate doing the job, not talking about doing it.

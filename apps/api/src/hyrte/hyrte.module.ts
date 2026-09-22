@@ -25,6 +25,7 @@ import { HyrteActivityController } from './activity/activity.controller';
 import { HyrteActivityService } from './activity/activity.service';
 import { HyrteHeroTaskController } from './work/hero-task.controller';
 import { HyrteHeroTaskService } from './work/hero-task.service';
+import { KnowledgeDiscoveryService } from './knowledge/knowledge-discovery.service';
 
 @Module({
   // DigModule exports DecisionGraphService (the DIG write-path contract) for
@@ -57,6 +58,7 @@ import { HyrteHeroTaskService } from './work/hero-task.service';
     HyrteRecruiterService,
     HyrteActivityService,
     HyrteHeroTaskService,
+    KnowledgeDiscoveryService,
   ],
 })
 export class HyrteModule {}

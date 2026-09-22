@@ -585,8 +585,17 @@ const KNOWLEDGE_SYSTEM =
   '(2-4 sentences, concrete and specific to this company/roster — reference real stakeholder names or ' +
   'the company\'s actual situation where natural), "category": string (one of: "wiki", "prd", ' +
   '"hr_policy", "sales_deck", "roadmap", "backlog", "financial_report", "customer_history", ' +
-  '"meeting_notes") }]} (6-8 entries, spread across DIFFERENT categories — do not put more than 2 docs in ' +
-  'the same category). No prose outside the JSON.';
+  '"meeting_notes"), "locked": boolean, "unlockHint": string (ONLY when locked), "unlockTrigger": string ' +
+  '(ONLY when locked — exactly one of "meeting:any", "task:any", or "stakeholder:<rosterKey>") }]} ' +
+  '(6-8 entries, spread across DIFFERENT categories — do not put more than 2 docs in the same category).\n' +
+  'Refinements doc §8 — "everything else stays hidden until discovered": mark 2-3 of these "locked": true. ' +
+  'A locked document is one a new joiner would NOT be handed on day one but could genuinely reach — ' +
+  'something a specific colleague knows, something that only comes up in a meeting, or something you only ' +
+  'see once you are doing the work. Its "unlockHint" is a short, natural pointer to where it lives (e.g. ' +
+  '"Ask Priya about the vendor situation", "Comes up in the launch review") — never a puzzle, never a ' +
+  'restatement of the title. Its "unlockTrigger" must match where the hint points. The most foundational ' +
+  'documents (company overview, current metrics, the roadmap) must stay UNLOCKED — a candidate has to be ' +
+  'able to orient themselves. No prose outside the JSON.';
 
 const WORKPLACE_ASSETS_SYSTEM =
   'You are generating Step 5 (Workplace Assets — the content present the MOMENT the candidate opens the ' +
@@ -814,11 +823,45 @@ function assignDepartmentHeads(departments: FixtureDepartment[], stakeholders: F
   }
 }
 
+/** §8 — the only trigger vocabulary the unlock code actually matches; anything else is treated as unlocked rather than stranding a document forever. */
+const VALID_UNLOCK_TRIGGER = /^(meeting:any|task:any|stakeholder:[\w-]+)$/;
+/** Never lock a candidate out of orienting themselves — these stay visible whatever the model says. */
+const NEVER_LOCKED_CATEGORIES = new Set(['wiki', 'roadmap', 'financial_report']);
+
 function sanitizeKnowledgeDocs(raw: unknown): FixtureKnowledgeDoc[] {
-  return asRecords(raw)
+  const docs = asRecords(raw)
     .filter((k) => typeof k.title === 'string' && typeof k.body === 'string')
     .slice(0, CAPS.knowledgeDocs)
-    .map((k) => ({ title: String(k.title), body: String(k.body), category: typeof k.category === 'string' ? k.category : 'general' }));
+    .map((k) => {
+      const category = typeof k.category === 'string' ? k.category : 'general';
+      const trigger = typeof k.unlockTrigger === 'string' ? k.unlockTrigger.trim() : '';
+      // A locked document with no reachable trigger is worse than an unlocked
+      // one — it is content the candidate can see exists and can never open.
+      const locked = Boolean(k.locked) && !NEVER_LOCKED_CATEGORIES.has(category.toLowerCase()) && VALID_UNLOCK_TRIGGER.test(trigger);
+      return {
+        title: String(k.title),
+        body: String(k.body),
+        category,
+        locked,
+        ...(locked ? { unlockHint: typeof k.unlockHint === 'string' && k.unlockHint.trim() ? k.unlockHint.trim() : 'Someone here knows more about this.', unlockTrigger: trigger } : {}),
+      };
+    });
+
+  // Guarantee at least a couple of unlocked documents even if the model locked
+  // almost everything — a candidate who opens the KB and finds nothing readable
+  // has been given a puzzle, not a workplace.
+  const unlockedCount = docs.filter((d) => !d.locked).length;
+  if (unlockedCount < 2) {
+    for (const d of docs) {
+      if (docs.filter((x) => !x.locked).length >= 2) break;
+      if (d.locked) {
+        d.locked = false;
+        delete d.unlockHint;
+        delete d.unlockTrigger;
+      }
+    }
+  }
+  return docs;
 }
 
 function sanitizeInbox(raw: unknown, resolveKey: (k: unknown) => string): FixtureInboxMessage[] {

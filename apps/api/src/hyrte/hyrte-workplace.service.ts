@@ -25,6 +25,7 @@ import { OMIT_CANDIDATE_INTERNALS } from './dig/hidden-intention.util';
 import { HyrteWorkTickService } from './work/work-tick.service';
 import { HyrteCommandBarService, CommandBarResult } from './work/command-bar.service';
 import { HyrteMeetingService } from './meetings/meeting.service';
+import { KnowledgeDiscoveryService } from './knowledge/knowledge-discovery.service';
 import { isDocRelevantToRole } from './generator/knowledge-linking';
 
 /** §4.12 Layers 5/9/11 — chance a stakeholder NOT party to an exchange independently reacts to it. Not 100%: constant chatter reads as noise, not signal. */
@@ -46,6 +47,7 @@ export class HyrteWorkplaceService {
     private readonly workTicks: HyrteWorkTickService,
     private readonly commandBar: HyrteCommandBarService,
     private readonly meetings: HyrteMeetingService,
+    private readonly discovery: KnowledgeDiscoveryService,
   ) {}
 
   private async assertOwnership(sessionId: string, candidateId: string): Promise<void> {
@@ -379,6 +381,18 @@ export class HyrteWorkplaceService {
 
   async sendSlack(sessionId: string, dto: SendSlackMessageDto, candidateId: string) {
     await this.assertOwnership(sessionId, candidateId);
+    // §8 — "something a specific colleague knows." Actually going and talking
+    // to that person is the unlock; reading their name on the Stakeholders
+    // page is not.
+    if (dto.channel.startsWith('dm:')) {
+      const target = dto.channel.slice(3);
+      const stakeholder = await this.prisma.hyrteStakeholder.findUnique({ where: { id: target }, select: { name: true } });
+      if (stakeholder) {
+        await this.discovery
+          .unlock(sessionId, candidateId, [`stakeholder:${target}`], `Going directly to ${stakeholder.name} about it`)
+          .catch((e) => this.logger.warn(e));
+      }
+    }
     const created = await this.prisma.hyrteSlackMessage.create({
       data: { sessionId, channel: dto.channel, body: dto.body, fromStakeholderId: null },
     });
@@ -740,7 +754,16 @@ export class HyrteWorkplaceService {
       query ? { query } : {},
       query ? `Searched the knowledge base for "${query}"` : 'Consulted the knowledge base',
     );
-    return docs.map((d) => ({ ...d, relevantToYourRole: isDocRelevantToRole(d.relevantRoles, session.role) }));
+    // §8 — a locked document ships its title and hint but NEVER its body. The
+    // redaction happens here, server-side: sending the text and hiding it in
+    // the UI would put the whole point of information discovery one devtools
+    // tab away.
+    return docs.map((d) => ({
+      ...d,
+      body: d.locked ? '' : d.body,
+      unlockTrigger: undefined,
+      relevantToYourRole: isDocRelevantToRole(d.relevantRoles, session.role),
+    }));
   }
 
   // ── Stakeholders ──

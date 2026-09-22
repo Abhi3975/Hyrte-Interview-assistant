@@ -99,6 +99,12 @@ export interface FixtureKnowledgeDoc {
   title: string;
   body: string;
   category: string;
+  /** §8 — "everything else stays hidden until discovered." True = visible as a titled, hinted placeholder until a real event surfaces it. */
+  locked?: boolean;
+  /** Candidate-facing nudge shown on the locked card, e.g. "Ask during the launch review". */
+  unlockHint?: string;
+  /** Never shown: "meeting:any" | "stakeholder:<key>" | "task:any". Resolved to real ids at persistence time. */
+  unlockTrigger?: string;
 }
 
 /**

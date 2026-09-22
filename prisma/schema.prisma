@@ -1405,6 +1405,11 @@ model HyrteCalendarEvent {
   startedAt      DateTime?
   notes          String?
   notesGeneratedAt DateTime?
+  // §9's own shape — "Meeting Outcome: Decision / Owner / Deadline /
+  // Dependencies" — kept structured rather than buried in the prose notes, so
+  // the knowledge-base writeback and the report can both read the decision
+  // itself instead of re-parsing a summary.
+  outcome        Json?
   messages  HyrteMeetingMessage[]
 
   @@index([sessionId])
@@ -1438,6 +1443,28 @@ model HyrteKnowledgeDoc {
   // used to hide a doc — only to sort "your area" first. Empty = universal
   // (meeting notes, general wiki).
   relevantRoles String[] @default([])
+
+  // ── Discovery (Refinements doc §8) ──
+  // "Everything else stays hidden until discovered. This gives you
+  // information discovery as part of the evaluation." A locked doc is visible
+  // as a titled, hinted placeholder — the candidate knows it EXISTS and
+  // roughly how to reach it, but not what it says, so investigation is a real
+  // choice rather than a guessing game.
+  locked        Boolean   @default(false)
+  /** Candidate-facing nudge, e.g. "Ask during the vendor strategy review". Shown on the locked card. */
+  unlockHint    String?
+  /** What surfaces it: "meeting:<eventId>" | "meeting:any" | "stakeholder:<id>" | "task:any". Never shown to the candidate. */
+  unlockTrigger String?
+  unlockedAt    DateTime?
+  /** Human-readable account of what actually unlocked it — shown once revealed, and real evidence of investigation. */
+  unlockedBy    String?
+
+  // §9 — "Meeting notes should dynamically update the knowledge base."
+  // Set on docs written back by a concluded meeting rather than seeded at
+  // world generation, so the KB visibly grows from what actually happened.
+  sourceEventId String?
+
+  createdAt DateTime @default(now())
 
   @@index([sessionId])
 }

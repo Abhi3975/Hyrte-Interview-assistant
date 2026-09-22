@@ -26,17 +26,51 @@ const CATEGORY_LABELS: Record<string, string> = {
 function DocCard({ doc, open, onToggle }: { doc: HyrteKnowledgeDoc; open: boolean; onToggle: () => void }) {
   return (
     <div className="card">
-      <button className="flex w-full items-center justify-between text-left" onClick={onToggle}>
-        <div>
+      <button className="flex w-full items-center justify-between gap-3 text-left" onClick={onToggle}>
+        <div className="min-w-0">
           <div className="font-medium">{doc.title}</div>
           <div className="text-xs uppercase text-black/40 dark:text-white/40">{CATEGORY_LABELS[doc.category] ?? doc.category}</div>
         </div>
+        {/* §9 — the KB visibly grows from what actually happened, so a document
+            that arrived from a meeting says so. */}
+        {doc.sourceEventId && (
+          <span className="shrink-0 rounded-full bg-brand-500/15 px-2 py-0.5 text-[10px] font-medium text-brand-600 dark:text-brand-400">
+            from a meeting
+          </span>
+        )}
       </button>
+      {/* How they got to it — real evidence of investigation, worth showing back. */}
+      {doc.unlockedBy && <div className="mt-1 text-[11px] text-black/40 dark:text-white/40">Uncovered by: {doc.unlockedBy}</div>}
       {open && (
         <p className="mt-3 whitespace-pre-wrap border-t border-black/5 pt-3 text-sm text-black/80 dark:border-white/10 dark:text-white/80">
           {doc.body}
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * §8 — "Everything else stays hidden until discovered." A locked document is
+ * deliberately NOT invisible: the candidate can see it exists and roughly
+ * where it lives, so choosing whether to go after it is a real decision about
+ * where to spend limited time. Its body is redacted server-side, not hidden
+ * here — sending the text and styling it away would put the whole point one
+ * devtools tab away.
+ */
+function LockedDocCard({ doc }: { doc: HyrteKnowledgeDoc }) {
+  return (
+    <div className="card border-dashed opacity-80">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="font-medium text-black/60 dark:text-white/60">{doc.title}</div>
+          <div className="text-xs uppercase text-black/35 dark:text-white/35">{CATEGORY_LABELS[doc.category] ?? doc.category}</div>
+        </div>
+        <span className="shrink-0 rounded-full bg-black/5 px-2 py-0.5 text-[10px] font-medium text-black/45 dark:bg-white/10 dark:text-white/45">
+          not disclosed yet
+        </span>
+      </div>
+      {doc.unlockHint && <p className="mt-2 text-xs text-black/55 dark:text-white/55">{doc.unlockHint}</p>}
     </div>
   );
 }
@@ -76,8 +110,10 @@ export default function HyrteKnowledgeBase({ params }: { params: Promise<{ id: s
     if (docId && docs?.some((d) => d.id === docId)) setOpenId(docId);
   }, [searchParams, docs]);
 
-  const relevant = docs?.filter((d) => d.relevantToYourRole) ?? [];
-  const other = docs?.filter((d) => !d.relevantToYourRole) ?? [];
+  const available = docs?.filter((d) => !d.locked) ?? [];
+  const locked = docs?.filter((d) => d.locked) ?? [];
+  const relevant = available.filter((d) => d.relevantToYourRole);
+  const other = available.filter((d) => !d.relevantToYourRole);
 
   return (
     <DashboardShell
@@ -114,11 +150,27 @@ export default function HyrteKnowledgeBase({ params }: { params: Promise<{ id: s
           <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-black/40 dark:text-white/40">Other documents</div>
         )}
         <div className="space-y-2">
-          {(query ? docs ?? [] : other).map((d) => (
+          {(query ? available : other).map((d) => (
             <DocCard key={d.id} doc={d} open={openId === d.id} onToggle={() => setOpenId(openId === d.id ? null : d.id)} />
           ))}
         </div>
       </div>
+
+      {locked.length > 0 && (
+        <div className="mt-6">
+          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-black/40 dark:text-white/40">
+            Not disclosed yet · {locked.length}
+          </div>
+          <p className="mb-2 text-xs text-black/45 dark:text-white/45">
+            These exist, but nobody has handed them to you. Go and find them.
+          </p>
+          <div className="space-y-2">
+            {locked.map((d) => (
+              <LockedDocCard key={d.id} doc={d} />
+            ))}
+          </div>
+        </div>
+      )}
 
       {docs?.length === 0 && (
         <p className="text-sm text-black/50 dark:text-white/50">

@@ -12,6 +12,7 @@ import {
   formatCandidateRecord,
   formatPriorStatements,
 } from './meeting-context';
+import { KnowledgeDiscoveryService } from '../knowledge/knowledge-discovery.service';
 
 /**
  * Refinements doc §7 — "Live AI Meetings... Discussions evolve naturally,
@@ -54,6 +55,11 @@ interface MeetingTurnResult {
 
 interface MeetingNotesResult {
   notes?: string;
+  /** §9's own shape — "Meeting Outcome: Decision / Owner / Deadline / Dependencies". */
+  decision?: string;
+  owner?: string;
+  deadline?: string;
+  dependencies?: string[];
 }
 
 @Injectable()
@@ -66,6 +72,7 @@ export class HyrteMeetingService {
     private readonly gateway: HyrteGateway,
     private readonly evidence: EvidenceGraphService,
     private readonly decisionGraph: DecisionGraphService,
+    private readonly discovery: KnowledgeDiscoveryService,
   ) {}
 
   /** Call the first time a candidate joins a given meeting — starts the live discussion. Rejoining does nothing (idempotent at the call site via event.startedAt). */
@@ -373,7 +380,11 @@ export class HyrteMeetingService {
           content:
             'Summarize this workplace meeting transcript into real meeting notes — what was discussed, what was ' +
             'decided, and any action items — in 2-4 sentences, written as a colleague would jot them down ' +
-            'afterward for someone who missed it. Return ONLY JSON: {"notes": string}.',
+            'afterward for someone who missed it. Also extract the outcome as structured fields where the ' +
+            'meeting genuinely produced one. Return ONLY JSON: {"notes": string, "decision": string (the ' +
+            'single concrete thing that was decided — omit entirely if the meeting reached no decision, do ' +
+            'NOT invent one), "owner": string (who carries it), "deadline": string (when, as stated — omit if ' +
+            'never discussed), "dependencies": string[] (teams or people it depends on)}.',
         },
         { role: 'user', content: `Meeting: "${event.title}". Transcript:\n${transcript.join('\n')}` },
       ],
@@ -381,8 +392,26 @@ export class HyrteMeetingService {
     );
 
     const notes = result.notes?.trim() || 'No clear decisions were reached in this meeting.';
-    const updated = await this.prisma.hyrteCalendarEvent.update({ where: { id: eventId }, data: { notes, notesGeneratedAt: new Date() } });
+    const outcome = result.decision?.trim()
+      ? {
+          decision: result.decision.trim(),
+          owner: result.owner?.trim() || null,
+          deadline: result.deadline?.trim() || null,
+          dependencies: Array.isArray(result.dependencies) ? result.dependencies.filter((d): d is string => typeof d === 'string').slice(0, 4) : [],
+        }
+      : null;
+    const updated = await this.prisma.hyrteCalendarEvent.update({
+      where: { id: eventId },
+      data: { notes, notesGeneratedAt: new Date(), outcome: (outcome ?? undefined) as never },
+    });
     this.gateway.broadcast(sessionId, { type: 'meeting:concluded', event: updated });
+
+    // §9 — "Knowledge Base automatically updates… but only relevant
+    // information should enter the active context." Writes the outcome back as
+    // a real document and surfaces anything gated behind attending a meeting.
+    await this.discovery
+      .recordMeetingOutcome(sessionId, candidateId, { id: eventId, title: event.title }, notes, outcome)
+      .catch((e) => this.logger.warn(errMsg(e)));
 
     this.evidence
       .createEvidence({
