@@ -105,7 +105,7 @@ export class HyrteMeetingService {
    * people actually said to the candidate before the meeting, drawn from the
    * real inbox and Slack history rather than invented.
    */
-  private async getPriorStatements(sessionId: string, attendees: { id: string; name: string }[]): Promise<PriorStatement[]> {
+  private async getPriorStatements(sessionId: string, attendees: { id: string; name: string }[], topic: string): Promise<PriorStatement[]> {
     const ids = attendees.map((a) => a.id);
     if (ids.length === 0) return [];
     const nameById = new Map(attendees.map((a) => [a.id, a.name]));
@@ -123,12 +123,35 @@ export class HyrteMeetingService {
         select: { fromStakeholderId: true, body: true, createdAt: true },
       }),
     ]);
-    return [
+    const all = [
       ...inbox.map((m) => ({ speaker: nameById.get(m.fromStakeholderId!) ?? 'A colleague', at: m.createdAt, body: `${m.subject} — ${m.body}` })),
       ...slack.map((m) => ({ speaker: nameById.get(m.fromStakeholderId!) ?? 'A colleague', at: m.createdAt, body: m.body })),
-    ]
-      .sort((a, b) => a.at.getTime() - b.at.getTime())
-      .slice(-10);
+    ];
+
+    // Rank by how much each statement actually bears on THIS meeting, not raw
+    // recency. Caught live: the world's ambient-chatter generator
+    // (generator/ambient-noise.ts) deliberately produces filler — a snacks
+    // survey, a coffee run, a timesheet reminder — and a recency-only window
+    // let that crowd out the statements that mattered. §7's own worked example
+    // is entirely substantive.
+    const topicWords = new Set(
+      `${topic}`
+        .toLowerCase()
+        .split(/\W+/)
+        .filter((w) => w.length > 4),
+    );
+    const score = (body: string) => {
+      const words = body.toLowerCase().split(/\W+/);
+      return words.filter((w) => topicWords.has(w)).length;
+    };
+    return all
+      .map((s) => ({ s, relevance: score(s.body) }))
+      // Relevance first, recency as the tiebreak — so a topical message from
+      // an hour ago beats "coffee run in 10" from a minute ago.
+      .sort((a, b) => b.relevance - a.relevance || b.s.at.getTime() - a.s.at.getTime())
+      .slice(0, 6)
+      .map((x) => x.s)
+      .sort((a, b) => a.at.getTime() - b.at.getTime());
   }
 
   /**
@@ -169,7 +192,7 @@ export class HyrteMeetingService {
       where: { id: { in: event.attendeeStakeholderIds } },
       select: { id: true, name: true, role: true, department: true },
     });
-    const statements = await this.getPriorStatements(sessionId, attendees);
+    const statements = await this.getPriorStatements(sessionId, attendees, `${event.title} ${event.agenda ?? ''}`);
 
     // Documents that bear on this meeting — matched on real title/agenda word
     // overlap rather than an LLM call, so the brief loads instantly and is
@@ -245,7 +268,7 @@ export class HyrteMeetingService {
     // read as "another chatbot conversation": nobody in the room had anything
     // of their own to defend.
     const [priorStatements, candidateRecord] = await Promise.all([
-      this.getPriorStatements(sessionId, attendees),
+      this.getPriorStatements(sessionId, attendees, `${event.title} ${event.agenda ?? ''}`),
       this.getCandidateRecord(sessionId),
     ]);
     const attendeeCards = attendees.map((a) => buildAttendeeCard(a as MeetingAttendee, companyState)).join('\n\n');
@@ -284,7 +307,16 @@ export class HyrteMeetingService {
       { temperature: 0.85, maxTokens: 350 },
     );
 
-    const speaker = attendees.find((a) => a.id === result.stakeholderKey) ?? attendees[turnNumber % attendees.length];
+    // Live-verified bug: the model picked the same attendee for two
+    // consecutive turns and the second turn largely restated the first, while
+    // the person whose own capacity had just been misrepresented never got to
+    // answer. A real room does not work that way. Deterministic guard rather
+    // than a prompt plea — whoever spoke last cannot take the next turn while
+    // anyone else is in the room.
+    const lastSpeakerId = [...priorMessages].reverse().find((m) => m.fromStakeholderId)?.fromStakeholderId ?? null;
+    const eligible = attendees.length > 1 ? attendees.filter((a) => a.id !== lastSpeakerId) : attendees;
+    const picked = eligible.find((a) => a.id === result.stakeholderKey);
+    const speaker = picked ?? eligible[turnNumber % eligible.length];
     const body = result.body?.trim();
     if (body) {
       const created = await this.prisma.hyrteMeetingMessage.create({ data: { sessionId, eventId, fromStakeholderId: speaker.id, body } });
