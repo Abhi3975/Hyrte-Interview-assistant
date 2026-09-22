@@ -263,6 +263,8 @@ export interface HyrteKnowledgeDoc {
   category: string;
   /** Refinements doc §8 — deterministic, never used to hide a doc, only to sort "your area" first. */
   relevantToYourRole: boolean;
+  /** §9 — lets the KB show what has arrived since the candidate started working. */
+  createdAt?: string;
 }
 
 export const ACTION_LABELS: Record<string, string> = {

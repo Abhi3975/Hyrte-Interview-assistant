@@ -8,7 +8,24 @@ import { HyrteSessionInfoCard } from '@/components/hyrte/session-info-card';
 import { useHyrteNav } from '@/lib/hyrte-nav';
 import { ActivityCenter } from '@/components/hyrte/activity-center';
 import { api } from '@/lib/api';
-import { HyrteKnowledgeDoc } from '@/lib/hyrte-types';
+import { HyrteKnowledgeDoc, HyrteSession } from '@/lib/hyrte-types';
+
+/**
+ * Refinements doc §8 — "Knowledge Base should be objective-specific. Don't give
+ * users a giant wiki. Instead: Company / Product / Customers / Engineering…"
+ *
+ * The doc's own grouping, mapped from the categories the generator actually
+ * produces. Grouping is presentation, so it lives here rather than in the API —
+ * the documents and their categories are unchanged.
+ */
+const AREAS: { key: string; label: string; blurb: string; categories: string[] }[] = [
+  { key: 'company', label: 'Company', blurb: 'How the business works and where it stands', categories: ['wiki', 'financial_report'] },
+  { key: 'product', label: 'Product', blurb: 'What is being built, and what is queued', categories: ['prd', 'roadmap', 'backlog'] },
+  { key: 'customers', label: 'Customers', blurb: 'Who buys it and what they are saying', categories: ['customer_history', 'sales_deck'] },
+  { key: 'people', label: 'People & process', blurb: 'How the team operates', categories: ['hr_policy'] },
+  { key: 'decisions', label: 'Decisions & meetings', blurb: 'What has already been agreed', categories: ['meeting_notes'] },
+];
+const AREA_FOR_CATEGORY = new Map(AREAS.flatMap((a) => a.categories.map((c) => [c, a.key])));
 
 const CATEGORY_LABELS: Record<string, string> = {
   prd: 'PRD',
@@ -98,6 +115,12 @@ export default function HyrteKnowledgeBase({ params }: { params: Promise<{ id: s
     return () => clearTimeout(t);
   }, [query]);
 
+  // §8 — "Knowledge Base — Product Launch": the KB is scoped to what the
+  // candidate is actually here to do, so it names the objective.
+  const { data: session } = useQuery({
+    queryKey: ['hyrte', 'session', id],
+    queryFn: () => api.get<HyrteSession>(`/hyrte/sessions/${id}`),
+  });
   const { data: docs } = useQuery({
     queryKey: ['hyrte', 'knowledge-base', id, debouncedQuery],
     queryFn: () => api.get<HyrteKnowledgeDoc[]>(`/hyrte/sessions/${id}/knowledge-base${debouncedQuery ? `?q=${encodeURIComponent(debouncedQuery)}` : ''}`),
@@ -112,8 +135,22 @@ export default function HyrteKnowledgeBase({ params }: { params: Promise<{ id: s
 
   const available = docs?.filter((d) => !d.locked) ?? [];
   const locked = docs?.filter((d) => d.locked) ?? [];
-  const relevant = available.filter((d) => d.relevantToYourRole);
-  const other = available.filter((d) => !d.relevantToYourRole);
+
+  // §9 — "Knowledge Base automatically updates." Anything created after the
+  // candidate entered the workspace arrived DURING the session: a meeting they
+  // sat in wrote it, or investigating surfaced it. Worth saying so, because a
+  // knowledge base that silently grows is indistinguishable from one that does
+  // not.
+  const unlockedAt = session?.workspaceUnlockedAt ? new Date(session.workspaceUnlockedAt).getTime() : null;
+  const arrivedDuringSession = unlockedAt
+    ? available.filter((d) => (d.createdAt ? new Date(d.createdAt).getTime() > unlockedAt + 5_000 : false) || !!d.unlockedBy)
+    : [];
+
+  const grouped = AREAS.map((area) => ({
+    ...area,
+    docs: available.filter((d) => AREA_FOR_CATEGORY.get(d.category.toLowerCase()) === area.key),
+  })).filter((a) => a.docs.length > 0);
+  const ungrouped = available.filter((d) => !AREA_FOR_CATEGORY.has(d.category.toLowerCase()));
 
   return (
     <DashboardShell
@@ -127,6 +164,13 @@ export default function HyrteKnowledgeBase({ params }: { params: Promise<{ id: s
       backHref="/candidate"
       backLabel="Exit"
     >
+      {session?.missionBrief?.objective && (
+        <div className="mb-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-black/40 dark:text-white/40">What you are here to do</div>
+          <p className="mt-0.5 text-sm text-black/70 dark:text-white/70">{session.missionBrief.objective}</p>
+        </div>
+      )}
+
       <input
         className="mb-4 w-full rounded-lg border border-black/10 bg-transparent px-3 py-2 text-sm dark:border-white/10"
         placeholder="Search documents…"
@@ -134,27 +178,61 @@ export default function HyrteKnowledgeBase({ params }: { params: Promise<{ id: s
         onChange={(e) => setQuery(e.target.value)}
       />
 
-      {!query && relevant.length > 0 && (
-        <div className="mb-6">
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-black/40 dark:text-white/40">Relevant to your role</div>
-          <div className="space-y-2">
-            {relevant.map((d) => (
-              <DocCard key={d.id} doc={d} open={openId === d.id} onToggle={() => setOpenId(openId === d.id ? null : d.id)} />
-            ))}
+      {/* §9 — what has arrived since they started working. */}
+      {!query && arrivedDuringSession.length > 0 && (
+        <div className="mb-5 rounded-lg border border-brand-500/30 bg-brand-500/[0.06] p-3">
+          <div className="text-xs font-semibold uppercase tracking-wide text-brand-600 dark:text-brand-400">
+            {arrivedDuringSession.length} {arrivedDuringSession.length === 1 ? 'document has' : 'documents have'} arrived since you started
           </div>
+          <ul className="mt-1.5 space-y-0.5">
+            {arrivedDuringSession.slice(0, 4).map((d) => (
+              <li key={d.id} className="text-sm text-black/70 dark:text-white/70">
+                {d.title}
+                <span className="text-black/40 dark:text-white/40">
+                  {d.sourceEventId ? ' · written up after a meeting' : d.unlockedBy ? ` · ${d.unlockedBy.toLowerCase()}` : ''}
+                </span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
-      <div>
-        {!query && other.length > 0 && (
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-black/40 dark:text-white/40">Other documents</div>
-        )}
+      {query ? (
         <div className="space-y-2">
-          {(query ? available : other).map((d) => (
+          {available.map((d) => (
             <DocCard key={d.id} doc={d} open={openId === d.id} onToggle={() => setOpenId(openId === d.id ? null : d.id)} />
           ))}
         </div>
-      </div>
+      ) : (
+        <div className="space-y-6">
+          {grouped.map((area) => (
+            <div key={area.key}>
+              <div className="mb-0.5 flex items-baseline gap-2">
+                <h3 className="text-sm font-semibold">{area.label}</h3>
+                <span className="text-xs text-black/40 dark:text-white/40">
+                  {area.docs.length} {area.docs.length === 1 ? 'doc' : 'docs'}
+                </span>
+              </div>
+              <p className="mb-2 text-xs text-black/45 dark:text-white/45">{area.blurb}</p>
+              <div className="space-y-2">
+                {area.docs.map((d) => (
+                  <DocCard key={d.id} doc={d} open={openId === d.id} onToggle={() => setOpenId(openId === d.id ? null : d.id)} />
+                ))}
+              </div>
+            </div>
+          ))}
+          {ungrouped.length > 0 && (
+            <div>
+              <h3 className="mb-2 text-sm font-semibold">Everything else</h3>
+              <div className="space-y-2">
+                {ungrouped.map((d) => (
+                  <DocCard key={d.id} doc={d} open={openId === d.id} onToggle={() => setOpenId(openId === d.id ? null : d.id)} />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {locked.length > 0 && (
         <div className="mt-6">
