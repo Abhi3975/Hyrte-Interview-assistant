@@ -36,7 +36,15 @@ describe('HyrteInterviewService practice-continuity gate (Multi-Day Memory)', ()
     const council = { convene: jest.fn() };
     const reportIntelligence = { compute: jest.fn() };
 
-    return new HyrteInterviewService(prisma as any, ai as any, evidence as any, council as any, reportIntelligence as any);
+    // Live committee steering — these specs assert on continuity/callback
+    // behaviour, not on the panel, so it is stubbed to a no-op.
+    const cortex = {
+      ensureStarted: jest.fn().mockResolvedValue(null),
+      buildDirectiveBlock: jest.fn(),
+      buildAssessmentInstruction: jest.fn().mockReturnValue(''),
+      recordTurn: jest.fn().mockResolvedValue(null),
+    };
+    return new HyrteInterviewService(prisma as any, ai as any, evidence as any, council as any, reportIntelligence as any, cortex as any);
   }
 
   it('never queries cross-session history for an ASSESSMENT session', async () => {

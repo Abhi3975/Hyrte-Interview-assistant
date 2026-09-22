@@ -65,13 +65,13 @@ describe('computeResponseDelayMs (refinements doc §15)', () => {
     const delay = computeResponseDelayMs(
       baseInput({ role: 'Customer Support Specialist', stress: 0, urgency: 100, motivation: 100, openWorkItemCount: 0, messageUrgent: true }),
     );
-    expect(delay).toBeGreaterThanOrEqual(10_000);
+    expect(delay).toBeGreaterThanOrEqual(4_000);
   });
 
   it('never exceeds the ceiling, even for the slowest/busiest/most stressed combination', () => {
     const delay = computeResponseDelayMs(
       baseInput({ role: 'CEO', stress: 100, urgency: 0, motivation: 0, openWorkItemCount: 50, messageUrgent: false }),
     );
-    expect(delay).toBeLessThanOrEqual(300_000);
+    expect(delay).toBeLessThanOrEqual(30_000);
   });
 });

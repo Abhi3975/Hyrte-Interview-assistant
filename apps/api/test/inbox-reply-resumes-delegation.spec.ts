@@ -37,6 +37,8 @@ describe('HyrteWorkplaceService.replyInbox resumes a clarification-paused delega
     const commandBar = {};
     const meetings = {};
 
+    // §8 knowledge discovery — unlocking is a side effect these specs don't assert on.
+    const discovery = { unlock: jest.fn().mockResolvedValue(0) };
     const service = new HyrteWorkplaceService(
       prisma as any,
       gateway as any,
@@ -47,6 +49,7 @@ describe('HyrteWorkplaceService.replyInbox resumes a clarification-paused delega
       workTicks as any,
       commandBar as any,
       meetings as any,
+      discovery as any,
     );
     return { service, workItemUpdate, workTicks, prisma };
   }

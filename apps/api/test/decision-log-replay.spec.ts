@@ -22,6 +22,8 @@ describe('listDecisionLog causal enrichment (refinements doc §10)', () => {
     const workTicks = {};
     const commandBar = {};
     const meetings = {};
+    // §8 knowledge discovery — unlocking is a side effect these specs don't assert on.
+    const discovery = { unlock: jest.fn().mockResolvedValue(0) };
     const service = new HyrteWorkplaceService(
       prisma as any,
       gateway as any,
@@ -32,6 +34,7 @@ describe('listDecisionLog causal enrichment (refinements doc §10)', () => {
       workTicks as any,
       commandBar as any,
       meetings as any,
+      discovery as any,
     );
     return { service, prisma };
   }
