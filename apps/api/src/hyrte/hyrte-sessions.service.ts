@@ -15,7 +15,7 @@ import {
 } from './generator/simulation-generator.service';
 import { enforceWarmupVariety, pickAxes } from './generator/question-variety';
 import { resolveSignatureArtifact } from './generator/signature-artifacts';
-import { findMentionedKnowledgeDoc, resolveRelevantRoles } from './generator/knowledge-linking';
+import { describeUnlockRoute, findMentionedKnowledgeDoc, resolveRelevantRoles } from './generator/knowledge-linking';
 import { WorldStabilizationError } from './generator/world-stabilization';
 import { HyrteConsequenceService, randomIgnoredWindow } from './consequences/consequence.service';
 import { DecisionGraphService } from './dig/decision-graph.service';
@@ -368,7 +368,16 @@ export class HyrteSessionsService {
           category: k.category,
           relevantRoles: resolveRelevantRoles(k.category),
           locked,
-          unlockHint: locked ? k.unlockHint ?? null : null,
+          // The hint is DERIVED from the resolved trigger, never taken from the
+          // model's own hint field. Caught live on production: the model wrote
+          // "Check in with Alice to discuss the recent sprints" against a
+          // trigger that was not Alice at all — DMing every stakeholder in the
+          // roster failed to open it. A hint that sends a candidate somewhere
+          // the trigger does not match is worse than no hint: in a timed
+          // assessment it burns the one resource they cannot get back, and it
+          // makes a working feature look broken. Two independently-written
+          // free-text fields will drift; one derived from the other cannot.
+          unlockHint: locked ? describeUnlockRoute(resolved!, stakeholders.find((s) => s.id === resolved!.slice('stakeholder:'.length))?.name) : null,
           unlockTrigger: locked ? resolved : null,
         };
       }),

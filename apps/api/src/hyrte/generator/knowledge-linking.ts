@@ -100,3 +100,25 @@ export function findMentionedKnowledgeDoc(
   }
   return undefined;
 }
+
+/**
+ * Refinements doc §8 — the candidate-facing pointer on a locked document.
+ *
+ * Composed in code from the REAL resolved trigger rather than taken from the
+ * model's own free-text hint. Found live on production: the model produced the
+ * hint "Check in with Alice to discuss the recent sprints" on a document whose
+ * trigger was not Alice — DMing every stakeholder in the roster left it locked.
+ * Two independently-generated fields drift; a derived one cannot.
+ *
+ * Deliberately a nudge rather than an instruction ("someone on the engineering
+ * side" / "Alice Thompson knows about this") — §8 wants discovery to be a real
+ * choice about where to spend time, not a checklist step.
+ */
+export function describeUnlockRoute(trigger: string, stakeholderName?: string): string {
+  if (trigger.startsWith('stakeholder:')) {
+    return stakeholderName ? `${stakeholderName} knows about this — you would have to ask.` : 'Someone on the team knows about this — you would have to ask.';
+  }
+  if (trigger === 'meeting:any') return 'This tends to come up once people are in a room together.';
+  if (trigger === 'task:any') return "You'll see this once you're actually doing the work.";
+  return 'Nobody has handed you this yet.';
+}
