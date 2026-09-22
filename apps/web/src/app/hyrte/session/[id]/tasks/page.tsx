@@ -5,7 +5,8 @@ import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { DashboardShell } from '@/components/dashboard-shell';
 import { HyrteSessionInfoCard } from '@/components/hyrte/session-info-card';
-import { hyrteNav } from '@/lib/hyrte-nav';
+import { useHyrteNav } from '@/lib/hyrte-nav';
+import { ActivityCenter } from '@/components/hyrte/activity-center';
 import { api } from '@/lib/api';
 import { useHyrteStore } from '@/store/hyrte';
 import { HyrteWorkItem, WorkItemStage } from '@/lib/hyrte-types';
@@ -35,6 +36,8 @@ const COLUMNS: { stage: WorkItemStage; label: string }[] = [
 /** Part E2 — Work Pipeline: stage columns, count chips, one action per card, items move only from real activity. */
 export default function HyrteWorkPipeline({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  // Live unread badges on the sidebar surfaces (Refinements doc §4).
+  const nav = useHyrteNav(id);
   const { taskVersion } = useHyrteStore();
   const queryClient = useQueryClient();
 
@@ -56,7 +59,8 @@ export default function HyrteWorkPipeline({ params }: { params: Promise<{ id: st
       variant="hyrte-os"
       title="Work Pipeline"
       requiredRoles={['CANDIDATE']}
-      navOverride={hyrteNav(id)}
+      navOverride={nav}
+      headerExtra={<ActivityCenter sessionId={id} />}
       sidebarExtra={<HyrteSessionInfoCard sessionId={id} />}
       backHref="/candidate"
       backLabel="Exit"
@@ -99,7 +103,15 @@ export default function HyrteWorkPipeline({ params }: { params: Promise<{ id: st
                       <div className="mt-1 text-[11px] text-black/40 dark:text-white/40">Due {new Date(item.dueAt).toLocaleDateString()}</div>
                     )}
                     <div className="mt-2">
-                      {item.stage === 'WAITING_REVIEW' && !item.ownerIsCandidate ? (
+                      {/* Refinements doc, Tasks §4 — a Hero Task has no
+                          "mark done" button anywhere: its status follows the
+                          work actually produced in its workspace and the
+                          reviewer's real verdict, never a checkbox. */}
+                      {item.isHeroTask ? (
+                        <Link href={`/hyrte/session/${id}/my-tasks/${item.id}`} className="text-xs font-medium text-brand-600 dark:text-brand-400">
+                          Open workspace →
+                        </Link>
+                      ) : item.stage === 'WAITING_REVIEW' && !item.ownerIsCandidate ? (
                         <Link href={`/hyrte/session/${id}/needs-review`} className="text-xs font-medium text-brand-600 dark:text-brand-400">
                           Review →
                         </Link>

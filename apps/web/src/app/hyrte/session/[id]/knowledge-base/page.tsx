@@ -5,7 +5,8 @@ import { useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { DashboardShell } from '@/components/dashboard-shell';
 import { HyrteSessionInfoCard } from '@/components/hyrte/session-info-card';
-import { hyrteNav } from '@/lib/hyrte-nav';
+import { useHyrteNav } from '@/lib/hyrte-nav';
+import { ActivityCenter } from '@/components/hyrte/activity-center';
 import { api } from '@/lib/api';
 import { HyrteKnowledgeDoc } from '@/lib/hyrte-types';
 
@@ -51,6 +52,8 @@ function DocCard({ doc, open, onToggle }: { doc: HyrteKnowledgeDoc; open: boolea
  */
 export default function HyrteKnowledgeBase({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  // Live unread badges on the sidebar surfaces (Refinements doc §4).
+  const nav = useHyrteNav(id);
   const searchParams = useSearchParams();
   const [openId, setOpenId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
@@ -82,7 +85,8 @@ export default function HyrteKnowledgeBase({ params }: { params: Promise<{ id: s
       variant="hyrte-os"
       title="Knowledge Base"
       requiredRoles={['CANDIDATE']}
-      navOverride={hyrteNav(id)}
+      navOverride={nav}
+      headerExtra={<ActivityCenter sessionId={id} />}
       sidebarExtra={<HyrteSessionInfoCard sessionId={id} />}
       backHref="/candidate"
       backLabel="Exit"

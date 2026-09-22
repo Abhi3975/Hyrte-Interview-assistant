@@ -5,6 +5,7 @@ import { COMPANY_STATE_KEYS } from '../consequences/consequence.service';
 import { ValidationReport, WorldStabilizationError, validateWorld } from './world-stabilization';
 import { applyIndustryBias, industryGroundingNote } from './industry-templates';
 import { resolveSignatureArtifact } from './signature-artifacts';
+import { enforceWarmupVariety, pickAxes } from './question-variety';
 import { ambientInboxTargetCount, ambientSlackTargetCount, ensureUpcomingMeeting, generateAmbientInbox, generateAmbientSlack } from './ambient-noise';
 import {
   FixtureCalendarEvent,
@@ -78,6 +79,28 @@ export interface JobSuccessModelGrounding {
   customRequirements?: string[];
   /** Recruiter doc §3 "Warm-up Questions" — "no two candidates should receive the exact same warm-up." Prior warm-up question TEXT already used by other candidates on the same recruiter-shared link, fed in as an explicit avoid-list. */
   priorWarmupQuestions?: string[];
+}
+
+/**
+ * Founder feedback (WhatsApp, 9 Sep): "I've noticed some questions are very
+ * repeated in pm role, bakio me bhi honge. Kuch bhi repeat nhi hona chahiye."
+ *
+ * Everything the generator needs to avoid producing a session this candidate
+ * has effectively already seen. Distinct from JobSuccessModelGrounding, which
+ * only exists for recruiter-launched ASSESSMENT sessions — variety applies to
+ * every session, including self-serve PRACTICE, which is where the repetition
+ * was actually observed (PRACTICE passed no grounding at all, so the
+ * pre-existing priorWarmupQuestions avoid-list never ran for it).
+ */
+export interface WorldVariety {
+  /** Warm-up question text this candidate has already been asked in this role. */
+  priorWarmupQuestions: string[];
+  /** Baseline-challenge scenarios this candidate has already been given in this role. */
+  priorBaselineScenarios: string[];
+  /** Company names already generated for this candidate — a repeat company reads as "same simulation" even when the content differs. */
+  priorCompanyNames: string[];
+  /** Deterministically rotated competency axes this session's warm-ups must cover — see pickAxes. */
+  warmupAxes: string[];
 }
 
 /** One row per pipeline step — persisted by the caller (HyrteSessionsService) once the session exists. */
@@ -163,11 +186,11 @@ export class HyrteSimulationGeneratorService {
    * assets/events), so a full retry is simpler and no less correct for a
    * linear pipeline — a documented scope simplification, not an oversight.
    */
-  async generate(dto: CreateHyrteSessionDto, grounding?: JobSuccessModelGrounding): Promise<GeneratedWorld> {
+  async generate(dto: CreateHyrteSessionDto, grounding?: JobSuccessModelGrounding, variety?: WorldVariety): Promise<GeneratedWorld> {
     let lastReport: ValidationReport | undefined;
     for (let attempt = 1; attempt <= MAX_REPAIR_LOOPS; attempt++) {
       try {
-        const { fixture, artifacts } = await this.generateOnce(dto, grounding);
+        const { fixture, artifacts } = await this.generateOnce(dto, grounding, variety);
         const report = validateWorld(fixture, artifacts, attempt, dto.difficulty);
         artifacts.push({ step: 'stabilization_gate', status: report.passed ? 'OK' : 'FAILED_FELL_BACK', payload: report });
         if (report.passed) return { fixture, artifacts };
@@ -191,10 +214,11 @@ export class HyrteSimulationGeneratorService {
     throw new WorldStabilizationError(lastReport!);
   }
 
-  private async generateOnce(dto: CreateHyrteSessionDto, grounding?: JobSuccessModelGrounding): Promise<GeneratedWorld> {
+  private async generateOnce(dto: CreateHyrteSessionDto, grounding?: JobSuccessModelGrounding, variety?: WorldVariety): Promise<GeneratedWorld> {
     const artifacts: WorldGenerationArtifact[] = [];
     const nonce = Math.random().toString(36).slice(2, 8);
     const groundingNote = this.groundingNote(grounding);
+    const varietyNote = this.varietyNote(variety);
     // Recruiter doc §2 — real industry template grounding (concrete
     // vocabulary/stakeholder-archetypes/typical-crises), not just the
     // industry's name dropped into a sentence.
@@ -210,7 +234,7 @@ export class HyrteSimulationGeneratorService {
         `starting company-state numbers are and how many things are simultaneously on fire. Company ` +
         `culture: ${dto.culture} — reflect this only in tone/flavor, not the numeric state. Invent a ` +
         `unique fictional company name — do not reuse common example names like Acme, Nimbus, or ` +
-        `TechCorp. Variety seed: ${nonce}.${groundingNote}${industryNote}`,
+        `TechCorp. Variety seed: ${nonce}.${varietyNote}${groundingNote}${industryNote}`,
       () => ({
         companyName: 'Unnamed Co',
         companyState: {},
@@ -237,10 +261,23 @@ export class HyrteSimulationGeneratorService {
     // template exactly.
     const rawBaselineChallenge =
       companyOrg.baselineChallenge ?? (companyOrg.missionBrief as { baselineChallenge?: unknown } | undefined)?.baselineChallenge;
-    const baselineChallenge = sanitizeBaselineChallenge(
-      rawBaselineChallenge,
-      WARMUP_COUNT_BY_DIFFICULTY[dto.difficulty] ?? WARMUP_COUNT_BY_DIFFICULTY.MEDIUM,
-    );
+    const warmupCount = WARMUP_COUNT_BY_DIFFICULTY[dto.difficulty] ?? WARMUP_COUNT_BY_DIFFICULTY.MEDIUM;
+    const baselineChallenge = sanitizeBaselineChallenge(rawBaselineChallenge, warmupCount);
+    // The deterministic half of the no-repeats guarantee: the prompt above is
+    // TOLD which axes to cover and which questions to avoid, but told is not
+    // guaranteed — this drops anything that still came back as a near-duplicate
+    // of what this candidate already saw and backfills from the per-axis bank.
+    // Same "don't trust instruction-following for something that must happen
+    // every time" discipline as hiddenIntention omission / EVn-label stripping.
+    if (variety) {
+      baselineChallenge.warmupQuestions = enforceWarmupVariety(
+        baselineChallenge.warmupQuestions,
+        dto.role,
+        variety.priorWarmupQuestions,
+        variety.warmupAxes,
+        warmupCount,
+      );
+    }
     // Never touches missionBrief — see distributeHiddenRisks below for where this actually lands.
     const hiddenRisks = sanitizeStringList(companyOrg.hiddenRisks, 2);
 
@@ -378,6 +415,40 @@ export class HyrteSimulationGeneratorService {
       },
       artifacts,
     };
+  }
+
+  /**
+   * Founder feedback (WhatsApp, 9 Sep) — "kuch bhi repeat nhi hona chahiye."
+   * The prompt half of the no-repeats fix: name the exact competency axes this
+   * session must cover (rotated deterministically per candidate+role, so two
+   * consecutive sessions cannot be asked to cover the same ground) and list
+   * what this candidate has already been asked/shown as an explicit avoid-list.
+   * `question-variety.ts` enforces the same thing after generation.
+   */
+  private varietyNote(variety?: WorldVariety): string {
+    if (!variety) return '';
+    const axesBlock =
+      variety.warmupAxes.length > 0
+        ? '\n\nWARM-UP COVERAGE (mandatory): write EXACTLY one warmupQuestion per competency axis below, in ' +
+          'this order, each one concrete and specific to this role and this company — never a generic ' +
+          '"tell me about a time" prompt, never two questions on the same axis:\n' +
+          variety.warmupAxes.map((a, i) => `${i + 1}. ${a}`).join('\n')
+        : '';
+    const priorQuestionsBlock =
+      variety.priorWarmupQuestions.length > 0
+        ? '\n\nALREADY ASKED (do not repeat or lightly reword any of these — this candidate has seen them in a ' +
+          `previous session of this same role):\n${variety.priorWarmupQuestions.map((q, i) => `${i + 1}. ${q}`).join('\n')}`
+        : '';
+    const priorScenariosBlock =
+      variety.priorBaselineScenarios.length > 0
+        ? '\n\nALREADY USED SCENARIOS (the baselineChallenge scenario must pose a genuinely different trade-off ' +
+          `than any of these):\n${variety.priorBaselineScenarios.map((s, i) => `${i + 1}. ${s}`).join('\n')}`
+        : '';
+    const priorCompaniesBlock =
+      variety.priorCompanyNames.length > 0
+        ? `\n\nALREADY USED COMPANY NAMES (pick a different one): ${variety.priorCompanyNames.join(', ')}.`
+        : '';
+    return axesBlock + priorQuestionsBlock + priorScenariosBlock + priorCompaniesBlock;
   }
 
   private groundingNote(grounding?: JobSuccessModelGrounding): string {

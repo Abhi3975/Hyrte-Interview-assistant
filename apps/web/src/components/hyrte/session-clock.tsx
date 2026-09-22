@@ -12,10 +12,16 @@ function formatMinutes(totalSeconds: number): string {
 /**
  * Part E1 Mission Brief "duration" field, made real — live elapsed time
  * against a difficulty-based planned duration. Informational only, no
- * enforcement/auto-submit: computed entirely client-side from the real
- * session.startedAt, no new schema or backend timer subsystem.
+ * enforcement/auto-submit.
+ *
+ * Counts from `workspaceUnlockedAt` (when the candidate actually entered the
+ * workspace), falling back to `startedAt` only for sessions that predate that
+ * field. It used to always count from `startedAt`, which is when the session
+ * row was created and world generation began — so the ~1 minute of generation
+ * plus however long the candidate spent reading the Mission Brief and
+ * answering the Baseline Challenge was all charged to them as working time.
  */
-export function SessionClock({ session }: { session: Pick<HyrteSession, 'startedAt' | 'difficulty'> }) {
+export function SessionClock({ session }: { session: Pick<HyrteSession, 'startedAt' | 'difficulty' | 'workspaceUnlockedAt'> }) {
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -23,8 +29,9 @@ export function SessionClock({ session }: { session: Pick<HyrteSession, 'started
     return () => clearInterval(interval);
   }, []);
 
-  const plannedMinutes = PLANNED_DURATION_MINUTES[session.difficulty] ?? 20;
-  const elapsedSeconds = Math.max(0, Math.floor((now - new Date(session.startedAt).getTime()) / 1000));
+  const plannedMinutes = PLANNED_DURATION_MINUTES[session.difficulty] ?? 40;
+  const from = session.workspaceUnlockedAt ?? session.startedAt;
+  const elapsedSeconds = Math.max(0, Math.floor((now - new Date(from).getTime()) / 1000));
   const overPlanned = elapsedSeconds > plannedMinutes * 60;
 
   return (

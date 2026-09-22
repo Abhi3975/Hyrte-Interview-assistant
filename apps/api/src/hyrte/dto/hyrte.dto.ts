@@ -1,4 +1,4 @@
-import { IsArray, IsBoolean, IsDateString, IsEnum, IsIn, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsBoolean, IsDateString, IsEnum, IsIn, IsObject, IsOptional, IsString } from 'class-validator';
 import {
   Difficulty,
   EvidenceLinkKind,
@@ -177,4 +177,18 @@ export class CreateSimulationRequestDto {
   @IsString() companyType!: string;
   @IsEnum(Difficulty) difficulty!: Difficulty;
   @IsString() culture!: string;
+}
+
+/**
+ * Refinements doc §10 — Hero Task workspace autosave. Every field is a partial
+ * patch merged into whatever is already saved, so a slow connection or a
+ * half-finished section never wipes earlier work.
+ */
+export class SaveHeroTaskDraftDto {
+  /** DELIVERABLE / DECISION workspaces: sectionId -> the candidate's text. */
+  @IsOptional() @IsObject() draft?: Record<string, string>;
+  /** PRIORITIZATION workspace: itemId -> bucket name. */
+  @IsOptional() @IsObject() placement?: Record<string, string>;
+  /** PRIORITIZATION workspace: itemId -> why it sits there. */
+  @IsOptional() @IsObject() rationale?: Record<string, string>;
 }

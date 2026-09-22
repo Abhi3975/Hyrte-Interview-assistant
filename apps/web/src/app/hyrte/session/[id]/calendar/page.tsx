@@ -4,12 +4,15 @@ import { use } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { DashboardShell } from '@/components/dashboard-shell';
 import { HyrteSessionInfoCard } from '@/components/hyrte/session-info-card';
-import { hyrteNav } from '@/lib/hyrte-nav';
+import { useHyrteNav } from '@/lib/hyrte-nav';
+import { ActivityCenter } from '@/components/hyrte/activity-center';
 import { api } from '@/lib/api';
 import { HyrteCalendarEvent } from '@/lib/hyrte-types';
 
 export default function HyrteCalendar({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  // Live unread badges on the sidebar surfaces (Refinements doc §4).
+  const nav = useHyrteNav(id);
 
   const { data: events } = useQuery({
     queryKey: ['hyrte', 'calendar', id],
@@ -22,7 +25,8 @@ export default function HyrteCalendar({ params }: { params: Promise<{ id: string
       variant="hyrte-os"
       title="Calendar"
       requiredRoles={['CANDIDATE']}
-      navOverride={hyrteNav(id)}
+      navOverride={nav}
+      headerExtra={<ActivityCenter sessionId={id} />}
       sidebarExtra={<HyrteSessionInfoCard sessionId={id} />}
       backHref="/candidate"
       backLabel="Exit"

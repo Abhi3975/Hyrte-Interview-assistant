@@ -4,7 +4,9 @@ import { use, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { DashboardShell } from '@/components/dashboard-shell';
 import { HyrteSessionInfoCard } from '@/components/hyrte/session-info-card';
-import { hyrteNav } from '@/lib/hyrte-nav';
+import { useHyrteNav } from '@/lib/hyrte-nav';
+import { ActivityCenter } from '@/components/hyrte/activity-center';
+import { useMarkActivitySeen } from '@/components/hyrte/use-mark-seen';
 import { api } from '@/lib/api';
 import { useHyrteStore } from '@/store/hyrte';
 import { HyrteWorkItem } from '@/lib/hyrte-types';
@@ -18,7 +20,10 @@ const DECISIONS: { value: 'approve' | 'request_changes' | 'reject' | 'reassign';
 
 export default function HyrteNeedsReview({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  // Live unread badges on the sidebar surfaces (Refinements doc §4).
+  const nav = useHyrteNav(id);
   const { taskVersion } = useHyrteStore();
+  useMarkActivitySeen(id, 'tasks', taskVersion);
   const queryClient = useQueryClient();
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState<string | null>(null);
@@ -46,7 +51,8 @@ export default function HyrteNeedsReview({ params }: { params: Promise<{ id: str
       variant="hyrte-os"
       title="Needs Review"
       requiredRoles={['CANDIDATE']}
-      navOverride={hyrteNav(id)}
+      navOverride={nav}
+      headerExtra={<ActivityCenter sessionId={id} />}
       sidebarExtra={<HyrteSessionInfoCard sessionId={id} />}
       backHref="/candidate"
       backLabel="Exit"

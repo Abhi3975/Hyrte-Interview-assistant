@@ -28,6 +28,11 @@ export function HyrtePhaseGate({ sessionId }: { sessionId: string }) {
   const { data: session } = useQuery({
     queryKey: ['hyrte', 'session', sessionId],
     queryFn: () => api.get<HyrteSession>(`/hyrte/sessions/${sessionId}`),
+    // The session row carries server-computed pacing (which band the candidate
+    // is in, how long the quiet orientation window has left) — mounted for the
+    // whole session subtree, so one poll here keeps every consumer of this
+    // query key current instead of each page polling on its own.
+    refetchInterval: 20_000,
   });
 
   useEffect(() => {

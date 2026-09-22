@@ -909,6 +909,21 @@ model HyrteSession {
   interviewBossMode   Boolean                 @default(false)
   interviewJabCount   Int                     @default(0)
   startedAt           DateTime                @default(now())
+  // Pacing (session-pacing.ts) — the moment the candidate actually entered the
+  // workspace, i.e. when submitBaselineChallenge flipped the phase to
+  // WORKSPACE_ACTIVE. Distinct from startedAt, which is when the session row
+  // was created and world generation began: the minutes spent generating the
+  // world and reading the Mission Brief / Baseline Challenge are not working
+  // time, and every in-session timer must be measured from here, not from
+  // startedAt. Null until the workspace unlocks.
+  workspaceUnlockedAt DateTime?
+  // Activity Center (Refinements doc §4 "Notifications need one unified
+  // system"). Map of surface name -> ISO timestamp the candidate last looked
+  // at it, e.g. {"slack":"2026-09-22T10:04:00Z"}. Inbox has its own per-message
+  // readAt, but Slack/meetings/work items have no read state at all, so
+  // "what's new since I last looked" had nothing to compute from — which is
+  // why updates landed silently with no notification anywhere.
+  activityLastSeen    Json                    @default("{}")
   updatedAt           DateTime                @updatedAt
 
   companyState             HyrteCompanyState?
@@ -1311,6 +1326,30 @@ model HyrteWorkItem {
   // generic seeded work items.
   isSignatureArtifact   Boolean @default(false)
   signatureArtifactLabel String?
+
+  // ── Hero Tasks (Refinements doc §10/§11, founder feedback 7 Sep) ──
+  // "Every simulation should have 1-3 Hero Tasks... My Tasks tells you WHAT
+  // needs to be done. Opening the task gives you the actual tools to DO it."
+  // Set only on the candidate's own role tasks: the 1-3 pieces of real work
+  // that ARE the job, each of which opens a workspace rather than a card.
+  isHeroTask     Boolean @default(false)
+  heroOrder      Int?
+  /** Template key from generator/role-tasks.ts — how the workspace and its review are resolved back. */
+  roleTaskKey    String?
+  /** "DELIVERABLE" | "DECISION" | "PRIORITIZATION" — which workspace opening this task shows. */
+  workspaceKind  String?
+  /** { objective, context, successCriteria[], tags[] } — the task's own brief, shown in the workspace. */
+  brief          Json?
+  /**
+   * The thing the candidate actually produces.
+   * DELIVERABLE/DECISION: { sections: [{id,label,hint,long,required}], draft: { <sectionId>: string }, lastSavedAt }
+   * PRIORITIZATION:       { buckets: string[], items: [{id,label,evidence}], placement: { <itemId>: bucket }, rationale: { <itemId>: string } }
+   */
+  deliverable    Json?
+  /** Append-only [{ at, stakeholderId, stakeholderName, verdict: "approved"|"revision_requested", notes }] — a real colleague's response to the submitted work. */
+  reviewFeedback Json  @default("[]")
+  /** How many times the candidate has submitted this — revision cycles are themselves evidence. */
+  submissionCount Int  @default(0)
 
   // Refinements doc §6 — Intelligent Delegation: "Delegate part of the work."
   // Set only on a sub-delegated item a stakeholder spawns while working the

@@ -11,6 +11,8 @@ export interface NavItem {
   href: string;
   label: string;
   icon?: React.ReactNode;
+  /** Unread count pill — Refinements doc §4: an update must be visible where it landed, not just in a list you happen to open. */
+  badge?: number;
 }
 
 const NAV: Record<'candidate' | 'recruiter' | 'admin' | 'hyrte', NavItem[]> = {
@@ -48,6 +50,7 @@ export function DashboardShell({
   children,
   requiredRoles,
   navOverride,
+  headerExtra,
   sidebarExtra,
   backHref,
   backLabel = 'Back',
@@ -58,6 +61,8 @@ export function DashboardShell({
   children: React.ReactNode;
   requiredRoles?: Role[];
   navOverride?: NavItem[];
+  /** Rendered in the header, left of the user block — the Activity Center bell lives here. */
+  headerExtra?: React.ReactNode;
   /** Extra content rendered in the sidebar below the logo (e.g. session context). */
   sidebarExtra?: React.ReactNode;
   /** Shows a back button in the header when set. */
@@ -128,7 +133,12 @@ export function DashboardShell({
                 }`}
               >
                 {item.icon && <span className="shrink-0 [&>svg]:h-4 [&>svg]:w-4">{item.icon}</span>}
-                {item.label}
+                <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                {!!item.badge && (
+                  <span className="shrink-0 rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                    {item.badge > 99 ? '99+' : item.badge}
+                  </span>
+                )}
               </Link>
             );
           })}
@@ -150,6 +160,7 @@ export function DashboardShell({
             <h1 className="text-lg font-semibold">{title}</h1>
           </div>
           <div className="flex items-center gap-3">
+            {headerExtra}
             <span className="hidden text-sm text-black/50 dark:text-white/50 sm:inline">{user?.fullName}</span>
             {variant !== 'hyrte-os' && <ThemeToggle />}
             <button onClick={logout} className="btn-ghost text-sm">Log out</button>

@@ -4,7 +4,9 @@ import { use, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { DashboardShell } from '@/components/dashboard-shell';
 import { HyrteSessionInfoCard } from '@/components/hyrte/session-info-card';
-import { hyrteNav } from '@/lib/hyrte-nav';
+import { useHyrteNav } from '@/lib/hyrte-nav';
+import { ActivityCenter } from '@/components/hyrte/activity-center';
+import { useMarkActivitySeen } from '@/components/hyrte/use-mark-seen';
 import { api } from '@/lib/api';
 import { useHyrteStore } from '@/store/hyrte';
 import { deriveStakeholderStatus, STATUS_DOT, STATUS_LABEL } from '@/lib/hyrte-status';
@@ -15,7 +17,10 @@ import { HyrteCalendarEvent, HyrteInboxMessage, HyrteMeetingMessage, HyrteStakeh
  * persisted notes recalled after the fact (see [id]/meeting.service.ts on the backend). */
 export default function HyrteMeetings({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  // Live unread badges on the sidebar surfaces (Refinements doc §4).
+  const nav = useHyrteNav(id);
   const { inboxVersion, meetingVersion } = useHyrteStore();
+  useMarkActivitySeen(id, 'meetings', meetingVersion);
   const queryClient = useQueryClient();
   const [joinedId, setJoinedId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
@@ -67,7 +72,8 @@ export default function HyrteMeetings({ params }: { params: Promise<{ id: string
       variant="hyrte-os"
       title="Meetings"
       requiredRoles={['CANDIDATE']}
-      navOverride={hyrteNav(id)}
+      navOverride={nav}
+      headerExtra={<ActivityCenter sessionId={id} />}
       sidebarExtra={<HyrteSessionInfoCard sessionId={id} />}
       backHref="/candidate"
       backLabel="Exit"

@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { BehaviorContext, EvidenceType, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { HyrteGateway } from './hyrte.gateway';
@@ -436,6 +436,15 @@ export class HyrteWorkplaceService {
     await this.assertOwnership(sessionId, candidateId);
     const task = await this.prisma.hyrteWorkItem.findFirst({ where: { id: taskId, sessionId } });
     if (!task) throw new NotFoundException('Task not found');
+    // Refinements doc, Tasks §4 — "No fake 'I completed this checkbox'
+    // behavior." A Hero Task's stage is derived from work the candidate
+    // actually did and from a colleague's real verdict on it (see
+    // HyrteHeroTaskService), so it must not be settable from the generic
+    // pipeline board — otherwise the whole point of the workspace can be
+    // skipped with one click.
+    if (task.isHeroTask && dto.stage && dto.stage !== task.stage) {
+      throw new BadRequestException('Open this task and submit your work — its status follows what you actually produce.');
+    }
 
     const history = Array.isArray(task.history) ? task.history : [];
     const updated = await this.prisma.hyrteWorkItem.update({

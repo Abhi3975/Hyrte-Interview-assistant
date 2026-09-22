@@ -21,6 +21,10 @@ import { HyrteCommandBarService } from './work/command-bar.service';
 import { HyrteMeetingService } from './meetings/meeting.service';
 import { HyrteRecruiterController } from './recruiter/hyrte-recruiter.controller';
 import { HyrteRecruiterService } from './recruiter/hyrte-recruiter.service';
+import { HyrteActivityController } from './activity/activity.controller';
+import { HyrteActivityService } from './activity/activity.service';
+import { HyrteHeroTaskController } from './work/hero-task.controller';
+import { HyrteHeroTaskService } from './work/hero-task.service';
 
 @Module({
   // DigModule exports DecisionGraphService (the DIG write-path contract) for
@@ -35,6 +39,8 @@ import { HyrteRecruiterService } from './recruiter/hyrte-recruiter.service';
     HyrteInterviewController,
     SimulationRequestController,
     HyrteRecruiterController,
+    HyrteActivityController,
+    HyrteHeroTaskController,
   ],
   providers: [
     HyrteSessionsService,
@@ -49,6 +55,8 @@ import { HyrteRecruiterService } from './recruiter/hyrte-recruiter.service';
     HyrteCommandBarService,
     HyrteMeetingService,
     HyrteRecruiterService,
+    HyrteActivityService,
+    HyrteHeroTaskService,
   ],
 })
 export class HyrteModule {}

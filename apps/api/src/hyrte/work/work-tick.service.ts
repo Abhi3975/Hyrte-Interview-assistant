@@ -8,6 +8,7 @@ import { getVisibleStateKeys } from '../dig/info-scope.util';
 import { EvidenceGraphService } from '../dig/evidence-graph.service';
 import { DecisionGraphService } from '../dig/decision-graph.service';
 import { COMPANY_STATE_KEYS } from '../consequences/consequence.service';
+import { rampedDelayMs } from '../pacing/session-pacing';
 
 const TICK1_BASE_MS = 20_000;
 const TICK2_BASE_MS = 45_000;
@@ -86,9 +87,24 @@ export class HyrteWorkTickService {
    */
   scheduleOrchestratorReview(sessionId: string, cycle = 1): void {
     if (cycle > MAX_ORCHESTRATOR_CYCLES) return;
-    setTimeout(() => {
-      this.runOrchestratorReview(sessionId, cycle).catch((e) => this.logger.warn(e));
-    }, ORCHESTRATOR_INTERVAL_MS);
+    // Paced like every other delayed mechanic — the manager does not route new
+    // work at the candidate during their orientation window, and reviews come
+    // slower while they are still investigating (pacing/session-pacing.ts).
+    this.pacedDelay(sessionId, ORCHESTRATOR_INTERVAL_MS)
+      .then((delay) => {
+        setTimeout(() => {
+          this.runOrchestratorReview(sessionId, cycle).catch((e) => this.logger.warn(e));
+        }, delay);
+      })
+      .catch((e) => this.logger.warn(e));
+  }
+
+  private async pacedDelay(sessionId: string, baseMs: number): Promise<number> {
+    const session = await this.prisma.hyrteSession.findUnique({
+      where: { id: sessionId },
+      select: { workspaceUnlockedAt: true, startedAt: true, difficulty: true },
+    });
+    return session ? rampedDelayMs(baseMs, session) : baseMs;
   }
 
   private async runOrchestratorReview(sessionId: string, cycle: number): Promise<void> {

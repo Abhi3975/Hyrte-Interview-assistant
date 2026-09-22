@@ -7,6 +7,7 @@ import { EvidenceGraphService } from '../dig/evidence-graph.service';
 import { DecisionGraphService } from '../dig/decision-graph.service';
 import { toCandidateStakeholder } from '../dig/hidden-intention.util';
 import { industryGroundingNote } from '../generator/industry-templates';
+import { rampedDelayMs } from '../pacing/session-pacing';
 
 export const COMPANY_STATE_KEYS = [
   'revenue',
@@ -279,6 +280,23 @@ export class HyrteConsequenceService {
    * passed by escalateIgnoredMessage when scheduling the NEXT hop; external
    * callers always start a fresh chain at hop 1.
    */
+  /**
+   * Founder feedback (WhatsApp, 7 Sep) — "simulation gradually open up hoga
+   * naki sara kuch ek saath." Every delayed mechanic in this service routes
+   * its delay through here, so the whole consequence engine breathes with the
+   * session's pacing bands (see pacing/session-pacing.ts): nothing lands during
+   * the orientation window, escalations are slow while the candidate is still
+   * investigating, and the deliberate pressure band later in the session is
+   * genuinely denser. Falls back to the raw delay if the session has vanished.
+   */
+  private async pacedDelay(sessionId: string, baseMs: number): Promise<number> {
+    const session = await this.prisma.hyrteSession.findUnique({
+      where: { id: sessionId },
+      select: { workspaceUnlockedAt: true, startedAt: true, difficulty: true },
+    });
+    return session ? rampedDelayMs(baseMs, session) : baseMs;
+  }
+
   scheduleIgnoredCheck(sessionId: string, messageId: string, delayMs: number, hop = 1, rootMessageId?: string): void {
     this.prisma.hyrteWorldEvent
       .create({
@@ -290,10 +308,11 @@ export class HyrteConsequenceService {
           payload: { hop } as unknown as Prisma.InputJsonValue,
         },
       })
-      .then((event) => {
+      .then(async (event) => {
+        const delay = await this.pacedDelay(sessionId, delayMs);
         setTimeout(() => {
           this.checkAndEscalate(sessionId, messageId, event.id, hop, rootMessageId ?? messageId).catch((e) => this.logger.warn(errMsg(e)));
-        }, delayMs);
+        }, delay);
       })
       .catch((e) => this.logger.warn(errMsg(e)));
   }
@@ -505,10 +524,11 @@ export class HyrteConsequenceService {
           payload: {} as unknown as Prisma.InputJsonValue,
         },
       })
-      .then((event) => {
+      .then(async (event) => {
+        const delay = await this.pacedDelay(sessionId, delayMs);
         setTimeout(() => {
           this.checkAndEscalateReview(sessionId, workItemId, event.id).catch((e) => this.logger.warn(errMsg(e)));
-        }, delayMs);
+        }, delay);
       })
       .catch((e) => this.logger.warn(errMsg(e)));
   }
@@ -570,13 +590,14 @@ export class HyrteConsequenceService {
     if (!workItem.ownerStakeholderId) return;
     this.prisma.hyrteStakeholder
       .findUnique({ where: { id: workItem.ownerStakeholderId } })
-      .then((owner) => {
+      .then(async (owner) => {
         if (!owner?.department) return;
         const isCommitmentMaker = COMMITMENT_DEPARTMENT.test(owner.department) || COMMITMENT_DEPARTMENT.test(owner.role);
         if (!isCommitmentMaker) return;
+        const delay = await this.pacedDelay(sessionId, CASCADE_DELAY_MS);
         setTimeout(() => {
           this.triggerCascade(sessionId, workItem.id, owner.id, decisionId).catch((e) => this.logger.warn(errMsg(e)));
-        }, CASCADE_DELAY_MS);
+        }, delay);
       })
       .catch((e) => this.logger.warn(errMsg(e)));
   }
@@ -714,14 +735,14 @@ export class HyrteConsequenceService {
   }
 
   private scheduleChaosWaveAt(sessionId: string, delayMs: number, calibrationScore: number | undefined, wave: number, liveScore?: number): void {
-    this.prisma.hyrteWorldEvent
-      .create({
-        data: { sessionId, kind: 'SCHEDULED', surface: 'chaos_wave', fireAtOffsetSeconds: Math.round(delayMs / 1000), payload: { wave } as unknown as Prisma.InputJsonValue },
-      })
-      .then((event) => {
+    this.pacedDelay(sessionId, delayMs)
+      .then(async (delay) => {
+        const event = await this.prisma.hyrteWorldEvent.create({
+          data: { sessionId, kind: 'SCHEDULED', surface: 'chaos_wave', fireAtOffsetSeconds: Math.round(delay / 1000), payload: { wave } as unknown as Prisma.InputJsonValue },
+        });
         setTimeout(() => {
           this.triggerChaosWave(sessionId, event.id, calibrationScore, wave, liveScore).catch((e) => this.logger.warn(errMsg(e)));
-        }, delayMs);
+        }, delay);
       })
       .catch((e) => this.logger.warn(errMsg(e)));
   }
@@ -835,10 +856,14 @@ export class HyrteConsequenceService {
    */
   scheduleAmbientChatter(sessionId: string, cycle = 1): void {
     if (cycle > MAX_AMBIENT_CHATTER_CYCLES) return;
-    const delay = AMBIENT_CHATTER_MIN_MS + Math.floor(Math.random() * (AMBIENT_CHATTER_MAX_MS - AMBIENT_CHATTER_MIN_MS));
-    setTimeout(() => {
-      this.triggerAmbientChatter(sessionId, cycle).catch((e) => this.logger.warn(errMsg(e)));
-    }, delay);
+    const base = AMBIENT_CHATTER_MIN_MS + Math.floor(Math.random() * (AMBIENT_CHATTER_MAX_MS - AMBIENT_CHATTER_MIN_MS));
+    this.pacedDelay(sessionId, base)
+      .then((delay) => {
+        setTimeout(() => {
+          this.triggerAmbientChatter(sessionId, cycle).catch((e) => this.logger.warn(errMsg(e)));
+        }, delay);
+      })
+      .catch((e) => this.logger.warn(errMsg(e)));
   }
 
   private async triggerAmbientChatter(sessionId: string, cycle: number): Promise<void> {

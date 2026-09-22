@@ -79,6 +79,42 @@ export interface HyrteBaselineChallenge {
   warmupQuestions: HyrteWarmupQuestion[];
 }
 
+/** Refinements doc §4 — Source -> Person -> Context -> Urgency -> Action. */
+export interface HyrteActivityEntry {
+  id: string;
+  source: 'INBOX' | 'SLACK' | 'MEETING' | 'REVIEW' | 'TASK';
+  personName: string | null;
+  personRole: string | null;
+  title: string;
+  context: string;
+  urgency: 'HIGH' | 'MEDIUM' | 'LOW';
+  href: string;
+  at: string;
+  unread: boolean;
+}
+
+export interface HyrteActivityFeed {
+  entries: HyrteActivityEntry[];
+  counts: { inbox: number; slack: number; meetings: number; needsReview: number; total: number };
+}
+
+export type HyrteSimulationPhase = 'ORIENTATION' | 'INVESTIGATE' | 'ROLE_TASK' | 'STAKEHOLDER' | 'UNEXPECTED' | 'FINAL';
+
+/**
+ * Computed server-side (pacing/session-pacing.ts) so the UI and every backend
+ * scheduler share one definition of how far into the session the candidate is.
+ */
+export interface HyrtePacing {
+  phase: HyrteSimulationPhase;
+  label: string;
+  guidance: string;
+  elapsedFraction: number;
+  plannedDurationMs: number;
+  orientationEndsAtFraction: number;
+  /** ISO timestamp the quiet orientation window ends, or null once it has. */
+  quietUntil: string | null;
+}
+
 export interface HyrteSession {
   id: string;
   companyName: string;
@@ -86,6 +122,9 @@ export interface HyrteSession {
   phase: string;
   difficulty: 'EASY' | 'MEDIUM' | 'HARD' | 'EXPERT';
   startedAt: string;
+  /** When the candidate actually entered the workspace — the pacing clock's zero point. Null before unlock. */
+  workspaceUnlockedAt: string | null;
+  pacing?: HyrtePacing;
   missionBrief: HyrteMissionBrief | null;
   baselineChallenge: HyrteBaselineChallenge | null;
   // Only present for sessions launched from a recruiter's simulation link —
@@ -93,12 +132,18 @@ export interface HyrteSession {
   simulationRequest?: { code: string } | null;
 }
 
-/** Part E1 Mission Brief "duration" field — informational only, no enforcement/auto-submit. */
+/**
+ * Part E1 Mission Brief "duration" field — informational only, no
+ * enforcement/auto-submit. Refinements doc §19 ("30-60 minute simulation");
+ * was 15/20/25/30, which left no room for the orientation/investigate bands
+ * the founder asked for. Must stay in sync with PLANNED_DURATION_MINUTES in
+ * apps/api/src/hyrte/pacing/session-pacing.ts.
+ */
 export const PLANNED_DURATION_MINUTES: Record<HyrteSession['difficulty'], number> = {
-  EASY: 15,
-  MEDIUM: 20,
-  HARD: 25,
-  EXPERT: 30,
+  EASY: 30,
+  MEDIUM: 40,
+  HARD: 50,
+  EXPERT: 60,
 };
 
 export interface HyrteInboxMessage {
@@ -177,6 +222,8 @@ export interface HyrteWorkItem {
   review: HyrteWorkItemReview | null;
   history: HyrteWorkItemHistoryEntry[];
   isSignatureArtifact: boolean;
+  /** One of the 1-3 role tasks — opens a workspace instead of offering a stage toggle (Refinements doc §10/§11). */
+  isHeroTask?: boolean;
   signatureArtifactLabel: string | null;
 }
 
@@ -384,4 +431,76 @@ export function groupMetrics(metrics: { bucket: string; score: number; explanati
     roleCompetency: { buckets: roleCompetency, avgScore: avg(roleCompetency) },
     workplaceIntelligence: { buckets: workplaceIntelligence, avgScore: avg(workplaceIntelligence) },
   };
+}
+
+// ── Hero Tasks (Refinements doc §10/§11) ──
+// "My Tasks tells you WHAT needs to be done. Opening the task gives you the
+// actual tools to DO it."
+
+export type HeroTaskState = 'ASSIGNED' | 'INVESTIGATING' | 'WORKING' | 'REVIEW' | 'REVISION' | 'COMPLETED';
+export type TaskWorkspaceKind = 'DELIVERABLE' | 'DECISION' | 'PRIORITIZATION';
+
+export interface HeroTaskReview {
+  at: string;
+  stakeholderId: string | null;
+  stakeholderName: string;
+  verdict: 'approved' | 'revision_requested';
+  notes: string;
+}
+
+export interface HeroTaskSummary {
+  id: string;
+  title: string;
+  summary: string;
+  tags: string[];
+  priority: string;
+  workspaceKind: TaskWorkspaceKind | null;
+  state: HeroTaskState;
+  stateLabel: string;
+  submissionCount: number;
+  latestFeedback: HeroTaskReview | null;
+  dueAt: string | null;
+}
+
+export interface HeroTaskList {
+  primaryObjective: string;
+  objectives: { primary?: string[]; secondary?: string[]; stretch?: string[] };
+  completed: number;
+  total: number;
+  tasks: HeroTaskSummary[];
+}
+
+export interface DeliverableSection {
+  id: string;
+  label: string;
+  hint: string;
+  long?: boolean;
+  required?: boolean;
+}
+
+export interface HeroTaskWorkspace {
+  id: string;
+  title: string;
+  workspaceKind: TaskWorkspaceKind | null;
+  state: HeroTaskState;
+  stateLabel: string;
+  submissionCount: number;
+  brief: { objective: string; context: string; successCriteria: string[]; tags: string[] };
+  deliverable: {
+    sections?: DeliverableSection[];
+    draft?: Record<string, string>;
+    lastSavedAt?: string;
+    buckets?: string[];
+    items?: { id: string; label: string; evidence: string }[];
+    placement?: Record<string, string>;
+    rationale?: Record<string, string>;
+  };
+  reviewFeedback: HeroTaskReview[];
+  resources: {
+    knowledgeDocs: { id: string; title: string; category: string }[];
+    people: { id: string; name: string; role: string; department: string | null; dmChannel: string }[];
+    metrics: Record<string, number> | null;
+  };
+  companyName: string;
+  role: string;
 }

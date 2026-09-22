@@ -5,7 +5,15 @@ import { AIService } from '../ai/ai.service';
 import { HyrteGateway } from './hyrte.gateway';
 import { CreateHyrteSessionDto, SubmitBaselineChallengeDto } from './dto/hyrte.dto';
 import { getPmSaasStartupFixture } from './fixtures/pm-saas-startup.fixture';
-import { GeneratedWorld, HyrteSimulationGeneratorService, JobSuccessModelGrounding } from './generator/simulation-generator.service';
+import {
+  EVENT_QUEUE_MAX_OFFSET_SECONDS_BY_DIFFICULTY,
+  GeneratedWorld,
+  HyrteSimulationGeneratorService,
+  JobSuccessModelGrounding,
+  WARMUP_COUNT_BY_DIFFICULTY,
+  WorldVariety,
+} from './generator/simulation-generator.service';
+import { enforceWarmupVariety, pickAxes } from './generator/question-variety';
 import { resolveSignatureArtifact } from './generator/signature-artifacts';
 import { findMentionedKnowledgeDoc, resolveRelevantRoles } from './generator/knowledge-linking';
 import { WorldStabilizationError } from './generator/world-stabilization';
@@ -13,13 +21,8 @@ import { HyrteConsequenceService, randomIgnoredWindow } from './consequences/con
 import { DecisionGraphService } from './dig/decision-graph.service';
 import { EvidenceGraphService } from './dig/evidence-graph.service';
 import { HyrteWorkTickService } from './work/work-tick.service';
-
-// Random spread for messages marked `arrivesLater` by the generator/fixture —
-// "messages start arriving on their own" (doc §8 step 4).
-const MIN_ARRIVAL_DELAY_MS = 12_000;
-const MAX_ARRIVAL_DELAY_MS = 35_000;
-const randomArrivalDelay = () =>
-  MIN_ARRIVAL_DELAY_MS + Math.floor(Math.random() * (MAX_ARRIVAL_DELAY_MS - MIN_ARRIVAL_DELAY_MS));
+import { HyrteHeroTaskService } from './work/hero-task.service';
+import { ORIENTATION_UNTIL_FRACTION, elapsedFraction, orientationEndMs, phaseDescriptorAt, plannedDurationMs, rampedDelayMs, scheduledEventDelayMs } from './pacing/session-pacing';
 
 /** Part F8 What-Changed — camelCase KPI key → readable label. */
 function humanizeKey(key: string): string {
@@ -50,6 +53,7 @@ export class HyrteSessionsService {
     private readonly evidence: EvidenceGraphService,
     private readonly ai: AIService,
     private readonly workTicks: HyrteWorkTickService,
+    private readonly heroTasks: HyrteHeroTaskService,
   ) {}
 
   /**
@@ -62,9 +66,48 @@ export class HyrteSessionsService {
    * MISSION_BRIEF — see HyrtePhaseGate on the frontend.
    */
   async create(dto: CreateHyrteSessionDto, candidateId: string) {
+    // Founder feedback (WhatsApp, 9 Sep) — "questions are very repeated in pm
+    // role... kuch bhi repeat nhi hona chahiye." Self-serve PRACTICE sessions
+    // previously passed NO grounding at all, so the pre-existing
+    // priorWarmupQuestions avoid-list never ran for them — which is exactly the
+    // flow the repetition was observed in. Every session now gets variety.
+    const variety = await this.buildVariety(candidateId, dto);
     const session = await this.createPlaceholder(dto, candidateId, {});
-    this.populateWorld(session.id, dto, candidateId, {}).catch((e) => this.logger.error(`populateWorld failed for session ${session.id}: ${e instanceof Error ? e.message : String(e)}`));
+    this.populateWorld(session.id, dto, candidateId, { variety }).catch((e) => this.logger.error(`populateWorld failed for session ${session.id}: ${e instanceof Error ? e.message : String(e)}`));
     return session;
+  }
+
+  /**
+   * Builds the per-candidate no-repeats context for one session: what this
+   * candidate has already been asked/shown in this same role, plus a
+   * deterministically rotated set of competency axes for the warm-ups (see
+   * question-variety.ts). `extraPriorQuestions` folds in the recruiter-link
+   * avoid-list for ASSESSMENT sessions, which is about a different axis of
+   * repetition (across candidates on one link, rather than across sessions for
+   * one candidate) — both matter, so both are applied.
+   */
+  private async buildVariety(candidateId: string, dto: CreateHyrteSessionDto, extraPriorQuestions: string[] = []): Promise<WorldVariety> {
+    const priorSessions = await this.prisma.hyrteSession.findMany({
+      where: { candidateId, role: dto.role },
+      select: { baselineChallenge: true, companyName: true },
+      orderBy: { startedAt: 'desc' },
+      take: 12,
+    });
+    const priorWarmupQuestions: string[] = [];
+    const priorBaselineScenarios: string[] = [];
+    for (const s of priorSessions) {
+      const challenge = s.baselineChallenge as { scenario?: string; warmupQuestions?: { question?: string }[] } | null;
+      for (const q of challenge?.warmupQuestions ?? []) if (q.question) priorWarmupQuestions.push(q.question);
+      if (challenge?.scenario) priorBaselineScenarios.push(challenge.scenario);
+    }
+    const warmupCount = WARMUP_COUNT_BY_DIFFICULTY[dto.difficulty] ?? WARMUP_COUNT_BY_DIFFICULTY.MEDIUM;
+    return {
+      // Sane caps — this is prompt context, not a permanent archive.
+      priorWarmupQuestions: Array.from(new Set([...extraPriorQuestions, ...priorWarmupQuestions])).slice(0, 30),
+      priorBaselineScenarios: priorBaselineScenarios.slice(0, 6),
+      priorCompanyNames: Array.from(new Set(priorSessions.map((s) => s.companyName).filter((n) => n && n !== 'Generating…'))).slice(0, 8),
+      warmupAxes: pickAxes(dto.role, warmupCount, priorSessions.length),
+    };
   }
 
   /**
@@ -108,6 +151,11 @@ export class HyrteSessionsService {
       customRequirements: request.customRequirements,
       priorWarmupQuestions,
     };
+    // Two independent repetition axes, both real: across candidates on one
+    // recruiter link (priorWarmupQuestions above) and across sessions for one
+    // candidate (buildVariety). Fold the first into the second so a single
+    // avoid-list covers both.
+    const variety = await this.buildVariety(candidateId, dto, priorWarmupQuestions);
     const session = await this.createPlaceholder(dto, candidateId, { simulationRequestId: request.id });
 
     // Independent of world generation (built straight from the request's own
@@ -126,7 +174,7 @@ export class HyrteSessionsService {
       },
     });
 
-    this.populateWorld(session.id, dto, candidateId, { grounding }).catch((e) => this.logger.error(`populateWorld failed for session ${session.id}: ${e instanceof Error ? e.message : String(e)}`));
+    this.populateWorld(session.id, dto, candidateId, { grounding, variety }).catch((e) => this.logger.error(`populateWorld failed for session ${session.id}: ${e instanceof Error ? e.message : String(e)}`));
     return session;
   }
 
@@ -152,11 +200,11 @@ export class HyrteSessionsService {
     sessionId: string,
     dto: CreateHyrteSessionDto,
     candidateId: string,
-    options: { grounding?: JobSuccessModelGrounding },
+    options: { grounding?: JobSuccessModelGrounding; variety?: WorldVariety },
   ) {
     let world: GeneratedWorld;
     try {
-      world = await this.generator.generate(dto, options.grounding);
+      world = await this.generator.generate(dto, options.grounding, options.variety);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (dto.sessionType === 'ASSESSMENT') {
@@ -185,6 +233,19 @@ export class HyrteSessionsService {
       // we're falling back; it's persisted below once the session exists.
       const failureArtifact = e instanceof WorldStabilizationError ? [{ step: 'stabilization_gate' as const, status: 'FAILED_FELL_BACK' as const, payload: e.report }] : [];
       world = { fixture: getPmSaasStartupFixture(), artifacts: failureArtifact };
+      // The static fallback's warm-ups are hardcoded, so a candidate who hits
+      // the fallback twice would see the exact same questions both times —
+      // the no-repeats guarantee has to cover this path too, not just the
+      // generated one.
+      if (options.variety) {
+        world.fixture.baselineChallenge.warmupQuestions = enforceWarmupVariety(
+          world.fixture.baselineChallenge.warmupQuestions,
+          dto.role,
+          options.variety.priorWarmupQuestions,
+          options.variety.warmupAxes,
+          WARMUP_COUNT_BY_DIFFICULTY[dto.difficulty] ?? WARMUP_COUNT_BY_DIFFICULTY.MEDIUM,
+        );
+      }
     }
     const fixture = world.fixture;
 
@@ -267,29 +328,14 @@ export class HyrteSessionsService {
     // only for the static fallback fixture (pre-upgrade shape) — deriving
     // the label/type from the role directly here means the guarantee ("every
     // session gets one") holds even on that path, not just the LLM-generated one.
-    const artifactTemplate = resolveSignatureArtifact(session.role);
-    const signatureArtifact = fixture.signatureArtifact ?? {
-      title: `${artifactTemplate.label} — ${session.companyName}`,
-      description: `Produce a ${artifactTemplate.label.toLowerCase()} addressing the company's current situation.`,
-      dueInHours: 24,
-    };
-    await this.prisma.hyrteWorkItem.create({
-      data: {
-        sessionId: session.id,
-        title: signatureArtifact.title,
-        type: artifactTemplate.workItemType,
-        priority: 'HIGH',
-        dueAt: new Date(Date.now() + (signatureArtifact.dueInHours ?? 24) * 3_600_000),
-        origin: 'EVENT',
-        ownerIsCandidate: true,
-        isSignatureArtifact: true,
-        signatureArtifactLabel: artifactTemplate.label,
-        history: [
-          { at: new Date().toISOString(), actor: 'system', action: 'created', note: signatureArtifact.description },
-        ] as unknown as Prisma.InputJsonValue,
-      },
-    });
-
+    // The signature artifact is no longer created as its own standalone work
+    // item. It used to be a work item with a TITLE and nothing behind it —
+    // opening it showed a card, and "completing" it meant ticking a box, which
+    // is exactly the "review and approve" shape the founder called out. Its
+    // role (one flagship, genuinely role-specific deliverable the candidate is
+    // measured on) is now filled by the first Hero Task, which has real
+    // structure, a real workspace, a domain-appropriate reviewer and a real
+    // revision loop — see seedHeroTasks below, which carries the label forward.
     await this.prisma.hyrteCalendarEvent.createMany({
       data: fixture.calendarEvents.map((c) => ({
         sessionId: session.id,
@@ -333,8 +379,13 @@ export class HyrteSessionsService {
           relatedKnowledgeDocId: findMentionedKnowledgeDoc(`${m.subject} ${m.body}`, kbDocsForLinking),
         },
       });
-      // Ignoring an urgent item has a consequence (doc §6) — start the clock now.
-      if (m.urgent) this.consequences.scheduleIgnoredCheck(session.id, created.id, randomIgnoredWindow());
+      // Ignoring an urgent item has a consequence (doc §6) — but the clock
+      // must NOT start here. This runs during world generation, while the
+      // candidate is still on the Mission Brief / Baseline Challenge screens
+      // and has never seen the workspace: a 45-75s ignored-window armed now
+      // has already expired by the time they arrive, so they get escalated at
+      // for ignoring a message they were never shown. Armed at workspace
+      // unlock instead — see armSessionTimers.
     }
     for (const m of fixture.slack.filter((m) => !m.arrivesLater)) {
       await this.prisma.hyrteSlackMessage.create({
@@ -349,56 +400,51 @@ export class HyrteSessionsService {
       });
     }
 
-    // Fallback-fixture-only path: the static PM/SaaS fixture still expresses
-    // delayed content via `arrivesLater` directly on inbox/slack rather than
-    // a scheduledEvents array (see hyrte-fixture.types.ts) — kept as a bare
-    // setTimeout, not queue-tracked, since it's a rare last-resort path, not
-    // the primary generation flow this upgrade targets.
-    for (const m of fixture.inbox.filter((m) => m.arrivesLater)) {
-      setTimeout(() => {
-        this.prisma.hyrteInboxMessage
-          .create({
-            data: {
-              sessionId: session.id,
-              fromStakeholderId: keyToId.get(m.fromKey),
-              subject: m.subject,
-              body: m.body,
-              urgent: m.urgent,
-              ethicalDilemma: m.ethicalDilemma ?? false,
-              relatedKnowledgeDocId: findMentionedKnowledgeDoc(`${m.subject} ${m.body}`, kbDocsForLinking),
-            },
-          })
-          .then((created) => {
-            this.gateway.broadcast(session.id, { type: 'inbox:new', message: created });
-            if (m.urgent) this.consequences.scheduleIgnoredCheck(session.id, created.id, randomIgnoredWindow());
-          })
-          .catch((e) => this.logger.warn(e));
-      }, randomArrivalDelay());
-    }
-    for (const m of fixture.slack.filter((m) => m.arrivesLater)) {
-      setTimeout(() => {
-        this.prisma.hyrteSlackMessage
-          .create({
-            data: {
-              sessionId: session.id,
-              channel: m.channel,
-              fromStakeholderId: keyToId.get(m.fromKey),
-              body: m.body,
-              ethicalDilemma: m.ethicalDilemma ?? false,
-              relatedKnowledgeDocId: findMentionedKnowledgeDoc(m.body, kbDocsForLinking),
-            },
-          })
-          .then((created) => this.gateway.broadcast(session.id, { type: 'slack:new', message: created }))
-          .catch((e) => this.logger.warn(e));
-      }, randomArrivalDelay());
-    }
+    // Fallback-fixture-only path: the static PM/SaaS fixture expresses delayed
+    // content via `arrivesLater` on inbox/slack rather than a scheduledEvents
+    // array (see hyrte-fixture.types.ts). These used to be bare setTimeouts
+    // armed here, at generation time, on a 12-35s fuse — so on the fallback
+    // path they had all already landed before the candidate ever reached the
+    // workspace. They are queue rows now, armed at unlock and paced like every
+    // other scheduled event.
+    const arrivesLater = [
+      ...fixture.inbox
+        .filter((m) => m.arrivesLater)
+        .map((m) => ({ surface: 'inbox' as const, fromKey: m.fromKey, subject: m.subject, channel: undefined as string | undefined, body: m.body, urgent: m.urgent, ethicalDilemma: m.ethicalDilemma ?? false })),
+      ...fixture.slack
+        .filter((m) => m.arrivesLater)
+        .map((m) => ({ surface: 'slack' as const, fromKey: m.fromKey, subject: undefined as string | undefined, channel: m.channel, body: m.body, urgent: false, ethicalDilemma: m.ethicalDilemma ?? false })),
+    ];
+    // The static fixture carries no offsets, only a boolean — spread them
+    // evenly across the same raw-offset space the generator uses so
+    // scheduledEventDelayMs paces them identically.
+    const maxRawOffset = EVENT_QUEUE_MAX_OFFSET_SECONDS_BY_DIFFICULTY[session.difficulty] ?? 840;
+    const laterEvents = arrivesLater.map((m, i) => ({
+      surface: m.surface as string,
+      fromKey: m.fromKey,
+      subject: m.subject,
+      channel: m.channel,
+      body: m.body,
+      urgent: m.urgent,
+      ethicalDilemma: m.ethicalDilemma,
+      fireAtOffsetSeconds: Math.round(((i + 1) / (arrivesLater.length + 1)) * maxRawOffset),
+    }));
 
     // Upgrade §6 — Event Queue. Step 6's output, persisted as real
     // HyrteWorldEvent(kind=SCHEDULED) rows instead of a bare setTimeout with
     // no trace, so "what's coming" is queryable, not just eventually visible.
-    for (const e of fixture.scheduledEvents) {
+    //
+    // Pacing: these are NO LONGER armed here. This method runs during world
+    // generation, which happens while the candidate is still on the Mission
+    // Brief and Baseline Challenge screens — arming a 15s-offset event here
+    // meant it fired minutes before the candidate could possibly see it, and a
+    // whole queue's worth had already piled up in the inbox by the time they
+    // entered the workspace. They are armed at unlock instead
+    // (armSessionTimers), spread across the real session by
+    // scheduledEventDelayMs.
+    for (const e of [...fixture.scheduledEvents, ...laterEvents]) {
       const fromStakeholderId = keyToId.get(e.fromKey);
-      const event = await this.prisma.hyrteWorldEvent.create({
+      await this.prisma.hyrteWorldEvent.create({
         data: {
           sessionId: session.id,
           kind: 'SCHEDULED',
@@ -407,8 +453,17 @@ export class HyrteSessionsService {
           payload: { fromStakeholderId, subject: e.subject, channel: e.channel, body: e.body, urgent: e.urgent ?? false, ethicalDilemma: e.ethicalDilemma ?? false } as unknown as Prisma.InputJsonValue,
         },
       });
-      setTimeout(() => this.fireScheduledEvent(session.id, event.id).catch((err) => this.logger.warn(err)), e.fireAtOffsetSeconds * 1000);
     }
+
+    // Refinements doc §10/§11 + founder feedback (7 Sep, "task added nhi h as
+    // per the job role") — the 1-3 Hero Tasks that ARE this role's job, each
+    // opening a workspace the candidate actually does the work in. Seeded LAST,
+    // deliberately: the grounding call reads the knowledge base, inbox and
+    // company state created above, so the tasks reference this company's real
+    // situation rather than generic role busywork.
+    await this.heroTasks
+      .seedHeroTasks(session.id, session.role, session.companyName, fixture.missionBrief?.objective ?? '', resolveSignatureArtifact(session.role).label)
+      .catch((e) => this.logger.error(`Hero task seeding failed for session ${session.id}: ${e instanceof Error ? e.message : String(e)}`));
 
     return this.getById(session.id, candidateId);
   }
@@ -464,7 +519,24 @@ export class HyrteSessionsService {
       include: { companyState: true, simulationRequest: { select: { code: true } } },
     });
     if (!session) throw new NotFoundException('Session not found');
-    return session;
+    // Pacing is computed here rather than on the client so the frontend and
+    // every backend scheduler agree on exactly one definition of "how far into
+    // the session are we" — the client used to derive elapsed time from
+    // startedAt, which counts world generation and the Mission Brief as
+    // working time.
+    const fraction = elapsedFraction(session);
+    return {
+      ...session,
+      pacing: {
+        ...phaseDescriptorAt(fraction),
+        elapsedFraction: fraction,
+        plannedDurationMs: plannedDurationMs(session.difficulty),
+        orientationEndsAtFraction: ORIENTATION_UNTIL_FRACTION,
+        quietUntil: session.workspaceUnlockedAt
+          ? new Date(new Date(session.workspaceUnlockedAt).getTime() + orientationEndMs(session.difficulty)).toISOString()
+          : null,
+      },
+    };
   }
 
   async getCompanyState(id: string, candidateId: string) {
@@ -575,7 +647,9 @@ export class HyrteSessionsService {
     const [updated] = await Promise.all([
       this.prisma.hyrteSession.update({
         where: { id },
-        data: { phase: 'WORKSPACE_ACTIVE', baselineResponse: baselineResponse as unknown as Prisma.InputJsonValue },
+        // workspaceUnlockedAt is the pacing clock's zero point — every
+        // in-session timer is measured from here, not from startedAt.
+        data: { phase: 'WORKSPACE_ACTIVE', workspaceUnlockedAt: new Date(), baselineResponse: baselineResponse as unknown as Prisma.InputJsonValue },
       }),
       this.decisionGraph.recordDecision({
         sessionId: id,
@@ -597,21 +671,69 @@ export class HyrteSessionsService {
       }),
     ]);
 
-    // Chaos Engine (§4.5) — one wave, timed from when the workspace actually
-    // unlocks (not from session creation, when the candidate is still on the
-    // Mission Brief/Baseline screens and hasn't started working yet), scaled
-    // by the calibration score (§4/Step 9's "adjust event difficulty weights").
-    this.consequences.scheduleChaosWave(id, calibrationScore);
-
-    // Part F3 Orchestrator — periodic Manager/CEO context reviews, timed
-    // from the same workspace-unlock moment as the chaos wave.
-    this.workTicks.scheduleOrchestratorReview(id);
-
-    // Refinements doc §4 — ambient AI-to-AI Slack chatter, same
-    // workspace-unlock start as the other two self-rescheduling chains.
-    this.consequences.scheduleAmbientChatter(id);
+    // Everything that makes the world move is armed HERE, from the real
+    // workspace-unlock moment — the event queue, the ignored-message clocks,
+    // the chaos wave, the orchestrator and ambient chatter — and every one of
+    // them is paced through session-pacing.ts so the candidate gets a genuine
+    // orientation window before anything lands.
+    await this.armSessionTimers(id, calibrationScore);
 
     return updated;
+  }
+
+  /**
+   * Founder feedback (WhatsApp, 7 Sep) — "simulation gradually open up hoga
+   * naki sara kuch ek saath... exploration k liye atleast 10 min dene h."
+   *
+   * The single place every in-session timer starts. Before this, four separate
+   * mechanics armed themselves at three different moments (world generation,
+   * baseline submit, and inbox seeding), none of them aware of each other or of
+   * how far into the session the candidate was — so the first few minutes got
+   * everything at once and the rest of the session got comparatively little.
+   *
+   * Now: one entry point, one clock (`workspaceUnlockedAt`), and every delay
+   * routed through `rampedDelayMs`/`scheduledEventDelayMs`.
+   */
+  private async armSessionTimers(sessionId: string, calibrationScore?: number): Promise<void> {
+    const session = await this.prisma.hyrteSession.findUnique({ where: { id: sessionId } });
+    if (!session) return;
+
+    // 1. The generated event queue, spread across the whole session rather
+    //    than bunched into its first two minutes.
+    const pending = await this.prisma.hyrteWorldEvent.findMany({
+      where: { sessionId, kind: 'SCHEDULED', status: 'PENDING' },
+      orderBy: { fireAtOffsetSeconds: 'asc' },
+    });
+    const offsets = pending.map((e) => e.fireAtOffsetSeconds ?? 0);
+    const minRawOffset = offsets.length ? Math.min(...offsets) : 0;
+    const maxRawOffset = offsets.length ? Math.max(...offsets) : 0;
+    for (const event of pending) {
+      const delay = scheduledEventDelayMs(event.fireAtOffsetSeconds ?? 0, minRawOffset, maxRawOffset, session.difficulty);
+      setTimeout(() => this.fireScheduledEvent(sessionId, event.id).catch((err) => this.logger.warn(err)), delay);
+    }
+
+    // 2. Ignored-message clocks for the urgent content that was already
+    //    waiting when the candidate walked in. These used to be armed at
+    //    generation time, so they had typically already expired before the
+    //    candidate ever saw the message.
+    const urgentUnread = await this.prisma.hyrteInboxMessage.findMany({
+      where: { sessionId, urgent: true, readAt: null },
+      select: { id: true },
+    });
+    for (const m of urgentUnread) {
+      this.consequences.scheduleIgnoredCheck(sessionId, m.id, rampedDelayMs(randomIgnoredWindow(), session));
+    }
+
+    // 3. Chaos Engine (§4.5), scaled by the calibration score (§4/Step 9's
+    //    "adjust event difficulty weights") — now also paced, so a wave cannot
+    //    land during the orientation window.
+    this.consequences.scheduleChaosWave(sessionId, calibrationScore);
+
+    // 4. Part F3 Orchestrator — periodic Manager/CEO context reviews.
+    this.workTicks.scheduleOrchestratorReview(sessionId);
+
+    // 5. Refinements doc §4 — ambient AI-to-AI Slack chatter.
+    this.consequences.scheduleAmbientChatter(sessionId);
   }
 
   /** Recruiter doc §3 — scores N warm-up questions (3-6, was hardcoded to exactly 2) in one call, same order as given. */

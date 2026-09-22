@@ -7,7 +7,9 @@ import { DashboardShell } from '@/components/dashboard-shell';
 import { Meter } from '@/components/hyrte/meter';
 import { HyrteSessionInfoCard } from '@/components/hyrte/session-info-card';
 import { SessionClock } from '@/components/hyrte/session-clock';
-import { hyrteNav } from '@/lib/hyrte-nav';
+import { PacingBanner } from '@/components/hyrte/pacing-banner';
+import { useHyrteNav } from '@/lib/hyrte-nav';
+import { ActivityCenter } from '@/components/hyrte/activity-center';
 import { api } from '@/lib/api';
 import { useHyrteStore } from '@/store/hyrte';
 import {
@@ -21,7 +23,17 @@ import {
   HyrteSession,
   HyrteStakeholder,
   HyrteWorkItem,
+  HyrteActivityEntry,
+  HyrteActivityFeed,
 } from '@/lib/hyrte-types';
+
+const ATTENTION_SOURCE_LABEL: Record<HyrteActivityEntry['source'], string> = {
+  INBOX: 'Email',
+  SLACK: 'Slack',
+  MEETING: 'Meeting',
+  REVIEW: 'Review',
+  TASK: 'Task',
+};
 
 function KpiTile({ label, value }: { label: string; value: number }) {
   return (
@@ -41,7 +53,9 @@ interface SystemMapDept {
 
 export default function HyrteHome({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const { companyStateVersion, inboxVersion, taskVersion, stakeholderVersion } = useHyrteStore();
+  // Live unread badges on the sidebar surfaces (Refinements doc §4).
+  const nav = useHyrteNav(id);
+  const { companyStateVersion, inboxVersion, slackVersion, taskVersion, stakeholderVersion, meetingVersion } = useHyrteStore();
   const queryClient = useQueryClient();
   const [command, setCommand] = useState('');
   const [commandResult, setCommandResult] = useState<string | null>(null);
@@ -83,9 +97,17 @@ export default function HyrteHome({ params }: { params: Promise<{ id: string }> 
     queryKey: ['hyrte', 'system-map', id, stakeholderVersion],
     queryFn: () => api.get<SystemMapDept[]>(`/hyrte/sessions/${id}/system-map`),
   });
+  // Refinements doc §3 — "Needs My Attention must be actionable". This card
+  // used to list urgent INBOX messages only, so a blocked engineer on Slack, a
+  // colleague waiting on a review, or a meeting about to start were all
+  // invisible here. Same unified feed the bell and the sidebar badges use.
+  const { data: activity } = useQuery({
+    queryKey: ['hyrte', 'activity', id, inboxVersion, slackVersion, taskVersion, meetingVersion],
+    queryFn: () => api.get<HyrteActivityFeed>(`/hyrte/sessions/${id}/activity?limit=8`),
+  });
 
   const unread = inbox?.filter((m) => !m.readAt) ?? [];
-  const urgent = unread.filter((m) => m.urgent);
+  const attention = (activity?.entries ?? []).filter((e) => e.unread).slice(0, 5);
   // Part E2 Command Center KPI tiles — the spec's own PM-role example names
   // (Open Escalations, Active Customers, Sprint Progress, Unread Threads)
   // assume a customer-facing stakeholder every world doesn't generate; these
@@ -126,13 +148,17 @@ export default function HyrteHome({ params }: { params: Promise<{ id: string }> 
       variant="hyrte-os"
       title={session ? `${session.companyName} — ${session.role}` : 'Workplace'}
       requiredRoles={['CANDIDATE']}
-      navOverride={hyrteNav(id)}
+      navOverride={nav}
+      headerExtra={<ActivityCenter sessionId={id} />}
       sidebarExtra={<HyrteSessionInfoCard sessionId={id} />}
       backHref="/candidate"
       backLabel="Exit"
     >
       {session && (
-        <div className="mb-4 flex justify-end">
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <div className="min-w-[260px] flex-1">
+            <PacingBanner session={session} />
+          </div>
           <SessionClock session={session} />
         </div>
       )}
@@ -157,13 +183,34 @@ export default function HyrteHome({ params }: { params: Promise<{ id: string }> 
         </div>
 
         <div className="card">
-          <h3 className="font-semibold">Needs your attention</h3>
-          {urgent.length === 0 && <p className="mt-2 text-sm text-black/50 dark:text-white/50">Nothing urgent right now.</p>}
+          <div className="flex items-center justify-between">
+            <h3 className="font-semibold">Needs your attention</h3>
+            {!!activity?.counts.total && (
+              <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-xs font-semibold text-red-600 dark:text-red-400">{activity.counts.total}</span>
+            )}
+          </div>
+          {attention.length === 0 && <p className="mt-2 text-sm text-black/50 dark:text-white/50">Nothing waiting on you right now.</p>}
           <ul className="mt-3 space-y-2">
-            {urgent.map((m) => (
-              <li key={m.id} className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
-                <div className="font-medium">{m.subject}</div>
-                <div className="text-xs text-black/50 dark:text-white/50">from {m.fromStakeholder?.name}</div>
+            {attention.map((entry) => (
+              <li key={entry.id}>
+                {/* §3: "Clicking each should take the user directly to the relevant environment." */}
+                <Link
+                  href={entry.href}
+                  className={`block rounded-lg border p-3 text-sm transition hover:bg-black/[0.03] dark:hover:bg-white/5 ${
+                    entry.urgency === 'HIGH'
+                      ? 'border-red-500/30 bg-red-500/[0.07]'
+                      : 'border-black/10 dark:border-white/10'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="rounded-full bg-black/5 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-black/50 dark:bg-white/10 dark:text-white/50">
+                      {ATTENTION_SOURCE_LABEL[entry.source]}
+                    </span>
+                    {entry.personName && <span className="truncate text-xs text-black/60 dark:text-white/60">{entry.personName}</span>}
+                  </div>
+                  <div className="mt-1.5 font-medium">{entry.title}</div>
+                  <p className="mt-0.5 text-xs text-black/55 dark:text-white/55">{entry.context}</p>
+                </Link>
               </li>
             ))}
           </ul>
