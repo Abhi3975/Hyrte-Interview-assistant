@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { DashboardShell } from '@/components/dashboard-shell';
 import { LiveDeliberationPanel } from '@/components/recruiter/live-deliberation';
+import { HiringOutcomePanel } from '@/components/recruiter/hiring-outcome';
 import { CheckIcon, AlertIcon, XIcon } from '@/components/icons';
 import { api, ApiError } from '@/lib/api';
 import {
@@ -191,6 +192,9 @@ export default function HyrteCouncilPage() {
               )}
             </div>
           </div>
+
+          {/* §9 Learning Engine — the outcome that closes the loop. */}
+          <HiringOutcomePanel sessionId={activeId} />
 
           {/* Decision Cortex Q&A (§6.3.3) */}
           <div className="card">

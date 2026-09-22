@@ -578,3 +578,55 @@ export interface PreMeetingBrief {
   recentStatements: PreMeetingStatement[];
   relatedDocs: { id: string; title: string; category: string }[];
 }
+
+// ── §9 Learning Engine ──────────────────────────────────────────────────────
+// What actually happened after the interview, and what the committee has
+// learned from it about its own members.
+
+export type HiringOutcomeEventType =
+  | 'HIRED'
+  | 'REJECTED'
+  | 'WITHDREW'
+  | 'OFFER_DECLINED'
+  | 'RETENTION_CHECKPOINT'
+  | 'PROMOTED'
+  | 'RESIGNED'
+  | 'TERMINATED';
+
+export type PerformanceRating = 'HIGH_PERFORMER' | 'MEETS_EXPECTATIONS' | 'BELOW_EXPECTATIONS';
+
+export interface HyrteHiringOutcomeEvent {
+  id: string;
+  sessionId: string;
+  eventType: HiringOutcomeEventType;
+  performanceRating: PerformanceRating | null;
+  notes: string | null;
+  occurredAt: string;
+}
+
+export interface CouncilAgentCalibration {
+  agentKey: string;
+  n: number;
+  successMean: number;
+  failureMean: number;
+  separation: number;
+  weight: number;
+  verdict: 'PREDICTIVE' | 'NEUTRAL' | 'ANTI_PREDICTIVE' | 'INSUFFICIENT';
+}
+
+export interface CouncilConfidenceCalibration {
+  bins: { lowerPercent: number; upperPercent: number; n: number; statedMean: number; actualSuccessRate: number }[];
+  overconfidenceGap: number;
+  verdict: 'WELL_CALIBRATED' | 'OVERCONFIDENT' | 'UNDERCONFIDENT' | 'INSUFFICIENT';
+}
+
+export interface CouncilCalibration {
+  totalLabelled: number;
+  successes: number;
+  failures: number;
+  sufficient: boolean;
+  reason: string | null;
+  agents: CouncilAgentCalibration[];
+  confidence: CouncilConfidenceCalibration | null;
+  weights: Record<string, number>;
+}

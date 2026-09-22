@@ -209,10 +209,25 @@ export class CouncilCoreService {
     }
   }
 
-  tallyVotes(agentResults: AgentResult[]): { avg: number; voterCount: number } {
+  /**
+   * The committee's aggregate lean.
+   *
+   * `weights` is the §9 Learning Engine's output: how much each voter has
+   * earned, from whether their past stances actually predicted how the hire
+   * worked out (see hyrte/learning/outcome-calibration.ts). It is optional
+   * and defaults to 1.0 per voter, which is the exact unweighted mean this
+   * was before — Ally's council has no hiring-outcome history to learn from
+   * and passes nothing, so its behaviour is unchanged.
+   *
+   * A weighted mean, not a weighted sum: the divisor is the total weight, so
+   * turning one member up cannot inflate the whole committee's lean.
+   */
+  tallyVotes(agentResults: AgentResult[], weights?: Record<string, number>): { avg: number; voterCount: number } {
     const voters = agentResults.filter((r) => r.agent.votes && r.result.stance && VALID_STANCES.has(r.result.stance));
-    const avg = voters.length
-      ? voters.reduce((sum, r) => sum + STANCE_SCORE[r.result.stance as CouncilStance], 0) / voters.length
+    const totalWeight = voters.reduce((sum, r) => sum + (weights?.[r.agent.key] ?? 1), 0);
+    const avg = totalWeight
+      ? voters.reduce((sum, r) => sum + STANCE_SCORE[r.result.stance as CouncilStance] * (weights?.[r.agent.key] ?? 1), 0) /
+        totalWeight
       : 0;
     return { avg, voterCount: voters.length };
   }

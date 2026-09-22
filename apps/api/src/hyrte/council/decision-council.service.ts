@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditLogService } from '../dig/audit-log.service';
 import { CouncilCoreService, AgentResponse, PredictionEntry, VALID_STANCES } from '../../council-shared/council-core.service';
+import { CalibrationService } from '../learning/calibration.service';
 
 interface EvidenceRef {
   label: string;
@@ -44,6 +45,7 @@ export class DecisionCouncilService {
     private readonly prisma: PrismaService,
     private readonly core: CouncilCoreService,
     private readonly auditLog: AuditLogService,
+    private readonly calibration: CalibrationService,
   ) {}
 
   async convene(
@@ -115,7 +117,10 @@ export class DecisionCouncilService {
     // Deterministic vote tally — more defensible than asking an LLM to "tally
     // the votes," and matches the doc's own "Decision Cortex... predicted
     // success... derived from patterns... not from a single rubric" framing.
-    const { avg } = this.core.tallyVotes(agentResults);
+    // §9 Learning Engine: voters who have historically called it right count
+    // for more. Flat 1.0 each until enough outcomes have been recorded to
+    // justify otherwise, so this changes nothing on a cold instance.
+    const { avg } = this.core.tallyVotes(agentResults, await this.calibration.getVoteWeights());
     const recommendation = avg >= 1.5 ? 'Strong Fit' : avg >= 0.25 ? 'Fit' : avg >= -1 ? 'Weak Fit' : 'Not a Fit';
 
     const cortex = this.core.getCortexResult(agentResults);

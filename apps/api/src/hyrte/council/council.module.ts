@@ -4,10 +4,11 @@ import { DecisionCortexService } from './decision-cortex.service';
 import { CouncilController } from './council.controller';
 import { DigModule } from '../dig/dig.module'; // AuditLogService, §8
 import { CouncilSharedModule } from '../../council-shared/council-shared.module';
+import { LearningModule } from '../learning/learning.module'; // §9 — learned vote weights
 
 /** §6 Decision Council — exported so HyrteInterviewService can inject DecisionCouncilService. */
 @Module({
-  imports: [DigModule, CouncilSharedModule],
+  imports: [DigModule, CouncilSharedModule, LearningModule],
   controllers: [CouncilController],
   providers: [DecisionCouncilService, DecisionCortexService],
   exports: [DecisionCouncilService, DecisionCortexService],
