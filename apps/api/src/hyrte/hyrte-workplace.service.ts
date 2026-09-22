@@ -27,6 +27,7 @@ import { HyrteCommandBarService, CommandBarResult } from './work/command-bar.ser
 import { HyrteMeetingService } from './meetings/meeting.service';
 import { KnowledgeDiscoveryService } from './knowledge/knowledge-discovery.service';
 import { isDocRelevantToRole } from './generator/knowledge-linking';
+import { getVisibleStateKeys } from './dig/info-scope.util';
 
 /** §4.12 Layers 5/9/11 — chance a stakeholder NOT party to an exchange independently reacts to it. Not 100%: constant chatter reads as noise, not signal. */
 const INDEPENDENT_REACTION_PROBABILITY = 0.5;
@@ -774,20 +775,43 @@ export class HyrteWorkplaceService {
   }
 
   /**
-   * Part E2 Command Center "System Map" — real department clusters, each
-   * with a deterministic head (highest authorityLevel, same derivation as
-   * the Mission Brief's manager, never LLM-guessed) and a real message-
-   * volume count. Deliberately does NOT invent cross-department
-   * relationship edges — there's no real data behind those yet, and a fake
-   * graph would violate "no placeholder content anywhere."
+   * Refinements doc §2 — "Your system map is potentially one of the strongest
+   * parts of the simulation. Don't make it decorative. Every node should
+   * represent an actual part of the simulated company… Even better: show
+   * relationship effects, so when the candidate makes a decision they can see
+   * the downstream consequences."
+   *
+   * It WAS decorative: a department name, a head, and a message count. This
+   * makes each node a real, drillable view of that part of the company — the
+   * metrics it owns (role-scoped, info-scope.util.ts), the work actually in
+   * flight there, who is unread, and its people.
+   *
+   * The edges are the part that used to be missing. The earlier version
+   * deliberately refused to invent them ("there's no real data behind those
+   * yet, and a fake graph would violate no-placeholder-content") — correct at
+   * the time. There IS real data now: HyrteDecisionLogEntry.causedByDecisionId
+   * forms genuine causal chains, so an edge is drawn only where one
+   * department's decision actually caused a follow-on decision in another.
+   * Nothing is inferred or invented; a session where nothing has knocked on
+   * yet simply has no edges, which is the honest picture.
    */
   async getSystemMap(sessionId: string, candidateId: string) {
     await this.assertOwnership(sessionId, candidateId);
-    const [companyState, stakeholders, inbox, slack] = await Promise.all([
-      this.prisma.hyrteCompanyState.findUnique({ where: { sessionId }, select: { departments: true } }),
+    const [companyState, stakeholders, inbox, slack, workItems, decisions] = await Promise.all([
+      this.prisma.hyrteCompanyState.findUnique({ where: { sessionId } }),
       this.prisma.hyrteStakeholder.findMany({ where: { sessionId }, omit: OMIT_CANDIDATE_INTERNALS }),
-      this.prisma.hyrteInboxMessage.findMany({ where: { sessionId }, select: { fromStakeholderId: true } }),
+      this.prisma.hyrteInboxMessage.findMany({ where: { sessionId }, select: { fromStakeholderId: true, readAt: true } }),
       this.prisma.hyrteSlackMessage.findMany({ where: { sessionId }, select: { fromStakeholderId: true } }),
+      this.prisma.hyrteWorkItem.findMany({
+        where: { sessionId, stage: { notIn: ['DONE'] } },
+        select: { id: true, title: true, ownerStakeholderId: true, stage: true, priority: true },
+      }),
+      this.prisma.hyrteDecisionLogEntry.findMany({
+        where: { sessionId, causedByDecisionId: { not: null } },
+        select: { id: true, actor: true, outcome: true, causedByDecisionId: true, causedBy: { select: { actor: true, outcome: true } } },
+        orderBy: { createdAt: 'asc' },
+        take: 40,
+      }),
     ]);
     const departments = Array.isArray(companyState?.departments) ? (companyState!.departments as { name?: string }[]) : [];
     const messageCountByStakeholder = new Map<string, number>();
@@ -796,7 +820,14 @@ export class HyrteWorkplaceService {
       messageCountByStakeholder.set(m.fromStakeholderId, (messageCountByStakeholder.get(m.fromStakeholderId) ?? 0) + 1);
     }
 
-    return departments
+    const unreadByStakeholder = new Map<string, number>();
+    for (const m of inbox) {
+      if (!m.fromStakeholderId || m.readAt) continue;
+      unreadByStakeholder.set(m.fromStakeholderId, (unreadByStakeholder.get(m.fromStakeholderId) ?? 0) + 1);
+    }
+    const deptOf = new Map(stakeholders.map((s) => [s.id, s.department]));
+
+    const nodes = departments
       .filter((d): d is { name: string } => typeof d.name === 'string')
       .map((d) => {
         const members = stakeholders.filter((s) => s.department === d.name);
@@ -804,13 +835,54 @@ export class HyrteWorkplaceService {
           (a, b) => (!a || (b.authorityLevel ?? 50) > (a.authorityLevel ?? 50) ? b : a),
           null,
         );
+        const memberIds = new Set(members.map((s) => s.id));
+        const deptWork = workItems.filter((w) => w.ownerStakeholderId && memberIds.has(w.ownerStakeholderId));
+
+        // §2 "every node should represent an actual part of the simulated
+        // company" — the metrics this department actually owns, reusing the
+        // same role-scoping that already governs what its people can see, so
+        // the map and the stakeholders agree about who owns what.
+        const ownedKeys = head ? getVisibleStateKeys(head.role) : [];
+        const metrics = companyState
+          ? ownedKeys
+              .filter((k) => typeof (companyState as unknown as Record<string, unknown>)[k] === 'number')
+              .slice(0, 4)
+              .map((k) => ({ key: k, value: (companyState as unknown as Record<string, number>)[k] }))
+          : [];
+
         return {
           name: d.name,
           headStakeholderId: head?.id ?? null,
           messageCount: members.reduce((sum, s) => sum + (messageCountByStakeholder.get(s.id) ?? 0), 0),
+          unreadCount: members.reduce((sum, s) => sum + (unreadByStakeholder.get(s.id) ?? 0), 0),
+          activeWorkCount: deptWork.length,
+          needsReviewCount: deptWork.filter((w) => w.stage === 'WAITING_REVIEW').length,
+          metrics,
           stakeholders: members.map((s) => ({ id: s.id, name: s.name, role: s.role })),
+          activeWork: deptWork.slice(0, 4).map((w) => ({ id: w.id, title: w.title, stage: w.stage, priority: w.priority })),
         };
       });
+
+    // §2's "relationship effects" — real edges only. A decision by someone in
+    // one department that genuinely caused a follow-on decision by someone in
+    // another IS the downstream consequence the doc asks to make visible;
+    // anything else would be a drawn arrow with nothing behind it.
+    const edgeCounts = new Map<string, { from: string; to: string; count: number; latest: string | null }>();
+    for (const d of decisions) {
+      const toDept = deptOf.get(d.actor);
+      const fromDept = d.causedBy ? deptOf.get(d.causedBy.actor) : null;
+      if (!toDept || !fromDept || toDept === fromDept) continue;
+      const key = `${fromDept}→${toDept}`;
+      const existing = edgeCounts.get(key);
+      if (existing) {
+        existing.count += 1;
+        existing.latest = d.outcome ?? existing.latest;
+      } else {
+        edgeCounts.set(key, { from: fromDept, to: toDept, count: 1, latest: d.outcome ?? null });
+      }
+    }
+
+    return { nodes, impactEdges: [...edgeCounts.values()] };
   }
 
   // ── Decision log ──
