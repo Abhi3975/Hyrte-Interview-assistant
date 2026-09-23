@@ -8,6 +8,7 @@ import { resolveSignatureArtifact } from './signature-artifacts';
 import { enforceWarmupVariety, pickAxes } from './question-variety';
 import { ambientInboxTargetCount, ambientSlackTargetCount, ensureUpcomingMeeting, generateAmbientInbox, generateAmbientSlack } from './ambient-noise';
 import { resolveCompanyPersona, personaDirective, lockedDocTarget, type CompanyPersona } from './company-persona';
+import { describeUnlockRoute } from './knowledge-linking';
 import {
   FixtureCalendarEvent,
   FixtureDepartment,
@@ -840,7 +841,7 @@ const VALID_UNLOCK_TRIGGER = /^(meeting:any|task:any|stakeholder:[\w-]+)$/;
 /** Never lock a candidate out of orienting themselves — these stay visible whatever the model says. */
 const NEVER_LOCKED_CATEGORIES = new Set(['wiki', 'roadmap', 'financial_report']);
 
-function sanitizeKnowledgeDocs(raw: unknown, persona: CompanyPersona): FixtureKnowledgeDoc[] {
+export function sanitizeKnowledgeDocs(raw: unknown, persona: CompanyPersona): FixtureKnowledgeDoc[] {
   const docs = asRecords(raw)
     .filter((k) => typeof k.title === 'string' && typeof k.body === 'string')
     .slice(0, CAPS.knowledgeDocs)
@@ -872,14 +873,6 @@ function sanitizeKnowledgeDocs(raw: unknown, persona: CompanyPersona): FixtureKn
     delete d.unlockTrigger;
   };
 
-  // Only the ceiling is enforced here, and deliberately so. Locking MORE than
-  // the model produced would mean inventing an unlock route for a document
-  // that has none — and a hint that disagrees with its trigger is the exact
-  // drift bug this codebase already fixed once (a doc saying "check in with
-  // Alice" whose trigger pointed somewhere else, unopenable however many
-  // people the candidate asked). The floor is handled where it can be handled
-  // honestly: the generation prompt is told the target, so the documents come
-  // back already carrying hints that match their routes.
   let lockedNow = docs.filter((d) => d.locked).length;
   for (const d of docs) {
     if (lockedNow <= target) break;
@@ -887,6 +880,29 @@ function sanitizeKnowledgeDocs(raw: unknown, persona: CompanyPersona): FixtureKn
       unlock(d);
       lockedNow--;
     }
+  }
+
+  // And the floor, deterministically — the prompt is told the target too, but
+  // asking is not guaranteeing. Verified live on production: a Startup world,
+  // whose whole character is that nothing is written down, came back with all
+  // 8 documents open because the model simply did not mark any, and the two it
+  // might have were foundational categories that are never lockable.
+  //
+  // Promoting a document is safe because the hint is DERIVED from the trigger
+  // (describeUnlockRoute, applied here and again when the session is
+  // persisted) rather than written independently — which is what made the
+  // original "check in with Alice" drift bug possible. `meeting:any` and
+  // `task:any` need no roster knowledge and are reachable by any candidate who
+  // attends a meeting or picks up work.
+  const GENERIC_ROUTES = ['meeting:any', 'task:any'];
+  for (const d of docs) {
+    if (lockedNow >= target) break;
+    if (d.locked || NEVER_LOCKED_CATEGORIES.has(d.category.toLowerCase())) continue;
+    const trigger = GENERIC_ROUTES[lockedNow % GENERIC_ROUTES.length];
+    d.locked = true;
+    d.unlockTrigger = trigger;
+    d.unlockHint = describeUnlockRoute(trigger);
+    lockedNow++;
   }
   return docs;
 }

@@ -5,6 +5,8 @@ import {
   personaStakeholderDirective,
   resolveCompanyPersona,
 } from '../src/hyrte/generator/company-persona';
+import { sanitizeKnowledgeDocs } from '../src/hyrte/generator/simulation-generator.service';
+import { describeUnlockRoute } from '../src/hyrte/generator/knowledge-linking';
 
 /**
  * The Company Persona Engine. Before this, `companyType` was one adjective in
@@ -114,5 +116,70 @@ describe('what reaches the prompts', () => {
   it('produces a distinct directive for every persona — no two companies feel the same', () => {
     const directives = allCompanyPersonas().map((p) => personaStakeholderDirective(p));
     expect(new Set(directives).size).toBe(directives.length);
+  });
+});
+
+describe('the locked-doc target actually reaching the knowledge base', () => {
+  // Regression, caught live on production rather than by this file: a Startup
+  // world — whose entire character is that nothing is written down — generated
+  // 8 documents with ZERO locked, because the target was only ever *asked* for
+  // in the prompt. Asking is not guaranteeing; this repo's standing rule.
+  // Mirrors what production actually generates: one doc per category, a few of
+  // which are foundational and must never be locked.
+  const LIVE_CATEGORIES = ['prd', 'roadmap', 'customer_history', 'hr_policy', 'wiki', 'backlog', 'financial_report', 'sales_deck'];
+  const raw = (n: number, category?: string) =>
+    Array.from({ length: n }, (_, i) => ({
+      title: `Doc ${i}`,
+      body: 'Body long enough to be real content.',
+      category: category ?? LIVE_CATEGORIES[i % LIVE_CATEGORIES.length],
+      locked: false,
+    }));
+
+  it('locks up to the target even when the generator marked nothing', () => {
+    const startup = resolveCompanyPersona('Startup');
+    const docs = sanitizeKnowledgeDocs(raw(8), startup);
+    expect(docs.filter((d) => d.locked)).toHaveLength(lockedDocTarget(startup, 8));
+  });
+
+  it('gives every promoted document a real route, never a dead end', () => {
+    const docs = sanitizeKnowledgeDocs(raw(8), resolveCompanyPersona('Startup'));
+    for (const d of docs.filter((x) => x.locked)) {
+      expect(d.unlockTrigger).toMatch(/^(meeting:any|task:any|stakeholder:[\w-]+)$/);
+      expect(d.unlockHint && d.unlockHint.length).toBeGreaterThan(10);
+    }
+  });
+
+  it('derives the hint from the trigger so the two can never disagree', () => {
+    // The original production bug: a hint saying "check in with Alice" against
+    // a trigger that pointed somewhere else, leaving the doc unopenable.
+    const docs = sanitizeKnowledgeDocs(raw(8), resolveCompanyPersona('Startup'));
+    for (const d of docs.filter((x) => x.locked)) {
+      expect(d.unlockHint).toBe(describeUnlockRoute(d.unlockTrigger!));
+    }
+  });
+
+  it('never locks a document a candidate needs to orient themselves', () => {
+    const foundational = [...raw(4, 'roadmap'), ...raw(4, 'financial_report')];
+    expect(sanitizeKnowledgeDocs(foundational, resolveCompanyPersona('Startup')).filter((d) => d.locked)).toHaveLength(0);
+  });
+
+  it('falls short of the target rather than locking a foundational doc to hit it', () => {
+    // Six wikis and two roadmaps: nothing is eligible, so the honest outcome is
+    // an open knowledge base, not a met quota.
+    const allFoundational = [...raw(6, 'wiki'), ...raw(2, 'roadmap')];
+    expect(sanitizeKnowledgeDocs(allFoundational, resolveCompanyPersona('Startup')).filter((d) => d.locked)).toHaveLength(0);
+  });
+
+  it('unlocks back down when the generator locked far too many', () => {
+    const overLocked = Array.from({ length: 8 }, (_, i) => ({
+      title: `Doc ${i}`,
+      body: 'Body long enough to be real content.',
+      category: 'meeting_notes',
+      locked: true,
+      unlockHint: 'someone knows',
+      unlockTrigger: 'meeting:any',
+    }));
+    const gov = resolveCompanyPersona('Government');
+    expect(sanitizeKnowledgeDocs(overLocked, gov).filter((d) => d.locked)).toHaveLength(lockedDocTarget(gov, 8));
   });
 });
