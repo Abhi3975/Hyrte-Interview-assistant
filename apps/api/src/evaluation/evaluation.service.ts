@@ -252,8 +252,33 @@ interface CoreEvalResponse {
   skillCards?: { key: string; score: number; instanceNote: string }[];
 }
 interface ParameterResponse {
-  scores: Record<string, { score: number; interpretation: string }>;
+  scores: Record<string, { score?: number; riskLevel?: string; interpretation: string }>;
 }
+
+/**
+ * Parameters phrased as a risk, where more is worse.
+ *
+ * These used to be scored like everything else, with the prompt asking the
+ * model to invert its own intuition — "still score 0-100 in the SAME direction
+ * as everything else (100 = best/least risky)". It complied for most of them
+ * and not for others, on the same call: verified live, a report came back with
+ * "AI-assist / plagiarism signal: 0" whose own interpretation read "No
+ * indication of AI assistance was present", alongside "Bluff probability: 90 —
+ * appeared genuine". On a 100-is-best scale those two mean opposite things, and
+ * the recruiter sees a red 0 next to text saying there is nothing wrong.
+ *
+ * Asking a model to invert a scale is a structural guarantee handed to a
+ * prompt, which is the one thing this codebase consistently refuses to do. So
+ * these are no longer scored at all — the model reports a risk LEVEL, which has
+ * no direction to get backwards, and code turns it into the number.
+ */
+const RISK_LEVEL_SCORE: Record<string, number> = {
+  none: 100,
+  low: 85,
+  moderate: 60,
+  high: 30,
+  severe: 10,
+};
 
 @Injectable()
 export class EvaluationService {
@@ -429,14 +454,17 @@ export class EvaluationService {
     const paramSystem = [
       'You are scoring a candidate against a FIXED evaluation framework — do not invent, rename, skip, or reorder parameters.',
       'For EVERY parameter listed below, return a 0-100 score AND a short (one sentence) interpretation grounded in the transcript — never a bare number, and never boilerplate that could apply to any candidate.',
-      "For parameters explicitly marked '(lower is better)', still score 0-100 in the SAME direction as everything else (100 = best/least risky) — you are not inverting the scale, just noting what 'good' means for that one.",
+      // No inversion is requested any more — see RISK_LEVEL_SCORE. A level has
+      // no direction to get backwards; a score does, and the model got it
+      // backwards on three parameters of twelve in the same response.
+      'Parameters marked \'(lower is better)\' are RISKS. Do NOT score those 0-100. Instead return {"riskLevel": one of "none"|"low"|"moderate"|"high"|"severe", "interpretation": string} — how much of that risk you actually saw evidence for, where "none" means you saw none of it. Every OTHER parameter takes {"score": 0-100, "interpretation": string} as normal.',
       'Parameters, by group:',
       ...PARAMETER_GROUPS.map((g) => `[${g}]: ${PARAMETER_TAXONOMY[g].map((p) => p.key).join(', ')}.`),
       // The multi-modal half: what the camera and screen actually saw. Until
       // now this prompt scored proctoring and coaching from the transcript
       // alone, having never been shown a single observation.
       proctoring.observationBlock,
-      'Return ONLY JSON: {"scores": {"<parameter key>": {"score": number, "interpretation": string}, ...}} — one entry per key listed above, using the EXACT key strings given.',
+      'Return ONLY JSON: {"scores": {"<parameter key>": {"score": number, "interpretation": string} | {"riskLevel": string, "interpretation": string}, ...}} — one entry per key listed above, using the EXACT key strings given.',
     ].join(' ');
 
     let core: CoreEvalResponse;
@@ -525,7 +553,13 @@ export class EvaluationService {
           continue;
         }
         const entry = scores[key];
-        const score = clamp(entry?.score);
+        // A risk parameter's number is computed from the level, never taken
+        // from a score field the model may have filled in the wrong direction.
+        // Falling back to the raw score keeps older/non-compliant responses
+        // working rather than reporting every risk as clean.
+        const isRisk = label.includes('(lower is better)');
+        const level = typeof entry?.riskLevel === 'string' ? entry.riskLevel.trim().toLowerCase() : '';
+        const score = isRisk && level in RISK_LEVEL_SCORE ? RISK_LEVEL_SCORE[level] : clamp(entry?.score);
         const interpretation = (entry?.interpretation ?? '').toString().trim().slice(0, 240) || `${label}: ${score}/100 — no further detail returned.`;
         parameterScores.push({ key, group, label, score, interpretation, weight: weights[group] });
       }

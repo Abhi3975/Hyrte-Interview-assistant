@@ -162,3 +162,73 @@ describe('EvaluationService.normalize (repairs malformed/partial LLM output, nev
     expect(result.perQuestion).toBeUndefined();
   });
 });
+
+describe('risk parameters cannot be scored backwards', () => {
+  // Verified live on production before this existed: one response contained
+  // "Bluff probability: 90 — appeared genuine and credible" AND "AI-assist /
+  // plagiarism signal: 0 — No indication of AI assistance was present". On a
+  // 100-is-best scale those mean opposite things, and the recruiter saw a red
+  // 0 next to text saying there was nothing wrong. The prompt had asked the
+  // model to invert its own intuition for 12 parameters; it complied for nine.
+  const riskKeys = PARAMETER_TAXONOMY.risk.map((p) => p.key);
+  const service = new EvaluationService({} as never, {} as never, {} as never) as unknown as {
+    normalize: (core: any, params: any, context: any, items: any[], proctoring: any) => any;
+  };
+  const context = { jobRole: 'Backend Engineer', category: 'ENGINEERING', difficulty: 'MEDIUM' };
+  const noProctoring = buildProctoringContext([], null);
+  const evaluate = (scores: Record<string, unknown>) =>
+    service.normalize(
+      { overallScore: 50, competencies: {}, strengths: [], weaknesses: [], summary: '', recommendation: 'HIRE' },
+      { scores },
+      context,
+      [],
+      noProctoring,
+    );
+
+  const find = (result: any, key: string) => result.parameterScores.find((p: any) => p.key === key);
+
+  it('reads "no risk seen" as a good result, not a zero', () => {
+    const out = evaluate({ ai_assist_signal: { riskLevel: 'none', interpretation: 'No indication of AI assistance.' } });
+    expect(find(out, 'ai_assist_signal').score).toBe(100);
+  });
+
+  it('reads a serious risk as a bad one', () => {
+    const out = evaluate({ ai_assist_signal: { riskLevel: 'severe', interpretation: 'Answers matched a public source verbatim.' } });
+    expect(find(out, 'ai_assist_signal').score).toBeLessThan(20);
+  });
+
+  it('orders the levels monotonically, so the scale cannot fold over', () => {
+    const levels = ['none', 'low', 'moderate', 'high', 'severe'];
+    const scores = levels.map((riskLevel) => find(evaluate({ evasiveness: { riskLevel, interpretation: 'x' } }), 'evasiveness').score);
+    for (let i = 1; i < scores.length; i++) expect(scores[i]).toBeLessThan(scores[i - 1]);
+  });
+
+  it('ignores a score the model volunteered alongside a level', () => {
+    // This is the exact failure: a 0 that meant "no risk" on a scale where 0
+    // is the worst possible value.
+    const out = evaluate({ coaching_suspicion: { score: 0, riskLevel: 'none', interpretation: 'No signs of coaching.' } });
+    expect(find(out, 'coaching_suspicion').score).toBe(100);
+  });
+
+  it('falls back to the raw score rather than reporting an unanswered risk as clean', () => {
+    // A missing or unrecognised level must not silently become "none" — that
+    // would turn every non-compliant response into a perfect risk profile.
+    expect(find(evaluate({ evasiveness: { score: 40, interpretation: 'x' } }), 'evasiveness').score).toBe(40);
+    expect(find(evaluate({ evasiveness: { score: 40, riskLevel: 'banana', interpretation: 'x' } }), 'evasiveness').score).toBe(40);
+  });
+
+  it('leaves ordinary parameters scored the way they always were', () => {
+    const out = evaluate({ clarity: { score: 82, interpretation: 'Clear throughout.' } });
+    expect(find(out, 'clarity').score).toBe(82);
+    // ...and a riskLevel on a non-risk parameter is meaningless and ignored.
+    expect(find(evaluate({ clarity: { score: 82, riskLevel: 'severe', interpretation: 'x' } }), 'clarity').score).toBe(82);
+  });
+
+  it('covers every risk parameter, not just the three that were caught', () => {
+    const out = evaluate(Object.fromEntries(riskKeys.map((k) => [k, { riskLevel: 'none', interpretation: 'x' }])));
+    for (const key of riskKeys) {
+      if (key === 'proctoring_risk') continue; // computed by the risk engine, not scored
+      expect(find(out, key).score).toBe(100);
+    }
+  });
+});
