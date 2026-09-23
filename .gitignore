@@ -50,3 +50,4 @@ infra/.taskdef-*
 infra/taskdef-api.json
 infra/taskdef-web.json
 infra/.cloudfront-config.json
+packages/conversation/dist

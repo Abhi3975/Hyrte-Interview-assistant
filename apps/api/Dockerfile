@@ -21,12 +21,19 @@ COPY packages ./packages
 COPY prisma ./prisma
 COPY apps/api ./apps/api
 RUN npx prisma generate --schema=prisma/schema.prisma
+# The shared package ships compiled JS: node_modules/@interviewai/conversation
+# is a symlink into packages/, and Node cannot require TypeScript at runtime.
+RUN npm run build --workspace @interviewai/conversation
 RUN npm run build --workspace @interviewai/api
 
 # ── runtime: slim, non-root ──
 FROM base AS runner
 ENV NODE_ENV=production
 COPY --from=build /app/node_modules ./node_modules
+# Without this the symlink above dangles and the API exits 1 on boot with
+# "Cannot find module '@interviewai/conversation'" — which is exactly what
+# happened, because the image building was mistaken for the container starting.
+COPY --from=build /app/packages ./packages
 COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/apps/api/dist ./dist
 COPY --from=build /app/apps/api/package.json ./package.json
