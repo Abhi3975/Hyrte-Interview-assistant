@@ -99,6 +99,15 @@ export function planInterview(signals: SimulationSignals): InterviewPlan {
   const coverage = pct(signals.contextsCovered, signals.contextsTotal);
 
   if (signals.evidenceCount < THIN_EVIDENCE || coverage < THIN_COVERAGE_RATIO) {
+    // An empty record and a thin one need different instructions. Verified
+    // live: told to "open on the most substantial thing they DID do, however
+    // small" against ZERO observations, the model invented one — it opened
+    // with "I noticed you engaged with the simulation by making decisions in
+    // challenging areas" to a candidate who had done nothing at all. Asking
+    // for a citation from an empty record is asking for a fabrication, and a
+    // fabricated observation about a candidate is not a small thing in a
+    // hiring interview.
+    const nothingObserved = signals.evidenceCount === 0;
     return {
       archetype: 'ESTABLISH',
       reason:
@@ -112,9 +121,12 @@ export function planInterview(signals: SimulationSignals): InterviewPlan {
         'system. Do NOT treat the thin record as a failing or mention how little they did. Your job here is to find ' +
         'out what they can actually do, so ask about real work they have done elsewhere when the simulation gives ' +
         'you nothing to go on.',
-      openingStrategy:
-        'Open on the most substantial thing they DID do, however small, and use it as a doorway into how they work ' +
-        'generally. Do not open by observing that they did little.',
+      openingStrategy: nothingObserved
+        ? 'There is NOTHING in the simulation record to cite — do not claim to have noticed anything they did, and ' +
+          'do not invent an observation to open with. Open instead on the role itself: ask about a concrete piece ' +
+          'of real work from their own experience that is relevant to it.'
+        : 'Open on the most substantial thing they DID do, however small, and use it as a doorway into how they ' +
+          'work generally. Do not open by observing that they did little.',
       bossModeRecommended: false,
     };
   }

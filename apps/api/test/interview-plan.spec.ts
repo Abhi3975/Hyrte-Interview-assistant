@@ -95,6 +95,23 @@ describe('a thin record is information, not a verdict', () => {
     expect(plan.openingStrategy).toMatch(/do not open by observing that they did little/i);
   });
 
+  it('refuses to ask for a citation from an empty record', () => {
+    // Caught live: told to open on "the most substantial thing they DID do"
+    // against ZERO observations, the model invented one — "I noticed you
+    // engaged with the simulation by making decisions in challenging areas",
+    // said to a candidate who had done nothing. Asking for a citation from an
+    // empty record is asking for a fabrication.
+    const empty = planInterview(signals({ evidenceCount: 0, decisionCount: 0, contextsCovered: 0 }));
+    expect(empty.openingStrategy).toMatch(/NOTHING in the simulation record/i);
+    expect(empty.openingStrategy).toMatch(/do not invent an observation/i);
+    expect(empty.openingStrategy).not.toMatch(/most substantial thing they DID do/i);
+  });
+
+  it('still cites real work when there is any, however little', () => {
+    const sparse = planInterview(signals({ evidenceCount: 2, contextsCovered: 1 }));
+    expect(sparse.openingStrategy).toMatch(/most substantial thing they DID do/i);
+  });
+
   it('gives them the longest interview, because it has the most to find out', () => {
     const others = (['RESOLVE', 'PRESSURE', 'VERIFY'] as const).map((_, i) =>
       planInterview(signals([{ contradictionCount: 1 }, { avgConfidence: 85, contextsCovered: 7 }, {}][i])),
