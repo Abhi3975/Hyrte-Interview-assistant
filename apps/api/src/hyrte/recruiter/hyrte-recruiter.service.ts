@@ -49,6 +49,9 @@ export class HyrteRecruiterService {
       eventsPending,
       evidenceCount,
       actionCount,
+      // What kind of interview the simulation decided this candidate needs,
+      // and why. Null until they reach the interview phase.
+      interviewPlan: session.interviewPlan ?? null,
     };
   }
 

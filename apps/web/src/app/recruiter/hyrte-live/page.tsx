@@ -17,7 +17,15 @@ import {
   HyrteWorkItem,
 } from '@/lib/hyrte-types';
 
+interface InterviewPlan {
+  archetype: 'ESTABLISH' | 'RESOLVE' | 'PRESSURE' | 'DRAW_OUT' | 'VERIFY';
+  reason: string;
+  turnBudget: { min: number; max: number };
+  bossModeRecommended: boolean;
+}
+
 interface Overview {
+  interviewPlan?: InterviewPlan | null;
   companyName: string;
   role: string;
   experienceLevel: string;
@@ -172,6 +180,9 @@ export default function HyrteLiveConsole() {
 
       {activeId && overviewQuery.data && (
         <div className="mx-auto max-w-5xl space-y-6">
+          {/* What kind of interview the simulation decided on, and why. */}
+          {overviewQuery.data.interviewPlan && <InterviewPlanCard plan={overviewQuery.data.interviewPlan} />}
+
           {/* Session orchestrator card */}
           <div className="card">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -338,5 +349,63 @@ export default function HyrteLiveConsole() {
         </div>
       )}
     </DashboardShell>
+  );
+}
+
+const ARCHETYPE_META: Record<InterviewPlan['archetype'], { label: string; blurb: string; wrap: string; text: string }> = {
+  ESTABLISH: {
+    label: 'Establish',
+    blurb: 'The simulation saw too little to judge on, so the interview has to establish capability rather than confirm it — and runs longer to do it.',
+    wrap: 'border-amber-500/30 bg-amber-500/5',
+    text: 'text-amber-600',
+  },
+  RESOLVE: {
+    label: 'Resolve',
+    blurb: 'The record disagrees with itself. The interview opens on the conflict rather than working up to it.',
+    wrap: 'border-orange-500/30 bg-orange-500/5',
+    text: 'text-orange-600',
+  },
+  PRESSURE: {
+    label: 'Pressure',
+    blurb: 'Already proven. The interview skips confirmation and looks for the edge of what they can do.',
+    wrap: 'border-brand-500/30 bg-brand-500/5',
+    text: 'text-brand-600',
+  },
+  DRAW_OUT: {
+    label: 'Draw out',
+    blurb: 'The work is there, the reasoning behind it is not. Weighted toward getting the thinking out loud.',
+    wrap: 'border-sky-500/30 bg-sky-500/5',
+    text: 'text-sky-600',
+  },
+  VERIFY: {
+    label: 'Verify',
+    blurb: 'A solid record. The interview checks the work is genuinely theirs and probes for depth.',
+    wrap: 'border-emerald-500/30 bg-emerald-500/5',
+    text: 'text-emerald-600',
+  },
+};
+
+/**
+ * The simulation decides what kind of interview this candidate gets — see
+ * api/hyrte/interview/interview-plan.ts. Shown with its reasoning because a
+ * recruiter should never have to wonder why two candidates in the same role
+ * were interviewed differently.
+ */
+function InterviewPlanCard({ plan }: { plan: InterviewPlan }) {
+  const meta = ARCHETYPE_META[plan.archetype];
+  if (!meta) return null;
+  return (
+    <div className={`card border ${meta.wrap}`}>
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="text-sm font-semibold text-black/50 dark:text-white/50">Interview planned by the simulation</h3>
+        <span className={`text-xs font-semibold ${meta.text}`}>{meta.label}</span>
+        <span className="ml-auto text-xs tabular-nums text-black/50 dark:text-white/50">
+          {plan.turnBudget.min}&ndash;{plan.turnBudget.max} questions
+          {plan.bossModeRecommended && ' · adversarial mode earned'}
+        </span>
+      </div>
+      <p className="mt-2 text-sm text-black/70 dark:text-white/70">{meta.blurb}</p>
+      <p className="mt-1 text-xs text-black/50 dark:text-white/50">{plan.reason}</p>
+    </div>
   );
 }

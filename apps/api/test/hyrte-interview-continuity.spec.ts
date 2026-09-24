@@ -27,6 +27,11 @@ describe('HyrteInterviewService practice-continuity gate (Multi-Day Memory)', ()
       hyrteStakeholder: { findMany: jest.fn().mockResolvedValue([]) },
       hyrteCompanyState: { findUnique: jest.fn().mockResolvedValue(null) },
       hyrteInterviewReport: { findMany: reportFindMany },
+      // The simulation now plans the interview (interview-plan.ts), so
+      // startInterview reads what the simulation observed. An empty record
+      // plans an ESTABLISH interview, which is the right shape for a stub.
+      evidenceObject: { findMany: jest.fn().mockResolvedValue([]) },
+      hyrteWorkItem: { count: jest.fn().mockResolvedValue(0) },
     };
     const ai = { completeJson: jest.fn().mockResolvedValue({ question: 'What led you to that decision?' }) };
     const evidence = {

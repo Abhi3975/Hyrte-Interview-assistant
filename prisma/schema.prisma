@@ -918,6 +918,10 @@ model HyrteSession {
   // §5.9 Adversarial "Boss Level" mode — explicit opt-in, and a hard-capped
   // jab counter enforced in code (HyrteInterviewService), never left to the
   // LLM's own judgment about when to stop.
+  // What kind of interview the simulation decided this candidate needs —
+  // archetype, tone, turn budget and the reason, all derived in code from
+  // what the simulation actually observed (see interview/interview-plan.ts).
+  interviewPlan       Json?
   interviewBossMode   Boolean                 @default(false)
   interviewJabCount   Int                     @default(0)
   startedAt           DateTime                @default(now())

@@ -9,8 +9,11 @@ import { DecisionCouncilService } from '../council/decision-council.service';
 import { ReportIntelligenceService } from '../evaluation/report-intelligence.service';
 import { LiveCortexService } from '../../interview-intelligence/live-cortex.service';
 import { CandidateMemoryService } from '../../interview-intelligence/candidate-memory.service';
+import { planInterview, planDirective, type InterviewPlan, type SimulationSignals } from './interview-plan';
 
 const BASELINE = 50; // every stakeholder relationship field starts here (see HyrteStakeholder defaults)
+/** The BehaviorContext enum's size — how many kinds of situation a candidate could be observed in. */
+const BEHAVIOR_CONTEXT_COUNT = 8;
 const MAX_EVIDENCE_IN_BRIEF = 20;
 /** §5.4 — inserted probabilistically, never every turn. */
 const MICRO_ACK_PROBABILITY = 0.3;
@@ -323,6 +326,36 @@ export class HyrteInterviewService {
     }
   }
 
+  /**
+   * What the simulation actually observed, as the numbers the planner reads.
+   * Deliberately all deterministic counts — no model is asked to characterise
+   * the candidate before the interview has started.
+   */
+  private async deriveSimulationSignals(sessionId: string): Promise<SimulationSignals> {
+    const [evidence, contradictions, stakeholders, tasks] = await Promise.all([
+      this.prisma.evidenceObject.findMany({
+        where: { hyrteSessionId: sessionId },
+        select: { type: true, confidenceScore: true, behaviorContext: true },
+      }),
+      this.evidence.getContradictions(sessionId),
+      this.prisma.hyrteStakeholder.findMany({ where: { sessionId }, select: { trust: true, respect: true, cooperation: true } }),
+      this.prisma.hyrteWorkItem.count({ where: { sessionId, submissionCount: { gt: 0 } } }),
+    ]);
+
+    return {
+      evidenceCount: evidence.length,
+      decisionCount: evidence.filter((e) => e.type === 'SIMULATION_DECISION').length,
+      contradictionCount: contradictions.length,
+      avgConfidence: evidence.length ? evidence.reduce((sum, e) => sum + e.confidenceScore, 0) / evidence.length : 0,
+      contextsCovered: new Set(evidence.map((e) => e.behaviorContext).filter(Boolean)).size,
+      contextsTotal: BEHAVIOR_CONTEXT_COUNT,
+      // A stakeholder whose relationship numbers all sit at the baseline was
+      // never actually engaged with — the simulation moves them on contact.
+      stakeholderContacts: stakeholders.filter((s) => s.trust !== BASELINE || s.respect !== BASELINE || s.cooperation !== BASELINE).length,
+      tasksSubmitted: tasks,
+    };
+  }
+
   async startInterview(sessionId: string, candidateId: string, bossMode = false) {
     const session = await this.assertOwnership(sessionId, candidateId);
     // Live committee steering — builds the hidden per-competency state and
@@ -330,7 +363,11 @@ export class HyrteInterviewService {
     // questions re-establishing what the simulation already demonstrated.
     await this.cortex.ensureStarted('hyrte', sessionId, session.role, candidateId).catch((e) => this.logger.warn(e));
     const { text: brief } = await this.buildEvidenceBrief(sessionId);
-    const tone = getBaseTone(session.difficulty);
+    // The simulation decides what kind of interview this is — see
+    // interview-plan.ts. The difficulty dial was chosen before the candidate
+    // had done anything, so it cannot know any of this.
+    const plan = planInterview(await this.deriveSimulationSignals(sessionId));
+    const tone = planDirective(plan);
     const continuity = await this.getPracticeContinuityContext(candidateId, sessionId, session.sessionType);
 
     const result = await this.ai.completeJson<OpeningResponse>(
@@ -341,8 +378,8 @@ export class HyrteInterviewService {
             'You are the HYRTE reflection interviewer for a workplace-simulation hiring platform. ' +
             `${tone} ${continuity} ` +
             'You have full evidence of what this candidate actually did in the simulation — never ask ' +
-            'what they did, you already know. Open the interview by citing ONE specific, interesting ' +
-            'thing they actually did (or notably did not do) and asking them to explain their thinking. ' +
+            'what they did, you already know. Follow the OPENING instruction above exactly; it was chosen ' +
+            'from what this particular candidate actually did, not from a template. ' +
             'Never say "tell me about yourself." Return ONLY JSON: {"question": string}.',
         },
         { role: 'user', content: `Company: ${session.companyName}, role: ${session.role}.\n\n${brief}` },
@@ -360,12 +397,15 @@ export class HyrteInterviewService {
         interviewTranscript: transcript as unknown as Prisma.InputJsonValue,
         // §5.9 — explicit opt-in only; reset the jab counter in case a prior
         // interview attempt on this session left a stale count.
-        interviewBossMode: bossMode,
+        // The recruiter's explicit opt-in still wins; the plan can only
+        // recommend it, and only where the record genuinely earned it.
+        interviewBossMode: bossMode || plan.bossModeRecommended,
         interviewJabCount: 0,
+        interviewPlan: plan as unknown as Prisma.InputJsonValue,
       },
     });
 
-    return { question, done: false, bossMode };
+    return { question, done: false, bossMode: bossMode || plan.bossModeRecommended, plan };
   }
 
   async turn(sessionId: string, candidateId: string, message: string) {
@@ -403,7 +443,10 @@ export class HyrteInterviewService {
     const candidateAnswers = transcript.filter((t) => t.role === 'candidate').map((t) => t.content);
     const candidateTurns = candidateAnswers.length;
     const transcriptText = transcript.map((t) => `${t.role === 'candidate' ? 'Candidate' : 'Interviewer'}: ${t.content}`).join('\n');
-    const { min: targetMin, max: targetMax } = getTurnRange(session.difficulty);
+    // Budget from the plan the simulation produced, falling back to the
+    // difficulty range for any session that started before plans existed.
+    const storedPlan = session.interviewPlan as unknown as InterviewPlan | null;
+    const { min: targetMin, max: targetMax } = storedPlan?.turnBudget ?? getTurnRange(session.difficulty);
     const willEnd = candidateTurns >= targetMax; // pre-computed so the prompt's own "done" logic can align with it
 
     // §8 Anti-gaming — a code-level guarantee, not reliance on the LLM
