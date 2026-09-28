@@ -1,5 +1,38 @@
 # Secrets — rotation and hardening
 
+> **Status, 2026-09-29.** Hardening is **DONE** — six secrets now live in AWS
+> Secrets Manager and the task definition carries ARNs, not values. The three
+> self-generated secrets (both JWT secrets and the proctor webhook secret) have
+> been **rotated**; verified by a token issued before the rotation now being
+> rejected with 401 while a fresh login works. Running on revision 37.
+>
+> **Still outstanding, and only you can do these** — they need provider
+> consoles:
+>
+> | Key | Why it matters |
+> |---|---|
+> | `OPENAI_API_KEY` | the urgent one — usable from anywhere on the internet and it bills you |
+> | `ELEVENLABS_API_KEY` | same, metered |
+> | `RESEND_API_KEY` | still the placeholder `TEMP_AWAITING_REAL_KEY`; email does not work |
+> | `DATABASE_URL` | deliberately NOT rotated — see "About the database password" below |
+>
+> Rotating now means `aws secretsmanager put-secret-value --secret-id hyrte/<NAME>
+> --secret-string '<new>'` then `./infra/deploy-new-account.sh`. The task
+> definition never contains the key again.
+
+## About the database password
+
+Left alone on purpose, not overlooked. The RDS instance is VPC-only — verified
+unreachable from outside — so the credential is usable only by someone who
+already holds AWS access to this account, and such a person could reset the
+password themselves regardless. Meanwhile rotating it means a window where the
+running API cannot open new connections, between the RDS change and the
+redeploy.
+
+Low value, real downtime: worth doing deliberately, not as a sweep. Say the
+word and it is `modify-db-instance` → `put-secret-value` → deploy.
+
+
 Two separate jobs. **Rotation** needs your hands (only you can issue new keys
 at each provider). **Hardening** is a script in this directory that stops the
 keys being readable in plaintext, and can run before or after rotation.
