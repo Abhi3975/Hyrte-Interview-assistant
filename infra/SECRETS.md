@@ -34,18 +34,30 @@ word and it is `modify-db-instance` → `put-secret-value` → deploy.
 
 
 Two separate jobs. **Rotation** needs your hands (only you can issue new keys
-at each provider). **Hardening** is a script in this directory that stops the
-keys being readable in plaintext, and can run before or after rotation.
+at each provider). **Hardening** — moving them out of plaintext — is done.
 
 ## Where the secrets actually live
 
-All seven sit in `infra/taskdef-api.json` under the container's `environment`
-array, in plaintext, with zero Secrets Manager references.
+Six now live in AWS Secrets Manager (`hyrte/DATABASE_URL`,
+`hyrte/JWT_ACCESS_SECRET`, `hyrte/JWT_REFRESH_SECRET`, `hyrte/OPENAI_API_KEY`,
+`hyrte/ELEVENLABS_API_KEY`, `hyrte/PROCTOR_WEBHOOK_SECRET`) and
+`infra/taskdef-api.json` references them by ARN. The seventh,
+`RESEND_API_KEY`, is still a plaintext placeholder because it is not a real key.
 
 `infra/taskdef-api.json` and `infra/.new-account-env` are **not tracked in
 git** — verified with `git ls-files`. Nothing was ever committed to the repo.
 
-What plaintext-in-a-task-definition does mean:
+### Why rotation is still needed anyway
+
+Revisions 1-35 of the task definition were written before hardening and still
+contain the old values in plaintext. Revisions are **immutable** — they cannot
+be edited or scrubbed, only deleted wholesale. So anyone with
+`ecs:DescribeTaskDefinition` on account `917286218781` can still read every
+pre-36 key. Hardening stops NEW exposure; only rotation makes the exposed
+copies worthless. That is why the JWT and webhook secrets were rotated, and
+why the provider keys still need to be.
+
+What plaintext-in-a-task-definition meant, and still means for revisions 1-35:
 
 - anyone with `ecs:DescribeTaskDefinition` on account `917286218781` can read
   every key, including revoked ones, in **every past revision** (34 and
