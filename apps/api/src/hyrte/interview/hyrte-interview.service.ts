@@ -710,10 +710,22 @@ export class HyrteInterviewService {
   }
 
   async getReport(sessionId: string, candidateId: string) {
-    await this.assertOwnership(sessionId, candidateId);
+    const session = await this.assertOwnership(sessionId, candidateId);
     const report = await this.prisma.hyrteInterviewReport.findUnique({ where: { sessionId } });
     if (!report) throw new NotFoundException('Report not generated yet');
-    return report;
+
+    // The row is written in three passes — synthesis, then the §7 intelligence
+    // layer, then the Council — and the phase only reaches COMPLETED after all
+    // three. Fetching in between returns a real row with no confidence, no
+    // predictions and no Decision DNA, which reads as a broken report rather
+    // than an unfinished one. Caught end-to-end on production: the GET
+    // immediately after the final answer came back hollow, and the same GET
+    // moments later was complete.
+    //
+    // Same contract the world generator already uses (HyrteSessionPhase
+    // GENERATING) — say it is still working and let the client poll, rather
+    // than serving a half-written document as if it were the finished one.
+    return { ...report, generating: session.phase !== 'COMPLETED' };
   }
 
   async getTranscript(sessionId: string, candidateId: string) {

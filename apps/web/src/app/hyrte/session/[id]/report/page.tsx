@@ -29,9 +29,14 @@ export default function HyrteReport({ params }: { params: Promise<{ id: string }
     queryKey: ['hyrte', 'report', id],
     queryFn: () => api.get<HyrteInterviewReport>(`/hyrte/sessions/${id}/interview/report`),
     retry: false,
+    // The report is written in three passes (synthesis, intelligence layer,
+    // Council) and the API says `generating` until all three are done. Poll
+    // rather than render a half-written document as the finished one.
+    refetchInterval: (q) => (q.state.data?.generating ? 4000 : false),
   });
 
   const notGenerated = error instanceof ApiError && error.status === 404;
+  const stillGenerating = Boolean(report?.generating);
   const meta = report ? (RECOMMENDATION_META[report.recommendation] ?? DEFAULT_META) : DEFAULT_META;
   const RecIcon = meta.icon;
 
@@ -59,7 +64,16 @@ export default function HyrteReport({ params }: { params: Promise<{ id: string }
         </div>
       )}
 
-      {report && (
+      {stillGenerating && (
+        <div className="card">
+          <p className="text-sm font-medium">Still putting your report together…</p>
+          <p className="mt-1 text-sm text-black/60 dark:text-white/60">
+            The committee is reviewing everything you did. This takes a few moments — the page will update itself.
+          </p>
+        </div>
+      )}
+
+      {report && !stillGenerating && (
         <div className="mx-auto max-w-3xl space-y-6">
           {/* Hero: recommendation + summary */}
           <div className={`card flex items-start gap-4 border ${meta.wrap}`}>

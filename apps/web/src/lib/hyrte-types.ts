@@ -322,6 +322,8 @@ export interface HyrteInterviewTurn {
 }
 
 export interface HyrteInterviewReport {
+  /** True while the report is still being written (synthesis -> intelligence -> Council). Poll until false. */
+  generating?: boolean;
   strengths: string[];
   developmentAreas: string[];
   contradictions: { claimedInInterview: string; evidenceFromSimulation: string }[];

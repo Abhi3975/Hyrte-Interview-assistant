@@ -7,6 +7,7 @@ import {
   planInterview,
   type SimulationSignals,
 } from '../src/hyrte/interview/interview-plan';
+import { HyrteInterviewService } from '../src/hyrte/interview/hyrte-interview.service';
 
 /**
  * The simulation plans the interview.
@@ -152,5 +153,40 @@ describe('the plan as the interview actually receives it', () => {
       expect(p.turnBudget.min).toBeLessThan(p.turnBudget.max);
       expect(p.turnBudget.min).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('a report that is still being written', () => {
+  // Caught end-to-end on production: the GET immediately after the final
+  // answer returned a real row with recommendation and strengths but no
+  // confidence, no predictions and no Decision DNA — because the row is
+  // written in three passes and only the last one finishes the job. Thirty
+  // seconds later the same GET was complete. A half-written report served as
+  // if it were finished reads as a broken feature, not a slow one.
+  const service = () => {
+    const prisma = {
+      hyrteSession: { findFirst: jest.fn() },
+      hyrteInterviewReport: { findUnique: jest.fn().mockResolvedValue({ sessionId: 's1', recommendation: 'Fit' }) },
+    };
+    const svc = new HyrteInterviewService(prisma as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never);
+    return { svc, prisma };
+  };
+
+  it('says it is still generating while the pipeline is mid-flight', async () => {
+    const { svc, prisma } = service();
+    prisma.hyrteSession.findFirst.mockResolvedValue({ id: 's1', candidateId: 'c1', phase: 'INTERVIEW' });
+    expect((await svc.getReport('s1', 'c1')).generating).toBe(true);
+  });
+
+  it('stops saying so once the Council has finished and the phase is COMPLETED', async () => {
+    const { svc, prisma } = service();
+    prisma.hyrteSession.findFirst.mockResolvedValue({ id: 's1', candidateId: 'c1', phase: 'COMPLETED' });
+    expect((await svc.getReport('s1', 'c1')).generating).toBe(false);
+  });
+
+  it('still returns the report itself, not just a status', async () => {
+    const { svc, prisma } = service();
+    prisma.hyrteSession.findFirst.mockResolvedValue({ id: 's1', candidateId: 'c1', phase: 'COMPLETED' });
+    expect((await svc.getReport('s1', 'c1')).recommendation).toBe('Fit');
   });
 });
