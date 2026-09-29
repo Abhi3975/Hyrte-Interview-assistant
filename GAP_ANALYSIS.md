@@ -1,5 +1,40 @@
 # HYRTE — Simulation Workflow Upgrade: Gap Analysis (U0)
 
+> ## ⚠️ HISTORICAL — audited 2026-08-04, most of it is no longer true
+>
+> Read this as a record of what was missing *then*, not as a to-do list. The
+> table below still says "No" and "the single largest structural gap" about
+> things that have since been built, and someone treating it as current would
+> go and rebuild them.
+>
+> **Verified closed as of 2026-09-29** (each checked against the code, not
+> assumed):
+>
+> | Listed below as | Reality now |
+> |---|---|
+> | World Stabilization Gate — **"No — the single largest structural gap"** | `generator/world-stabilization.ts` (209 lines) + `HyrteWorldGenerationArtifact` |
+> | Event Queue — **"No"** | `HyrteWorldEvent` with `kind` and `status` (PENDING/FIRED) |
+> | Decision Graph / change-set spine | `dig/decision-graph.service.ts` |
+> | `world_id` — **"No"** | `HyrteSession.worldId`, unique |
+> | Simulation Request — **"No object exists in any form"** | `HyrteSimulationRequest` |
+> | Company State versioning — **"no history"** | `HyrteCompanyStateHistory` |
+> | Stakeholder `department` / KPIs / tasks / authority — **"missing"** | all four present on `HyrteStakeholder` |
+> | Stakeholder independent worldview — **"every stakeholder sees the same KB"** | `dig/info-scope.util.ts` (§4.12 Layer 2, role-scoped state) |
+> | `recoveryOfId` — **"has never been populated by any caller"** | populated in `hyrte-workplace.service.ts` |
+> | Knowledge breadth — **"2-4 docs, freeform category"** | 6-8 docs across distinct categories; verified live in production |
+>
+> **Still partly true:** Step 11's passive tracking. A per-surface last-seen
+> activity feed exists (`hyrte/activity/`), but dwell time and navigation order
+> are still not captured — only explicit actions become evidence.
+>
+> **Not re-checked:** Step 13's architectural complaint (that state-delta and
+> reply-generation happen inside one handler rather than as a separate
+> inspectable change-set). `decision-graph.service.ts` exists, but whether it
+> satisfies that specific separation was not verified, so treat it as open.
+>
+> Later work is recorded in the git history and in `ARCHITECTURE.md`.
+
+
 Audited against the 20-step pipeline + Section 1 entry point in the upgrade prompt (dated 2026-08-03).
 Method: read the actual schema (`prisma/schema.prisma`), the actual services (`hyrte-sessions.service.ts`,
 `simulation-generator.service.ts`, `hyrte-workplace.service.ts`, `consequence.service.ts`,

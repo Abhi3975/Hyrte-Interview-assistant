@@ -1,5 +1,32 @@
 # INTERVIEWER_GAP.md — P0 Audit
 
+> ## ⚠️ HISTORICAL — audited 2026-08-06, several "Missing" rows are now built
+>
+> A record of the state then, not a to-do list. **Verified closed as of
+> 2026-09-29**, each checked against the code rather than assumed:
+>
+> | Listed below as | Reality now |
+> |---|---|
+> | Phone OTP — **"No `phone` DB column at all"** | `User.phone`, unique; passwordless OTP signup shipped |
+> | Micro-acks / variation banks — **"Missing (in this product)"** | `CLOSING_LINES` / `REPORT_READY_MESSAGES` in `practice.service.ts`, plus `pickMicroReaction` — reactions matched to what the candidate actually said, not a coin flip |
+> | Patient listening — **"Partial… ~1s VAD, no explicit thinking affordance"** | `classifySilence` (voice Layer 10): THINKING / FINISHED / STUCK / AWAY, with a 5s grace for anyone mid-sentence |
+> | Camera-off warning — **"nothing emits it"** | emitted from the interview page; weighted in `risk-weights.ts` |
+>
+> **Also built since, and not in this audit at all:** AI-initiated interruption
+> of a ramble (Layer 11), speaking-pace matching (Layer 7), long-term candidate
+> memory across sessions, the §9 learning loop that weights council members by
+> how well they predicted real hiring outcomes, simulation-planned interviews,
+> and multi-modal proctoring signals reaching evaluation.
+>
+> **Still open from the rows below** — not re-verified, so treat as unknown
+> rather than done: structured configurable rounds, languages beyond
+> English/Hindi/Hinglish, devtools and secondary-display detection, and most of
+> the nine named proctoring signals (gaze, background noise, read-like
+> delivery, style shift, latency-based AI-assist).
+>
+> Later work is in the git history and `ARCHITECTURE.md`.
+
+
 Audit of the **existing interview product** (candidate self-serve + recruiter-assessment flows —
 `apps/web/src/app/candidate/*`, `apps/web/src/app/recruiter/*` excluding `hyrte-*`, `apps/api/src/{auth,practice,proctoring,evaluation,interviews,questions,voice}`)
 against the Master Upgrade Prompt, Parts 1–3. **The HYRTE simulation (`apps/*/src/**/hyrte/**`,
