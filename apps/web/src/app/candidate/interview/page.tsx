@@ -1038,7 +1038,7 @@ function InterviewRoomInner() {
     const idx = roundIndexRef.current;
     const nextRound = shouldForceRoundAdvance ? activeRoundSequence[idx + 1] : undefined;
     try {
-      const res = await api.post<{ text: string; hintLevel?: number; mood?: string }>('/practice/interview/turn', {
+      const res = await api.post<{ text: string; hintLevel?: number; mood?: string; degraded?: boolean }>('/practice/interview/turn', {
         jobRole: topic.label, category: topic.category, difficulty, topic: topic.topic,
         count: numQuestions, personality, mode: interviewType, experience, company, language, style: theoryStyle,
         candidateName: user?.fullName?.split(' ')[0], resumeContext: resumeContextRef.current,
@@ -1065,10 +1065,17 @@ function InterviewRoomInner() {
       }
       if (opts?.end) return res.text;
       setMessages((m) => [...m, { role: 'ai', text: res.text }]);
-      // What a stuck candidate would be scaffolded about.
-      currentQuestionRef.current = res.text;
+      // A degraded turn is the server telling us the model round-trip failed
+      // and this is a recovery line ("could you run that by me again?"), not a
+      // question. The candidate hears it — but it must not become the question
+      // a stuck candidate gets scaffolded about, and it must not count against
+      // the round's time as thinking time they spent. They should not pay for
+      // our provider blip.
+      if (!res.degraded) {
+        currentQuestionRef.current = res.text;
+        lastAiTsRef.current = Date.now();
+      }
       speak(res.text, res.mood);
-      lastAiTsRef.current = Date.now();
       return res.text;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'The interviewer could not respond.');
