@@ -21,10 +21,18 @@ describe('which sessions are actually enforced', () => {
     expect(resolvePolicy(cfg({ selfServe: true }))).toBe('WARN');
   });
 
-  it('enforces a real recruiter assessment by default', () => {
-    expect(resolvePolicy(cfg({ selfServe: false }))).toBe('TERMINATE');
-    expect(resolvePolicy(cfg(null))).toBe('TERMINATE');
-    expect(resolvePolicy(null)).toBe('TERMINATE');
+  it('gives a recruiter assessment the strictest default — most is riding on it', () => {
+    expect(resolvePolicy(cfg({ selfServe: false }))).toBe('STRICT');
+    expect(resolvePolicy(cfg(null))).toBe('STRICT');
+    expect(resolvePolicy(null)).toBe('STRICT');
+  });
+
+  it('never overrides a policy a recruiter deliberately configured', () => {
+    // Someone who has chosen TERMINATE or WARN for their own campaign must
+    // keep it — a default is for the unconfigured case, not a veto.
+    expect(resolvePolicy(cfg({ selfServe: false, proctoringPolicy: 'TERMINATE' }))).toBe('TERMINATE');
+    expect(resolvePolicy(cfg({ selfServe: false, proctoringPolicy: 'WARN' }))).toBe('WARN');
+    expect(resolvePolicy(cfg({ selfServe: false, proctoringPolicy: 'PAUSE' }))).toBe('PAUSE');
   });
 
   it('lets a self-serve candidate opt into being properly proctored', () => {
@@ -80,10 +88,9 @@ describe('one candidate\'s strictness must not reach another candidate', () => {
     expect(resolvePolicy(cfg({ proctoringPolicy: 'WARN' }), true)).toBe('STRICT');
   });
 
-  it('defaults to not-strict when the flag is absent entirely', () => {
-    // Every caller that predates the flag must keep its old behaviour.
+  it('keeps the self-serve fallback at WARN, since its default lives at session creation', () => {
     expect(resolvePolicy(cfg({ selfServe: true }))).toBe('WARN');
-    expect(resolvePolicy(cfg({ selfServe: false }))).toBe('TERMINATE');
+    expect(resolvePolicy(cfg({ selfServe: false }))).toBe('STRICT');
   });
 });
 

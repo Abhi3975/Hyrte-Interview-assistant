@@ -48,7 +48,15 @@ export function resolvePolicy(interview: Interview | null, sessionStrict = false
   ) {
     return config.proctoringPolicy;
   }
-  return config?.selfServe ? 'WARN' : 'TERMINATE';
+  // A recruiter-run assessment is the case with the most riding on it — a real
+  // hiring decision — so it gets the strictest default: leaving ends it on the
+  // FIRST occurrence, not the second. Self-serve keeps WARN here because its
+  // default is applied at session creation instead (see PracticeService), which
+  // is what lets a candidate deliberately practise with a warning.
+  //
+  // An explicit proctoringPolicy above still wins either way, so a recruiter
+  // who has deliberately configured TERMINATE or WARN keeps exactly that.
+  return config?.selfServe ? 'WARN' : 'STRICT';
 }
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../common/audit/audit.service';

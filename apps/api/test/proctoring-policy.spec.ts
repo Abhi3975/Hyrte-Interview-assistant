@@ -10,10 +10,14 @@ describe('resolvePolicy (P3 §4/§7 — configurable enforcement policy)', () =>
     expect(resolvePolicy(fakeInterview({ selfServe: true }))).toBe('WARN');
   });
 
-  it('defaults recruiter-created assessments to TERMINATE (unchanged pre-P3 behavior)', () => {
-    expect(resolvePolicy(fakeInterview({}))).toBe('TERMINATE');
-    expect(resolvePolicy(fakeInterview(null))).toBe('TERMINATE');
-    expect(resolvePolicy(null)).toBe('TERMINATE');
+  it('defaults recruiter-created assessments to STRICT — the case with most riding on it', () => {
+    // Was TERMINATE (end on the SECOND strike). Deliberately tightened: a
+    // recruiter assessment decides a real hire, so leaving it ends it on the
+    // first occurrence. An explicitly configured policy still wins — see the
+    // test below — so this only changes the unconfigured case.
+    expect(resolvePolicy(fakeInterview({}))).toBe('STRICT');
+    expect(resolvePolicy(fakeInterview(null))).toBe('STRICT');
+    expect(resolvePolicy(null)).toBe('STRICT');
   });
 
   it('an explicit recruiter-configured policy always wins, even for a self-serve session', () => {
@@ -23,7 +27,9 @@ describe('resolvePolicy (P3 §4/§7 — configurable enforcement policy)', () =>
   });
 
   it('ignores a malformed proctoringPolicy value rather than trusting it blindly', () => {
-    expect(resolvePolicy(fakeInterview({ proctoringPolicy: 'DELETE_EVERYTHING' }))).toBe('TERMINATE');
+    // The point of this test is the FALLBACK, not the particular value: a
+    // garbage policy must be ignored and the default applied, never trusted.
+    expect(resolvePolicy(fakeInterview({ proctoringPolicy: 'DELETE_EVERYTHING' }))).toBe('STRICT');
     expect(resolvePolicy(fakeInterview({ selfServe: true, proctoringPolicy: 123 }))).toBe('WARN');
   });
 });
