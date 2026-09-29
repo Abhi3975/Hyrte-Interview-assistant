@@ -75,6 +75,18 @@ export default function HyrteReport({ params }: { params: Promise<{ id: string }
 
       {report && !stillGenerating && (
         <div className="mx-auto max-w-3xl space-y-6">
+          {/* The recommendation is the moment this matters most: the candidate
+              is reading a judgment about themselves and is entitled to know
+              what produced it and who actually decides. Placed ABOVE the
+              verdict, not in a footer. */}
+          <div className="rounded-lg border border-black/10 bg-black/[0.02] p-3 dark:border-white/10 dark:bg-white/[0.03]">
+            <p className="text-[11px] leading-relaxed text-black/55 dark:text-white/55">
+              This assessment was produced by an AI from what you did in the simulation and said in the interview. It
+              can be wrong. It is a recommendation with its evidence attached, not a hiring decision — a person reviews
+              it and decides.
+            </p>
+          </div>
+
           {/* Hero: recommendation + summary */}
           <div className={`card flex items-start gap-4 border ${meta.wrap}`}>
             <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full ${meta.icon_bg}`}>

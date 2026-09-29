@@ -18,6 +18,7 @@ import { api } from '@/lib/api';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { MicIcon, SpeakerIcon, ShieldIcon, AlertIcon, CheckIcon, XIcon, CodeIcon } from '@/components/icons';
 import { classifySilence, shouldInterject, silencePrompt } from '@interviewai/conversation';
+import { AiDisclosure } from '@/components/ai-disclosure';
 
 const TOPICS: { label: string; category: string; topic: string; blurb: string }[] = [
   { label: 'Software Engineer', category: 'DSA', topic: 'Data Structures and Algorithms', blurb: 'DSA, problem solving & complexity' },
@@ -1485,6 +1486,13 @@ function InterviewRoomInner() {
                 </span>
               </label>
             </div>
+            {/* What the candidate is told about being judged by a machine —
+                stated before the consent checkbox, since consenting without it
+                is not really consent. */}
+            <div className="mt-3">
+              <AiDisclosure />
+            </div>
+
             {/* P3 §7 — a real, required consent gate, not just informational text. */}
             <label className="mt-3 flex items-start gap-2 text-xs text-white/70">
               <input
