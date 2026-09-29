@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsArray, IsEnum, IsIn, IsInt, IsNumber, IsObject, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsArray, IsBoolean, IsEnum, IsIn, IsInt, IsNumber, IsObject, IsOptional, IsString, Max, Min } from 'class-validator';
 import { Category, Difficulty } from '@prisma/client';
 import { PracticeService } from './practice.service';
 import { InterviewCouncilService } from './council/interview-council.service';
@@ -43,6 +43,13 @@ class StartSessionDto {
   // the DTO enforces the backend never silently accepts a session with no
   // consent record, even if a client bug ever tried to skip the checkbox.
   @IsString() consentedAt!: string;
+  /**
+   * "Completely proctored mode" — opt-in strictness for a self-serve session.
+   * Without it these default to WARN, which is exempt from hard strikes, so a
+   * candidate switching tabs saw nothing happen at all. With it, leaving
+   * fullscreen or the tab ends the interview on the FIRST occurrence.
+   */
+  @IsOptional() @IsBoolean() strictProctoring?: boolean;
 }
 
 class CompleteSessionDto {

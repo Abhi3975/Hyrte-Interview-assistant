@@ -9,6 +9,7 @@ import { RecordingService } from '../recording/recording.service';
 import { InterviewCouncilService } from './council/interview-council.service';
 import { LiveCortexService } from '../interview-intelligence/live-cortex.service';
 import { paceDirective, pickMicroReaction, profilePace } from '@interviewai/conversation';
+import { planInterview, planDirective } from '../hyrte/interview/interview-plan';
 
 /** Persona + protocol for the conversational AI interviewer. */
 const INTERVIEWER_SYSTEM = `# ROLE
@@ -84,6 +85,16 @@ const PERSONALITIES: Record<string, string> = {
 // what the candidate actually said. The bag this replaced was a 30% coin flip
 // over seven generic lines, which is how "Interesting." ended up landing on
 // top of someone saying their launch was cancelled.
+/**
+ * Said when the model round-trip fails outright. Fixed bank, never generated —
+ * the one moment we certainly cannot rely on the model is when it just failed.
+ * Phrased to keep the candidate talking rather than to announce a fault.
+ */
+const RECOVERY_LINES = [
+  "Sorry — say that once more for me?",
+  "I lost the thread for a second there. Could you run that by me again?",
+  "Apologies, I missed the last part — can you repeat it?",
+];
 const CLOSING_LINES = [
   "That wraps up our conversation today — thanks for walking me through your thinking.",
   "That's everything I wanted to cover. Thanks for being so thorough with your answers.",
@@ -201,6 +212,45 @@ export class PracticeService {
    * just reachable from the standalone room too now. Silent no-op (empty
    * string) if the candidate has never completed a HYRTE simulation.
    */
+  /**
+   * The simulation decides what kind of interview this is — the same planner
+   * the HYRTE reflection interview uses (hyrte/interview/interview-plan.ts),
+   * pointed at whatever the candidate's simulations actually recorded.
+   *
+   * Imported as a pure function deliberately: the note elsewhere in this file
+   * about HYRTE's interviewer being "out of bounds for this product" is about
+   * reusing that SERVICE, not about re-deriving arithmetic that already
+   * exists and is tested. Nothing here touches the HYRTE interview flow.
+   *
+   * Returns '' for a candidate with no simulation history, which is most of
+   * them — the standalone room must keep working exactly as before for
+   * anyone who has never run one.
+   */
+  private async buildSimulationPlanDirective(candidateId: string): Promise<string> {
+    const evidence = await this.prisma.evidenceObject.findMany({
+      where: { candidateId, hyrteSessionId: { not: null } },
+      select: { type: true, confidenceScore: true, behaviorContext: true, status: true },
+      take: 400,
+    });
+    if (evidence.length === 0) return '';
+
+    const plan = planInterview({
+      evidenceCount: evidence.length,
+      decisionCount: evidence.filter((e) => e.type === 'SIMULATION_DECISION').length,
+      contradictionCount: evidence.filter((e) => e.status === 'CONTRADICTED').length,
+      avgConfidence: evidence.reduce((sum, e) => sum + e.confidenceScore, 0) / evidence.length,
+      contextsCovered: new Set(evidence.map((e) => e.behaviorContext).filter(Boolean)).size,
+      contextsTotal: 8,
+      // Not observable from this side of the product — left at values that
+      // cannot themselves trigger an archetype, so the shape comes from the
+      // evidence rather than from a guess.
+      stakeholderContacts: 99,
+      tasksSubmitted: 0,
+    });
+
+    return `\n\nINTERVIEW SHAPE, chosen from what this candidate's simulation actually recorded (${plan.archetype}): ${plan.reason}\n${planDirective(plan)}`;
+  }
+
   private async getSimulationContext(candidateId: string): Promise<string> {
     const report = await this.prisma.hyrteInterviewReport.findFirst({
       where: { session: { candidateId } },
@@ -223,8 +273,11 @@ export class PracticeService {
       (report.strengths.length ? `\nObserved strengths: ${report.strengths.join(', ')}.` : '') +
       (report.developmentAreas.length ? `\nObserved development areas: ${report.developmentAreas.join(', ')}.` : '') +
       (evidenceHighlights ? `\nConcrete actions observed in the simulation:\n${evidenceHighlights}` : '') +
-      `\nYou may probe deeper into this real behavior when it fits naturally (e.g. ask them to walk you through ` +
-      `one of these decisions), but never assume it fully represents them — it's one data point, not a verdict.`
+      `\nYou MUST bring this up at least once: pick one of these real observed decisions and ask them to walk ` +
+      `you through their thinking on it. This is behaviour you actually watched, which makes it worth more than ` +
+      `anything they can tell you about themselves. Do not treat it as a verdict — it is one data point — but do ` +
+      `not leave it unasked either. ("You may probe this if it fits naturally" was the previous instruction here ` +
+      `and it lost, every time, to the dozen other directives in this prompt.)`
     );
   }
 
@@ -316,10 +369,14 @@ export class PracticeService {
     forceRoundAdvance?: boolean;
     /** Live committee steering — see LiveCortexService. Absent means the room runs unsteered. */
     sessionId?: string;
-  }, candidateId?: string): Promise<{ text: string; hintLevel?: number; mood: InterviewerMood }> {
-    const [simulation, evidenceGraph] = candidateId
-      ? await Promise.all([this.getSimulationContext(candidateId), this.buildEvidenceGraphContext(candidateId)])
-      : ['', ''];
+  }, candidateId?: string): Promise<{ text: string; hintLevel?: number; mood: InterviewerMood; degraded: boolean }> {
+    const [simulation, evidenceGraph, simulationPlan] = candidateId
+      ? await Promise.all([
+          this.getSimulationContext(candidateId),
+          this.buildEvidenceGraphContext(candidateId),
+          this.buildSimulationPlanDirective(candidateId),
+        ])
+      : ['', '', ''];
     const extra = [
       input.experience ? `- Candidate experience level: ${input.experience} (calibrate depth/difficulty to this).` : '',
       input.company ? `- Emulate the interview style of: ${input.company}.` : '',
@@ -387,7 +444,7 @@ export class PracticeService {
       {
         role: 'system',
         content:
-          `${INTERVIEWER_SYSTEM}\n\n${persona}\n\n${ctx}${resume}${evidenceGraph}${simulation}${modeNote}\n\n${directive}\n\n${pacing}\n\n` +
+          `${INTERVIEWER_SYSTEM}\n\n${persona}\n\n${ctx}${resume}${evidenceGraph}${simulation}${modeNote}\n\n${directive}\n\n${pacing}${simulationPlan}\n\n` +
           'Return ONLY JSON: {"reply": string (your next spoken message, no stage directions), ' +
           '"hintLevel": int 1-5 (ONLY include this field on a turn where you actually GAVE a hint per the ' +
           'graduated-hint rules above — omit it entirely on every other turn, including ones where you declined ' +
@@ -417,12 +474,32 @@ export class PracticeService {
         messages.push({ role: 'user', content: `(Please end the interview now.${behavior})` });
       }
     }
-    const res = await this.ai.completeJson<{
+    // Ally going silent mid-interview was this: completeJson THROWS when the
+    // provider errors, times out, or returns malformed JSON twice (its repair
+    // retry re-parses with no catch of its own). Unwrapped, that exception
+    // propagated out of the turn and the HTTP request failed — the candidate
+    // sent an answer and got nothing back, with no way to continue.
+    //
+    // A live interview cannot fail closed. One bad round-trip must cost a
+    // beat, not the session, so a failure here becomes a real spoken turn
+    // that keeps the conversation alive and hands it back to the candidate.
+    type TurnResponse = {
       reply?: string;
       hintLevel?: number;
       mood?: string;
       evidenceAssessment?: { competencyKey?: unknown; strength?: unknown; note?: unknown }[];
-    }>(messages, { temperature: 0.6, maxTokens: input.end ? 300 : 600 });
+    };
+    let res: TurnResponse;
+    try {
+      res = await this.ai.completeJson<TurnResponse>(messages, { temperature: 0.6, maxTokens: input.end ? 300 : 600 });
+    } catch (e) {
+      this.logger.warn(`Interviewer turn failed (session ${input.sessionId ?? 'stateless'}): ${e instanceof Error ? e.message : String(e)}`);
+      // Deliberately not an apology or an error message — the candidate
+      // should not be made to feel the system broke on their answer. A
+      // neutral hand-back reads as an interviewer taking a moment, and is
+      // honest about nothing having been evaluated.
+      return { text: pick(RECOVERY_LINES), mood: 'warm' as InterviewerMood, degraded: true };
+    }
 
     if (liveState && input.sessionId) {
       await this.cortex.recordTurn(
@@ -461,7 +538,7 @@ export class PracticeService {
     // deterministic, same reasoning as the closing text itself.
     const finalMood: InterviewerMood = input.end ? 'warm' : mood;
 
-    return { text: reply, hintLevel, mood: finalMood };
+    return { text: reply, hintLevel, mood: finalMood, degraded: false };
   }
 
   async generateCoding(topic: string, difficulty: Difficulty, kind: 'code' | 'sql' = 'code') {
@@ -608,7 +685,7 @@ export class PracticeService {
    */
   async startSession(
     candidateId: string,
-    input: { category: Category; difficulty: Difficulty; topic?: string; jobRole?: string; interviewId?: string; consentedAt: string },
+    input: { category: Category; difficulty: Difficulty; topic?: string; jobRole?: string; interviewId?: string; consentedAt: string; strictProctoring?: boolean },
   ): Promise<{ sessionId: string }> {
     // P3 §7 — consent is mandatory and logged; a malformed/missing timestamp
     // is rejected outright rather than silently defaulting to "now" (which
@@ -650,7 +727,14 @@ export class PracticeService {
           difficulty: input.difficulty,
           status: 'SCHEDULED',
           createdById: candidateId,
-          config: { selfServe: true, proctored: true },
+          // STRICT makes leaving the interview end it immediately. Without
+          // it a self-serve session resolves to WARN, which is exempt from
+          // hard strikes — which is why tab-switching appeared to do nothing.
+          config: {
+            selfServe: true,
+            proctored: true,
+            ...(input.strictProctoring ? { proctoringPolicy: 'STRICT' } : {}),
+          },
         },
       }));
 

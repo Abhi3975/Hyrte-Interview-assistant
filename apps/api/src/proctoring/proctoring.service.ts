@@ -19,10 +19,28 @@ type SessionWithInterview = InterviewSession & { interview: Interview | null };
  * assessments default to TERMINATE, preserving the exact pre-P3 behavior
  * unless a recruiter explicitly configures otherwise.
  */
-export type ProctoringPolicy = 'WARN' | 'PAUSE' | 'TERMINATE';
+/**
+ * STRICT is the "completely proctored" setting: leaving the interview at all
+ * ends it on the FIRST occurrence, with no warning shot, and self-serve
+ * sessions get no exemption from it.
+ *
+ * Worth being exact about what this can and cannot do, because the honest
+ * limit is easy to mistake for a missing feature. A web page cannot see,
+ * count, or close the browser's other tabs — there is no API for it, in any
+ * browser, deliberately. Nothing shipped here or anywhere else can "close
+ * every tab" on a candidate's machine. What is actually enforceable is the
+ * moment they LEAVE: fullscreen exit and tab/window blur are both detectable
+ * the instant they happen, and STRICT ends the session there and then.
+ */
+export type ProctoringPolicy = 'WARN' | 'PAUSE' | 'TERMINATE' | 'STRICT';
 export function resolvePolicy(interview: Interview | null): ProctoringPolicy {
   const config = (interview?.config as { proctoringPolicy?: string; selfServe?: boolean } | null) ?? null;
-  if (config?.proctoringPolicy === 'WARN' || config?.proctoringPolicy === 'PAUSE' || config?.proctoringPolicy === 'TERMINATE') {
+  if (
+    config?.proctoringPolicy === 'WARN' ||
+    config?.proctoringPolicy === 'PAUSE' ||
+    config?.proctoringPolicy === 'TERMINATE' ||
+    config?.proctoringPolicy === 'STRICT'
+  ) {
     return config.proctoringPolicy;
   }
   return config?.selfServe ? 'WARN' : 'TERMINATE';
@@ -54,8 +72,10 @@ import { RecordingService } from '../recording/recording.service';
 const HARD_STRIKE_TYPES = new Set(['FULLSCREEN_EXIT', 'TAB_SWITCH']);
 
 /** Pure so the strike math is unit-testable without the Prisma/Redis DI surface. */
-export function hardStrikeLevelFor(strikeCount: number, maxWarnings: number): number {
+export function hardStrikeLevelFor(strikeCount: number, maxWarnings: number, strict = false): number {
   if (strikeCount <= 0) return 0;
+  // STRICT spends no warning shot: the first time they leave, it is over.
+  if (strict) return maxWarnings;
   return strikeCount >= 2 ? maxWarnings : 1;
 }
 
@@ -150,11 +170,17 @@ export class ProctoringService {
     // HARD_STRIKE_TYPES above. Self-serve WARN sessions are exempt, same
     // "never strand a demo candidate with no recruiter watching" reasoning
     // as resolvePolicy's own default.
+    // Only WARN is exempt from strikes. A self-serve session DEFAULTS to WARN,
+    // but an explicit proctoringPolicy wins in resolvePolicy — so a candidate
+    // who deliberately asks to be proctored properly gets STRICT and is not
+    // exempted, which is the point. (An earlier version of this line also
+    // tested `|| policy === 'STRICT'`; the compiler pointed out that branch is
+    // unreachable, and it was right — STRICT already is not WARN.)
     if (policy !== 'WARN' && HARD_STRIKE_TYPES.has(dto.type)) {
       const strikeCount = await this.prisma.proctorEvent.count({
         where: { sessionId: dto.sessionId, type: { in: Array.from(HARD_STRIKE_TYPES) as never[] } },
       });
-      targetLevel = Math.max(targetLevel, hardStrikeLevelFor(strikeCount, MAX_WARNINGS));
+      targetLevel = Math.max(targetLevel, hardStrikeLevelFor(strikeCount, MAX_WARNINGS, policy === 'STRICT'));
     }
 
     let terminated = false;
@@ -162,7 +188,7 @@ export class ProctoringService {
 
     if (targetLevel > session.warningCount) {
       warningLevel = await this.issueWarning(session, targetLevel, dto, risk, policy);
-      terminated = warningLevel >= MAX_WARNINGS && policy === 'TERMINATE';
+      terminated = warningLevel >= MAX_WARNINGS && (policy === 'TERMINATE' || policy === 'STRICT');
       if (terminated) await this.terminate(session, risk, dto.type);
     }
 

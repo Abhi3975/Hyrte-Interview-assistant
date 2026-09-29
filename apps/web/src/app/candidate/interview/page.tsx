@@ -314,6 +314,11 @@ function InterviewRoomInner() {
   // (see HARD_STRIKE_TYPES in proctoring.service.ts) — this screen sets
   // the expectation, that enforces it.
   const [preflight, setPreflight] = useState({ tabs: false, apps: false, space: false });
+  // "Completely proctored mode." Without this a self-serve session resolves to
+  // WARN server-side, which is exempt from hard strikes — which is why
+  // switching tabs previously appeared to do nothing at all. With it, leaving
+  // fullscreen or this tab ends the interview on the FIRST occurrence.
+  const [strictProctoring, setStrictProctoring] = useState(false);
   const preflightReady = preflight.tabs && preflight.apps && preflight.space;
   // P3 §4 — camera-off specifically PAUSES (not just flags) per the spec's
   // own example: "interview pauses with a warning if camera turns off."
@@ -1207,7 +1212,7 @@ function InterviewRoomInner() {
       } catch {}
 
       try {
-        const s = await api.post<{ sessionId: string }>('/practice/session', { category: topic.category, difficulty, topic: topic.topic, jobRole: topic.label, interviewId: assessmentId ?? undefined, consentedAt: consentedAtRef.current });
+        const s = await api.post<{ sessionId: string }>('/practice/session', { category: topic.category, difficulty, topic: topic.topic, jobRole: topic.label, interviewId: assessmentId ?? undefined, consentedAt: consentedAtRef.current, strictProctoring });
         sessionIdRef.current = s.sessionId;
         setupRecording(s.sessionId);
       } catch { sessionIdRef.current = null; }
@@ -1462,6 +1467,23 @@ function InterviewRoomInner() {
                   I&apos;m in a quiet, private space with no one else in view.
                 </label>
               </div>
+              <label className="mt-3 flex items-start gap-2 rounded-lg border border-amber-400/30 bg-amber-400/5 p-2.5 text-xs text-white/80">
+                <input
+                  type="checkbox"
+                  checked={strictProctoring}
+                  onChange={(e) => setStrictProctoring(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-white/30 bg-transparent"
+                />
+                <span>
+                  <span className="font-medium text-amber-300">Strict proctored mode</span> — leaving fullscreen or
+                  switching away from this tab ends the interview immediately, with no warning. Off by default, you
+                  get one warning first.
+                  <span className="mt-1 block text-white/50">
+                    A browser cannot close or even see your other tabs — no site can. What it can detect is the moment
+                    you leave this one, and in strict mode that ends the session.
+                  </span>
+                </span>
+              </label>
             </div>
             {/* P3 §7 — a real, required consent gate, not just informational text. */}
             <label className="mt-3 flex items-start gap-2 text-xs text-white/70">
