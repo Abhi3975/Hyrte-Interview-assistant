@@ -434,6 +434,12 @@ model InterviewSession {
   // (should be unreachable once the lobby enforces it, but the column
   // existing is what makes "logged" a checkable fact, not a claim).
   consentedAt      DateTime?
+  // Per-SESSION proctoring strictness. Deliberately here and not on Interview:
+  // the self-serve Interview row is shared across every candidate with the
+  // same title/category/difficulty, so a policy stored there would leak — one
+  // candidate opting into strict mode would silently terminate other people's
+  // interviews on their first tab switch. Caught live before it shipped.
+  strictProctoring Boolean   @default(false)
   warningCount     Int       @default(0)
   disqualified     Boolean   @default(false)
   terminatedReason String?

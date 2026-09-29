@@ -699,7 +699,7 @@ export class PracticeService {
       const iv = await this.prisma.interview.findUnique({ where: { id: input.interviewId }, select: { id: true } });
       if (iv) {
         const s = await this.prisma.interviewSession.create({
-          data: { interviewId: iv.id, candidateId, status: 'IN_PROGRESS', examState: 'ACTIVE', startedAt: new Date(), consentedAt },
+          data: { interviewId: iv.id, candidateId, status: 'IN_PROGRESS', examState: 'ACTIVE', startedAt: new Date(), consentedAt, strictProctoring: Boolean(input.strictProctoring) },
           select: { id: true },
         });
         return { sessionId: s.id };
@@ -727,14 +727,10 @@ export class PracticeService {
           difficulty: input.difficulty,
           status: 'SCHEDULED',
           createdById: candidateId,
-          // STRICT makes leaving the interview end it immediately. Without
-          // it a self-serve session resolves to WARN, which is exempt from
-          // hard strikes — which is why tab-switching appeared to do nothing.
-          config: {
-            selfServe: true,
-            proctored: true,
-            ...(input.strictProctoring ? { proctoringPolicy: 'STRICT' } : {}),
-          },
+          // No proctoring policy here on purpose — this Interview row is
+          // REUSED across every candidate with the same title/category/
+          // difficulty, so strictness belongs on the session, not here.
+          config: { selfServe: true, proctored: true },
         },
       }));
 
@@ -746,6 +742,7 @@ export class PracticeService {
         examState: 'ACTIVE',
         startedAt: new Date(),
         consentedAt,
+        strictProctoring: Boolean(input.strictProctoring),
       },
       select: { id: true },
     });

@@ -33,7 +33,12 @@ type SessionWithInterview = InterviewSession & { interview: Interview | null };
  * the instant they happen, and STRICT ends the session there and then.
  */
 export type ProctoringPolicy = 'WARN' | 'PAUSE' | 'TERMINATE' | 'STRICT';
-export function resolvePolicy(interview: Interview | null): ProctoringPolicy {
+export function resolvePolicy(interview: Interview | null, sessionStrict = false): ProctoringPolicy {
+  // A session-level opt-in wins over everything. It has to live on the
+  // session: the self-serve Interview row is SHARED across candidates with the
+  // same title/category/difficulty, so storing strictness there would apply
+  // one candidate's choice to everybody else's interviews.
+  if (sessionStrict) return 'STRICT';
   const config = (interview?.config as { proctoringPolicy?: string; selfServe?: boolean } | null) ?? null;
   if (
     config?.proctoringPolicy === 'WARN' ||
@@ -163,7 +168,7 @@ export class ProctoringService {
       .catch(() => undefined);
 
     // 3) Escalate warnings based on weighted risk, not raw event count.
-    const policy = resolvePolicy(session.interview);
+    const policy = resolvePolicy(session.interview, session.strictProctoring);
     let targetLevel = this.warningLevelForRisk(risk.riskScore);
 
     // Zero-tolerance override for leaving fullscreen / switching tabs — see

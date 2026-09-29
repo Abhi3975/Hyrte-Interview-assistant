@@ -55,3 +55,34 @@ describe('what STRICT actually costs you', () => {
     expect(hardStrikeLevelFor(1, MAX_WARNINGS)).toBe(1);
   });
 });
+
+describe('one candidate\'s strictness must not reach another candidate', () => {
+  // Caught live, before it reached anyone: the self-serve Interview row is
+  // looked up by organizationId + title + category + difficulty and REUSED
+  // across candidates. Storing the policy on it meant the first person to
+  // enable strict mode silently made everyone else's interviews strict too —
+  // terminating their session on a first tab switch they never agreed to.
+  // Verified on production: a session created WITHOUT the flag came back
+  // STRICT and terminated. The policy belongs on the session.
+
+  it('ignores a shared interview row when the session did not opt in', () => {
+    const sharedRow = cfg({ selfServe: true });
+    expect(resolvePolicy(sharedRow, false)).toBe('WARN');
+  });
+
+  it('applies strictness only to the session that asked for it', () => {
+    const sharedRow = cfg({ selfServe: true });
+    expect(resolvePolicy(sharedRow, true)).toBe('STRICT');
+    expect(resolvePolicy(sharedRow, false)).toBe('WARN');
+  });
+
+  it('lets a session opt in even where the interview says otherwise', () => {
+    expect(resolvePolicy(cfg({ proctoringPolicy: 'WARN' }), true)).toBe('STRICT');
+  });
+
+  it('defaults to not-strict when the flag is absent entirely', () => {
+    // Every caller that predates the flag must keep its old behaviour.
+    expect(resolvePolicy(cfg({ selfServe: true }))).toBe('WARN');
+    expect(resolvePolicy(cfg({ selfServe: false }))).toBe('TERMINATE');
+  });
+});
