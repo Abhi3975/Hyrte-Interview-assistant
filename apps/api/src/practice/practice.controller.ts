@@ -44,10 +44,16 @@ class StartSessionDto {
   // consent record, even if a client bug ever tried to skip the checkbox.
   @IsString() consentedAt!: string;
   /**
-   * "Completely proctored mode" — opt-in strictness for a self-serve session.
-   * Without it these default to WARN, which is exempt from hard strikes, so a
-   * candidate switching tabs saw nothing happen at all. With it, leaving
-   * fullscreen or the tab ends the interview on the FIRST occurrence.
+   * Strict proctoring — leaving fullscreen or the tab ends the interview on
+   * the FIRST occurrence.
+   *
+   * DEFAULTS TO TRUE when omitted. It began as opt-in, which meant a self-
+   * serve session fell back to WARN — exempt from hard strikes entirely — so
+   * switching tabs did nothing at all and the room only looked proctored.
+   * A proctored interview that does not enforce anything is worse than an
+   * honest unproctored one, because the candidate believes it is watching.
+   *
+   * Pass `false` explicitly to run a relaxed session.
    */
   @IsOptional() @IsBoolean() strictProctoring?: boolean;
 }

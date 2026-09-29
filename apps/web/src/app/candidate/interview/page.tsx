@@ -315,11 +315,13 @@ function InterviewRoomInner() {
   // (see HARD_STRIKE_TYPES in proctoring.service.ts) — this screen sets
   // the expectation, that enforces it.
   const [preflight, setPreflight] = useState({ tabs: false, apps: false, space: false });
-  // "Completely proctored mode." Without this a self-serve session resolves to
-  // WARN server-side, which is exempt from hard strikes — which is why
-  // switching tabs previously appeared to do nothing at all. With it, leaving
-  // fullscreen or this tab ends the interview on the FIRST occurrence.
-  const [strictProctoring, setStrictProctoring] = useState(false);
+  // Strict proctoring, ON by default. It started opt-in, which meant the room
+  // only LOOKED proctored: an unticked box fell back to WARN server-side,
+  // which is exempt from hard strikes, so switching tabs did nothing at all.
+  // A candidate who believes they are being watched and is not has been
+  // misled, which is worse than an openly relaxed interview — so the default
+  // now matches what the screen says, and relaxing it is the deliberate act.
+  const [strictProctoring, setStrictProctoring] = useState(true);
   const preflightReady = preflight.tabs && preflight.apps && preflight.space;
   // P3 §4 — camera-off specifically PAUSES (not just flags) per the spec's
   // own example: "interview pauses with a warning if camera turns off."
@@ -1453,7 +1455,7 @@ function InterviewRoomInner() {
               <div className="font-semibold">Before you start — this is a proctored exam:</div>
               <ul className="mt-1 space-y-0.5">
                 <li>• You&apos;ll be asked to <b>share your entire screen</b> and the app goes <b>fullscreen</b>.</li>
-                <li>• <b>Close all other tabs and apps</b> — leaving fullscreen or switching away <b>ends your interview immediately</b> after one warning.</li>
+                <li>• <b>Close all other tabs and apps</b> — leaving fullscreen or switching away <b>ends your interview immediately</b>, with no warning.</li>
                 <li>• Camera, microphone, screen and focus are monitored throughout, including background noise, long pauses, and answer-pattern shifts.</li>
                 <li>• If your camera turns off, the interview pauses until it&apos;s back on.</li>
               </ul>
@@ -1483,12 +1485,12 @@ function InterviewRoomInner() {
                   className="mt-0.5 h-4 w-4 rounded border-white/30 bg-transparent"
                 />
                 <span>
-                  <span className="font-medium text-amber-300">Strict proctored mode</span> — leaving fullscreen or
-                  switching away from this tab ends the interview immediately, with no warning. Off by default, you
-                  get one warning first.
+                  <span className="font-medium text-amber-300">Strict proctored mode</span> — on by default. Leaving
+                  fullscreen or switching away from this tab <b>ends the interview immediately</b>, with no warning.
+                  Untick it to practise with one warning first instead.
                   <span className="mt-1 block text-white/50">
-                    A browser cannot close or even see your other tabs — no site can. What it can detect is the moment
-                    you leave this one, and in strict mode that ends the session.
+                    Your other tabs can stay open — no website can close or even see them. What this detects is the
+                    moment you leave this one, and that ends the session.
                   </span>
                 </span>
               </label>

@@ -699,7 +699,7 @@ export class PracticeService {
       const iv = await this.prisma.interview.findUnique({ where: { id: input.interviewId }, select: { id: true } });
       if (iv) {
         const s = await this.prisma.interviewSession.create({
-          data: { interviewId: iv.id, candidateId, status: 'IN_PROGRESS', examState: 'ACTIVE', startedAt: new Date(), consentedAt, strictProctoring: Boolean(input.strictProctoring) },
+          data: { interviewId: iv.id, candidateId, status: 'IN_PROGRESS', examState: 'ACTIVE', startedAt: new Date(), consentedAt, strictProctoring: input.strictProctoring ?? true },
           select: { id: true },
         });
         return { sessionId: s.id };
@@ -742,7 +742,7 @@ export class PracticeService {
         examState: 'ACTIVE',
         startedAt: new Date(),
         consentedAt,
-        strictProctoring: Boolean(input.strictProctoring),
+        strictProctoring: input.strictProctoring ?? true,
       },
       select: { id: true },
     });

@@ -86,3 +86,24 @@ describe('one candidate\'s strictness must not reach another candidate', () => {
     expect(resolvePolicy(cfg({ selfServe: false }))).toBe('TERMINATE');
   });
 });
+
+describe('strict is the default now, not the opt-in', () => {
+  // It shipped opt-in, and opt-in meant the room only LOOKED proctored: an
+  // unticked box fell back to WARN, which is exempt from hard strikes, so
+  // switching tabs did nothing at all. A candidate who believes they are
+  // being watched and is not has been misled — worse than an openly relaxed
+  // interview. These pin the layer where the default lives.
+
+  it('leaves resolvePolicy itself unchanged — it reports what the session says', () => {
+    // The default belongs at session creation, not in this pure function.
+    // Keeping it honest here is what lets a relaxed session stay relaxed.
+    expect(resolvePolicy(cfg({ selfServe: true }), false)).toBe('WARN');
+    expect(resolvePolicy(cfg({ selfServe: true }), true)).toBe('STRICT');
+  });
+
+  it('still lets a candidate deliberately relax it', () => {
+    // `strictProctoring: false` is an explicit choice and must survive — the
+    // practice case is real, and silently overriding it would be its own lie.
+    expect(resolvePolicy(cfg({ selfServe: true }), false)).toBe('WARN');
+  });
+});
