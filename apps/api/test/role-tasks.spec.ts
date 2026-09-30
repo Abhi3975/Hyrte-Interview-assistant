@@ -136,3 +136,73 @@ describe('meeting reality layer', () => {
     expect(formatCandidateRecord([])).toBe('');
   });
 });
+
+describe('the practical-task library covers the roles the founder listed', () => {
+  // From "My tasks practical v1" — 15 roles, each with a named practical task.
+  // Nine of them previously fell through to the generic diagnose/decide pair,
+  // which is the "practical tasks wali cheeze missing hai" report: a Customer
+  // Support candidate and an AI/ML Engineer got the identical two tasks.
+  const LIBRARY: { role: string; expectKey: string }[] = [
+    { role: 'Inside Sales / SDR', expectKey: 'sales_qualify' },
+    { role: 'Customer Support Specialist', expectKey: 'support_resolve' },
+    { role: 'Backend Developer', expectKey: 'eng_debug' },
+    { role: 'QA Tester', expectKey: 'qa_testplan' },
+    { role: 'Recruiter', expectKey: 'rec_screen' },
+    { role: 'Operations Executive', expectKey: 'ops_incident' },
+    { role: 'Frontend Developer', expectKey: 'eng_debug' },
+    { role: 'Performance Marketer', expectKey: 'mkt_brief' },
+    { role: 'Technical Support Engineer', expectKey: 'techsupport_troubleshoot' },
+    { role: 'Account Executive', expectKey: 'sales_qualify' },
+    { role: 'Full-Stack Developer', expectKey: 'eng_debug' },
+    { role: 'Logistics Coordinator', expectKey: 'log_delay' },
+    { role: 'HR Operations', expectKey: 'hr_onboarding' },
+    { role: 'Customer Success Manager', expectKey: 'cs_renewal' },
+    { role: 'AI / ML Engineer', expectKey: 'aiml_debug' },
+  ];
+
+  it.each(LIBRARY)('gives $role its own practical task', ({ role, expectKey }) => {
+    expect(resolveRoleTasks(role).map((t) => t.key)).toContain(expectKey);
+  });
+
+  it('never leaves one of these on the generic fallback', () => {
+    for (const { role } of LIBRARY) {
+      const keys = resolveRoleTasks(role).map((t) => t.key);
+      expect(keys).not.toEqual(['diagnose', 'decide']);
+    }
+  });
+
+  it('resolves the specific role before the family that would swallow it', () => {
+    // First match wins, so ordering is load-bearing: "AI/ML Engineer" contains
+    // "engineer", "QA Engineer" contains "engineer", "Technical Support"
+    // contains "support", and "HR Operations" contains "operations".
+    expect(resolveRoleTasks('AI/ML Engineer').map((t) => t.key)).toContain('aiml_debug');
+    expect(resolveRoleTasks('QA Engineer').map((t) => t.key)).toContain('qa_testplan');
+    expect(resolveRoleTasks('Technical Support').map((t) => t.key)).toContain('techsupport_troubleshoot');
+    expect(resolveRoleTasks('HR Operations Lead').map((t) => t.key)).toContain('hr_onboarding');
+    // ...and the broader families still win when nothing more specific matches.
+    expect(resolveRoleTasks('Senior Backend Engineer').map((t) => t.key)).toContain('eng_debug');
+    expect(resolveRoleTasks('Operations Executive').map((t) => t.key)).toContain('ops_incident');
+  });
+
+  it('holds every new task to the same structural bar as the originals', () => {
+    for (const { role } of LIBRARY) {
+      for (const task of resolveRoleTasks(role)) {
+        if (task.workspace === 'PRIORITIZATION') {
+          expect(task.buckets?.length).toBeGreaterThan(1);
+          continue;
+        }
+        expect(task.sections.length).toBeGreaterThan(0);
+        expect(task.sections.some((s) => s.required)).toBe(true);
+        expect(task.successCriteria.length).toBeGreaterThan(0);
+        for (const s of task.sections) expect(s.hint.length).toBeGreaterThan(10);
+      }
+    }
+  });
+
+  it('keeps task keys unique within every role', () => {
+    for (const { role } of LIBRARY) {
+      const keys = resolveRoleTasks(role).map((t) => t.key);
+      expect(new Set(keys).size).toBe(keys.length);
+    }
+  });
+});

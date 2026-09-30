@@ -135,6 +135,254 @@ const GENERIC_TASKS: RoleTaskTemplate[] = [
 ];
 
 const ROLE_TASKS: { pattern: RegExp; tasks: RoleTaskTemplate[] }[] = [
+  // ── Practical-task library (founder PDF, "My tasks practical v1") ────────
+  // Nine role families the library names that had no tasks of their own and
+  // fell through to the generic diagnose/decide pair. Ordered before the
+  // broader families below because resolution is first-match: "AI/ML Engineer"
+  // and "QA Engineer" would otherwise be swallowed by /engineer/, "Technical
+  // Support" by /support/, and "HR Operations" by /operations/.
+  {
+    // Must precede the engineer family — an ML engineer debugging a model is
+    // not the same task as a backend engineer debugging an API.
+    pattern: /\b(ai|ml|machine learning|data scien)\w*\s*(engineer|scientist)?|mlops|\bllm\b/i,
+    tasks: [
+      {
+        key: 'aiml_debug',
+        title: 'Debug the AI workflow',
+        summary: 'Something in the pipeline is producing bad output. Find out what, and prove it.',
+        workspace: 'DELIVERABLE',
+        type: 'ANALYSIS',
+        tags: ['Model debugging', 'Evaluation'],
+        reviewerHint: /engineer|data|technical|\bai\b|\bml\b/i,
+        successCriteria: [
+          'Separates a data problem from a model problem from a prompt problem',
+          'Proposes a measurement, not just an opinion about quality',
+          'States what would falsify the diagnosis',
+        ],
+        sections: [
+          { id: 'symptom', label: 'What the output is doing wrong', hint: 'Be concrete — a specific bad case beats "quality is poor".', long: true, required: true },
+          { id: 'hypotheses', label: 'Candidate causes', hint: 'Data, model, prompt, retrieval, evaluation itself. Which are live and why?', long: true, required: true },
+          { id: 'evaluation', label: 'How you would measure it', hint: 'What you would run, on what set, and what number would tell you it is fixed.', long: true, required: true },
+          { id: 'falsify', label: 'What would prove you wrong', hint: 'The result that would send you back to the start.', long: true },
+        ],
+      },
+      { ...GENERIC_TASKS[1], key: 'aiml_decide', title: 'Make the ship call', summary: 'Decide whether this model is good enough to put in front of users.' },
+    ],
+  },
+  {
+    // Before the engineer family: a QA engineer's hero task is a test plan,
+    // not a code review.
+    pattern: /\bqa\b|quality assurance|\btester\b|test engineer|\bsdet\b/i,
+    tasks: [
+      {
+        key: 'qa_testplan',
+        title: 'Test the release',
+        summary: 'A release is due. Decide what gets tested, find what is broken, and say whether it ships.',
+        workspace: 'DELIVERABLE',
+        type: 'DOCUMENT',
+        tags: ['Test design', 'Risk'],
+        reviewerHint: /engineer|qa|quality|product/i,
+        successCriteria: [
+          'Prioritises by risk rather than testing everything equally',
+          'Writes reproducible steps, not "it is broken"',
+          'Gives a clear ship / do-not-ship position',
+        ],
+        sections: [
+          { id: 'risk', label: 'Where the risk actually is', hint: 'What in this release is most likely to break, and what would it cost?', long: true, required: true },
+          { id: 'cases', label: 'What you will test', hint: 'The cases that matter, in priority order. Include at least one edge case per area.', long: true, required: true },
+          { id: 'found', label: 'Bugs found', hint: 'One per line: steps to reproduce, expected, actual, severity.', long: true, required: true },
+          { id: 'verdict', label: 'Ship or hold', hint: 'Your call, and the specific bug that drives it.', required: true },
+        ],
+      },
+      { ...GENERIC_TASKS[0], key: 'qa_diagnose', title: 'Reproduce the reported bug', summary: 'A customer says it is broken. Work out whether it is, and where.' },
+    ],
+  },
+  {
+    // Before the generic support family — a technical support engineer
+    // troubleshoots a system; a support agent handles a person.
+    pattern: /technical support|support engineer|\bl2\b|\bl3\b|solutions engineer|field engineer/i,
+    tasks: [
+      {
+        key: 'techsupport_troubleshoot',
+        title: 'Troubleshoot the product issue',
+        summary: 'A customer is blocked and escalating. Work out what is actually wrong.',
+        workspace: 'DELIVERABLE',
+        type: 'ANALYSIS',
+        tags: ['Troubleshooting', 'Customer comms'],
+        reviewerHint: /support|engineer|technical|customer/i,
+        successCriteria: [
+          'Distinguishes what the customer reported from what is actually happening',
+          'Gives the customer something usable now, not only a root cause',
+          'Names when to escalate rather than holding on to it',
+        ],
+        sections: [
+          { id: 'reported', label: 'What was reported', hint: 'In the customer’s words, then in technical terms.', long: true, required: true },
+          { id: 'investigation', label: 'What you checked', hint: 'Logs, config, versions, recent changes — and what each ruled in or out.', long: true, required: true },
+          { id: 'workaround', label: 'Unblock them now', hint: 'What the customer can do today, even if the real fix takes longer.', long: true, required: true },
+          { id: 'escalation', label: 'Escalate or own it', hint: 'If this needs engineering, say what you would hand over and why.', long: true },
+        ],
+      },
+      { ...GENERIC_TASKS[1], key: 'techsupport_decide', title: 'Make the escalation call', summary: 'Decide whether this becomes an engineering problem, and defend it.' },
+    ],
+  },
+  {
+    pattern: /customer success|\bcsm\b|account manage|renewal|retention manager/i,
+    tasks: [
+      {
+        key: 'cs_renewal',
+        title: 'Handle the renewal risk',
+        summary: 'A paying account is showing every sign of leaving. Work out why, and what you would say.',
+        workspace: 'DELIVERABLE',
+        type: 'DOCUMENT',
+        tags: ['Retention', 'Difficult conversations'],
+        reviewerHint: /customer|success|sales|account|revenue/i,
+        successCriteria: [
+          'Diagnoses the real reason rather than the stated one',
+          'Proposes something the company can actually honour',
+          'Does not promise away margin or engineering time it cannot spend',
+        ],
+        sections: [
+          { id: 'signals', label: 'What the account is telling you', hint: 'Usage, tickets, sentiment, who has gone quiet. Use the real numbers.', long: true, required: true },
+          { id: 'why', label: 'Why they are really leaving', hint: 'The stated reason is rarely the whole reason. What do you think it is?', long: true, required: true },
+          { id: 'offer', label: 'What you would put on the table', hint: 'Be specific and be honest about what it costs us.', long: true, required: true },
+          { id: 'conversation', label: 'How you would open the call', hint: 'Write the first thing you would actually say to them.', long: true, required: true },
+        ],
+      },
+      { ...GENERIC_TASKS[1], key: 'cs_decide', title: 'Decide what to concede', summary: 'Choose what you will and will not give away to keep this account.' },
+    ],
+  },
+  {
+    pattern: /customer support|support (agent|rep|specialist)|helpdesk|service desk|\bcx\b/i,
+    tasks: [
+      {
+        key: 'support_resolve',
+        title: 'Resolve the customer issue',
+        summary: 'An unhappy customer needs an answer. Give them one — and fix what caused it.',
+        workspace: 'DELIVERABLE',
+        type: 'REPLY',
+        tags: ['Customer comms', 'Ownership'],
+        reviewerHint: /support|customer|service|operations/i,
+        successCriteria: [
+          'Answers the question actually asked, in plain language',
+          'Takes ownership instead of routing the customer onward',
+          'Separates the individual fix from the thing that keeps causing it',
+        ],
+        sections: [
+          { id: 'understanding', label: 'What they need', hint: 'Restate the problem as the customer experiences it, not as a ticket category.', long: true, required: true },
+          { id: 'reply', label: 'Your reply to the customer', hint: 'Write it as you would send it. Tone matters as much as accuracy here.', long: true, required: true },
+          { id: 'fix', label: 'What you did internally', hint: 'The actual steps taken to resolve it on our side.', long: true, required: true },
+          { id: 'prevent', label: 'Stop it recurring', hint: 'What would keep the next customer from hitting this at all?', long: true },
+        ],
+      },
+      { ...GENERIC_TASKS[0], key: 'support_diagnose', title: 'Find the pattern in the tickets', summary: 'Several customers are reporting variations of the same thing. Work out what it is.' },
+    ],
+  },
+  {
+    pattern: /recruit|talent acquisition|\bta\b\s*(partner|specialist)|sourcer|hiring manager/i,
+    tasks: [
+      {
+        key: 'rec_screen',
+        title: 'Run the screening interview',
+        summary: 'Design and run a first-round screen that actually separates candidates.',
+        workspace: 'DELIVERABLE',
+        type: 'DOCUMENT',
+        tags: ['Assessment design', 'Judgement'],
+        reviewerHint: /hr|people|talent|recruit|hiring/i,
+        successCriteria: [
+          'Questions map to the role’s real requirements, not to personality',
+          'Defines what a good and a weak answer sound like BEFORE interviewing',
+          'Reaches a decision rather than a summary',
+        ],
+        sections: [
+          { id: 'must_haves', label: 'What this role genuinely requires', hint: 'Three or four things. Not a wish list — what would make someone fail without it.', long: true, required: true },
+          { id: 'questions', label: 'Your screening questions', hint: 'One per line, each tied to a requirement above.', long: true, required: true },
+          { id: 'bar', label: 'What a strong answer sounds like', hint: 'For your two most important questions, describe strong vs weak. This is what stops the bar drifting.', long: true, required: true },
+          { id: 'decision', label: 'Advance or reject', hint: 'Your call on the candidate in the brief, with the evidence behind it.', long: true, required: true },
+        ],
+      },
+      { ...GENERIC_TASKS[1], key: 'rec_decide', title: 'Make the hiring recommendation', summary: 'Commit to advance or reject, and defend it to the hiring manager.' },
+    ],
+  },
+  {
+    // Before the operations family — "HR Operations" contains "operations".
+    pattern: /\bhr\b|human resources|people ops|people operations|hris/i,
+    tasks: [
+      {
+        key: 'hr_onboarding',
+        title: 'Run the onboarding workflow',
+        summary: 'Someone starts Monday. Make sure everything that has to happen, happens.',
+        workspace: 'DELIVERABLE',
+        type: 'DOCUMENT',
+        tags: ['Process design', 'Coordination'],
+        reviewerHint: /hr|people|operations|manager/i,
+        successCriteria: [
+          'Covers access, payroll, compliance and the human side — not just IT setup',
+          'Names who is responsible for each step, not just what the step is',
+          'Has a check that catches a step being missed',
+        ],
+        sections: [
+          { id: 'before', label: 'Before day one', hint: 'What must be done in advance, by whom, and by when.', long: true, required: true },
+          { id: 'day_one', label: 'Day one', hint: 'What the new joiner actually experiences, hour by hour.', long: true, required: true },
+          { id: 'first_month', label: 'First month', hint: 'Checkpoints, training, and who owns each one.', long: true, required: true },
+          { id: 'failure', label: 'What usually goes wrong', hint: 'The step most often missed here, and how your process catches it.', long: true },
+        ],
+      },
+      { ...GENERIC_TASKS[1], key: 'hr_decide', title: 'Make the policy call', summary: 'Decide how to handle a case the policy does not cleanly cover.' },
+    ],
+  },
+  {
+    // Before the operations family — a logistics incident is its own shape.
+    pattern: /logistic|supply chain|shipment|warehouse|fulfilment|fulfillment|freight/i,
+    tasks: [
+      {
+        key: 'log_delay',
+        title: 'Resolve the delayed shipment',
+        summary: 'A shipment is late and customers are already asking. Sort it out.',
+        workspace: 'DELIVERABLE',
+        type: 'DECISION',
+        tags: ['Incident handling', 'Trade-offs'],
+        reviewerHint: /operations|logistic|supply|customer/i,
+        successCriteria: [
+          'Weighs cost against customer impact explicitly rather than defaulting to either',
+          'Communicates to the customer before they chase again',
+          'Fixes the immediate case and names the systemic one',
+        ],
+        sections: [
+          { id: 'situation', label: 'Where it actually is', hint: 'What is delayed, by how long, and who is affected.', long: true, required: true },
+          { id: 'options', label: 'Your options', hint: 'At least two, with what each costs and what each saves.', long: true, required: true },
+          { id: 'call', label: 'What you are doing', hint: 'The option you picked and why it beats the others here.', long: true, required: true },
+          { id: 'comms', label: 'What you tell the customer', hint: 'Write the message. Being early and honest beats being precise and late.', long: true, required: true },
+        ],
+      },
+      { ...GENERIC_TASKS[0], key: 'log_diagnose', title: 'Find why deliveries keep slipping', summary: 'This is the third delay this month. Work out what is actually causing it.' },
+    ],
+  },
+  {
+    pattern: /operations|\bops\b|operations executive|business operations|process/i,
+    tasks: [
+      {
+        key: 'ops_incident',
+        title: 'Resolve the operational incident',
+        summary: 'Something has broken in how the business runs. Stabilise it, then fix the cause.',
+        workspace: 'DELIVERABLE',
+        type: 'ANALYSIS',
+        tags: ['Incident response', 'Process'],
+        reviewerHint: /operations|manager|director|\bcoo\b/i,
+        successCriteria: [
+          'Stops the bleeding before investigating the cause',
+          'Traces to a process failure rather than blaming a person',
+          'Proposes a change that would have prevented it',
+        ],
+        sections: [
+          { id: 'impact', label: 'What is affected right now', hint: 'Who is blocked, what it is costing, and how fast it is getting worse.', long: true, required: true },
+          { id: 'immediate', label: 'What you did first', hint: 'The containment step, before any investigation.', long: true, required: true },
+          { id: 'cause', label: 'Why it happened', hint: 'The process gap, not the individual. Be specific about where it broke.', long: true, required: true },
+          { id: 'prevent', label: 'What changes', hint: 'The concrete change, and who owns it.', long: true, required: true },
+        ],
+      },
+      { ...GENERIC_TASKS[1], key: 'ops_decide', title: 'Make the trade-off call', summary: 'Decide what to sacrifice when you cannot protect everything at once.' },
+    ],
+  },
   {
     pattern: /product manager|\bpm\b|product owner/i,
     tasks: [
@@ -301,7 +549,10 @@ const ROLE_TASKS: { pattern: RegExp; tasks: RoleTaskTemplate[] }[] = [
     ],
   },
   {
-    pattern: /marketing|growth|brand|content/i,
+    // "Marketer" was missing: /marketing/ does not match "Performance
+    // Marketer", one of the commonest titles in the library, so it fell
+    // through to the generic pair. Caught by the coverage test below.
+    pattern: /market(ing|er)|growth|brand|content|demand gen|\bseo\b|\bsem\b|paid (media|ads|search)/i,
     tasks: [
       {
         key: 'mkt_brief',
