@@ -20,20 +20,97 @@ import { MicIcon, SpeakerIcon, ShieldIcon, AlertIcon, CheckIcon, XIcon, CodeIcon
 import { classifySilence, shouldInterject, silencePrompt } from '@interviewai/conversation';
 import { AiDisclosure } from '@/components/ai-disclosure';
 
-const TOPICS: { label: string; category: string; topic: string; blurb: string }[] = [
-  { label: 'Software Engineer', category: 'DSA', topic: 'Data Structures and Algorithms', blurb: 'DSA, problem solving & complexity' },
-  { label: 'Frontend (React)', category: 'FRONTEND', topic: 'React', blurb: 'React, JS, browser & UI' },
-  { label: 'Backend (Node)', category: 'BACKEND', topic: 'Node.js', blurb: 'APIs, Node.js, databases' },
-  { label: 'Python', category: 'BACKEND', topic: 'Python', blurb: 'Python, OOP & scripting' },
-  { label: 'Java', category: 'BACKEND', topic: 'Java', blurb: 'Java, JVM & OOP' },
-  { label: 'System Design', category: 'SYSTEM_DESIGN', topic: 'System Design', blurb: 'Scalability & architecture' },
-  { label: 'SQL / Data Analyst', category: 'SQL', topic: 'SQL', blurb: 'SQL, queries & modelling' },
-  { label: 'DevOps', category: 'DEVOPS', topic: 'DevOps and CI/CD', blurb: 'CI/CD, containers & cloud' },
-  { label: 'AI / ML', category: 'AI_ML', topic: 'Machine Learning', blurb: 'ML, models & maths' },
-  { label: 'Data Analytics', category: 'DATA_ANALYTICS', topic: 'Data Analytics', blurb: 'Analysis & insight' },
-  { label: 'Product Manager', category: 'PRODUCT_MANAGEMENT', topic: 'Product Management', blurb: 'Product sense & metrics' },
-  { label: 'HR / Behavioral', category: 'HR', topic: 'Behavioral', blurb: 'Behavioural & culture fit' },
+/**
+ * What kind of interview you can take.
+ *
+ * Founder-reported, 30 Sep: "when I click on AI interview, why only DSA
+ * questions — there should be an option for which topic, which genre, other
+ * engineering, biotech, whatever, product manager, sales, each."
+ *
+ * The list was twelve entries and eleven of them were software. Anyone who was
+ * not an engineer had one usable option ("HR / Behavioral"), which is not a
+ * role — it is a round. `category` must be one of the Category enum's fourteen
+ * values, but `topic` is free text and is what actually drives what gets
+ * asked, so breadth comes from topic while category picks the right question
+ * bank and decides whether a coding round appears at all.
+ */
+const TOPIC_GROUPS: { group: string; items: { label: string; category: string; topic: string; blurb: string }[] }[] = [
+  {
+    group: 'Engineering',
+    items: [
+      { label: 'Software Engineer', category: 'DSA', topic: 'Data Structures and Algorithms', blurb: 'DSA, problem solving & complexity' },
+      { label: 'Frontend (React)', category: 'FRONTEND', topic: 'React', blurb: 'React, JS, browser & UI' },
+      { label: 'Backend (Node)', category: 'BACKEND', topic: 'Node.js', blurb: 'APIs, Node.js, databases' },
+      { label: 'Full-Stack', category: 'FULLSTACK', topic: 'Full-stack web development', blurb: 'End-to-end feature work' },
+      { label: 'Python', category: 'BACKEND', topic: 'Python', blurb: 'Python, OOP & scripting' },
+      { label: 'Java', category: 'BACKEND', topic: 'Java', blurb: 'Java, JVM & OOP' },
+      { label: 'Mobile (iOS / Android)', category: 'FRONTEND', topic: 'Mobile app development', blurb: 'Mobile UI, lifecycle & performance' },
+      { label: 'System Design', category: 'SYSTEM_DESIGN', topic: 'System Design', blurb: 'Scalability & architecture' },
+      { label: 'DevOps / SRE', category: 'DEVOPS', topic: 'DevOps, CI/CD and reliability', blurb: 'CI/CD, containers & cloud' },
+      { label: 'QA / Test Engineer', category: 'DEVOPS', topic: 'Software testing and quality assurance', blurb: 'Test design, automation & risk' },
+      { label: 'Embedded / Hardware', category: 'SYSTEM_DESIGN', topic: 'Embedded systems and hardware engineering', blurb: 'Firmware, constraints & timing' },
+    ],
+  },
+  {
+    group: 'Data & AI',
+    items: [
+      { label: 'Data Analyst', category: 'SQL', topic: 'SQL and data analysis', blurb: 'SQL, queries & modelling' },
+      { label: 'Data Scientist', category: 'DATA_ANALYTICS', topic: 'Data science and statistics', blurb: 'Statistics, experiments & insight' },
+      { label: 'Data Engineer', category: 'DATABASE', topic: 'Data engineering and pipelines', blurb: 'Pipelines, warehousing & quality' },
+      { label: 'AI / ML Engineer', category: 'AI_ML', topic: 'Machine Learning', blurb: 'ML, models & evaluation' },
+      { label: 'Business Analyst', category: 'DATA_ANALYTICS', topic: 'Business analysis', blurb: 'Requirements, process & metrics' },
+    ],
+  },
+  {
+    group: 'Product & Design',
+    items: [
+      { label: 'Product Manager', category: 'PRODUCT_MANAGEMENT', topic: 'Product Management', blurb: 'Product sense & metrics' },
+      { label: 'Product / UX Designer', category: 'PRODUCT_MANAGEMENT', topic: 'Product design and UX', blurb: 'User problems & design judgement' },
+      { label: 'Technical Program Manager', category: 'PRODUCT_MANAGEMENT', topic: 'Technical program management', blurb: 'Delivery, risk & cross-team' },
+    ],
+  },
+  {
+    group: 'Sales & Marketing',
+    items: [
+      { label: 'Inside Sales / SDR', category: 'MBA', topic: 'Inside sales and prospecting', blurb: 'Qualifying, outreach & pipeline' },
+      { label: 'Account Executive', category: 'MBA', topic: 'B2B sales and closing', blurb: 'Demos, objections & closing' },
+      { label: 'Customer Success', category: 'MBA', topic: 'Customer success and retention', blurb: 'Renewals, churn & expansion' },
+      { label: 'Performance Marketing', category: 'DATA_ANALYTICS', topic: 'Performance marketing', blurb: 'Campaigns, budget & ROAS' },
+      { label: 'Content / Brand Marketing', category: 'MBA', topic: 'Content and brand marketing', blurb: 'Positioning, story & channels' },
+    ],
+  },
+  {
+    group: 'Operations & Support',
+    items: [
+      { label: 'Customer Support', category: 'HR', topic: 'Customer support', blurb: 'Resolution, tone & ownership' },
+      { label: 'Technical Support', category: 'DEVOPS', topic: 'Technical support and troubleshooting', blurb: 'Diagnosis & escalation' },
+      { label: 'Operations Executive', category: 'MBA', topic: 'Business operations', blurb: 'Process, incidents & trade-offs' },
+      { label: 'Logistics / Supply Chain', category: 'MBA', topic: 'Logistics and supply chain', blurb: 'Fulfilment, delays & cost' },
+    ],
+  },
+  {
+    group: 'People & Business',
+    items: [
+      { label: 'Recruiter / Talent', category: 'HR', topic: 'Recruitment and talent acquisition', blurb: 'Screening, bar & judgement' },
+      { label: 'HR Operations', category: 'HR', topic: 'HR operations and people processes', blurb: 'Onboarding, policy & compliance' },
+      { label: 'Finance / FP&A', category: 'FINANCE', topic: 'Finance and FP&A', blurb: 'Modelling, budgets & analysis' },
+      { label: 'Consulting / MBA', category: 'MBA', topic: 'Management consulting and case interviews', blurb: 'Cases, structure & guesstimates' },
+      { label: 'HR / Behavioural round', category: 'HR', topic: 'Behavioral', blurb: 'Behavioural & culture fit' },
+    ],
+  },
+  {
+    group: 'Science & Other Engineering',
+    items: [
+      { label: 'Biotech / Life Sciences', category: 'DATA_ANALYTICS', topic: 'Biotechnology and life sciences', blurb: 'Assays, protocols & interpretation' },
+      { label: 'Mechanical Engineering', category: 'SYSTEM_DESIGN', topic: 'Mechanical engineering', blurb: 'Design, materials & tolerances' },
+      { label: 'Electrical / Electronics', category: 'SYSTEM_DESIGN', topic: 'Electrical and electronics engineering', blurb: 'Circuits, signals & power' },
+      { label: 'Civil / Structural', category: 'SYSTEM_DESIGN', topic: 'Civil and structural engineering', blurb: 'Loads, safety & standards' },
+      { label: 'Chemical / Process', category: 'SYSTEM_DESIGN', topic: 'Chemical and process engineering', blurb: 'Reactions, yield & scale-up' },
+    ],
+  },
 ];
+
+const TOPICS: { label: string; category: string; topic: string; blurb: string }[] = TOPIC_GROUPS.flatMap((g) => g.items);
 const DIFFICULTIES = ['EASY', 'MEDIUM', 'HARD', 'EXPERT'] as const;
 const QUESTION_COUNTS = [3, 5, 8, 10];
 const INTERVIEW_TYPES: { id: 'mixed' | 'theory' | 'coding'; label: string }[] = [
@@ -497,7 +574,7 @@ function InterviewRoomInner() {
         if (res.terminated) {
           setProctorNotice(
             isLockdownViolation
-              ? 'Your interview has ended — you left the interview window or exited fullscreen more than once.'
+              ? 'Your interview has ended — you left the interview window or exited fullscreen. Strict proctoring was on, which ends the session the first time that happens.'
               : 'Your session has been ended due to repeated integrity violations.',
           );
           endInterview();
@@ -965,6 +1042,30 @@ function InterviewRoomInner() {
   // post-intro "here's today's focus" message) — or once the hard time cap
   // below forces it, whichever comes first. The Coding tab stays gated until then.
   const introComplete = introForced || messages.filter((m) => m.role === 'ai').length >= 2;
+
+  /**
+   * When the Coding tab is actually usable.
+   *
+   * Founder-reported, 30 Sep: "if Ally is talking to me, coding should be
+   * locked at that time — she is asking me to explain my thinking and coding
+   * is also open."
+   *
+   * It was gated only on the introduction being finished, so from the second
+   * question onward it sat open through the entire theory round. A candidate
+   * being asked to reason out loud could be quietly writing code instead,
+   * which is both a worse assessment and a worse experience — the room was
+   * asking for two things at once.
+   *
+   * Now it opens only when the interview has actually reached its coding
+   * round, and closes again while Ally is mid-sentence.
+   */
+  const codingRoundActive = activeRoundSequence[roundIndex]?.type === 'coding';
+  const codingOpen = introComplete && codingRoundActive && voiceState !== 'speaking';
+  const codingLockReason = !introComplete
+    ? 'Finish your introduction with Ally first'
+    : !codingRoundActive
+      ? 'Ally is still on the discussion round — the coding question comes next'
+      : 'Ally is speaking — the editor unlocks when she finishes';
 
   // Round tracking starts the moment the intro completes, not before — the
   // intro's own cap already governs that phase.
@@ -1442,6 +1543,37 @@ function InterviewRoomInner() {
                 <div className="mt-2 flex items-center gap-1.5 rounded-lg bg-amber-500/10 px-2 py-1 text-xs text-amber-400"><ShieldIcon width={12} height={12} /> Monitors your entire interview in real time</div>
               </div>
             </div>
+            {/* Arriving via a ?topic= link (the landing page's role cards) skips
+                the setup wizard entirely and pins you to whatever that link
+                said — which is how "why only DSA questions" happens. The
+                choice is available here regardless of how you got in. */}
+            {!assessmentId && (
+              <>
+                <div className="mt-6 text-xs font-semibold uppercase tracking-wide text-white/40">Role</div>
+                <select
+                  value={TOPICS.findIndex((t) => t.label === topic.label)}
+                  onChange={(e) => {
+                    const idx = Number(e.target.value);
+                    if (idx >= 0) {
+                      setWizardTopic(null);
+                      setTopicIdx(idx);
+                    }
+                  }}
+                  className="mt-2 w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-sm"
+                >
+                  {TOPIC_GROUPS.map((g) => (
+                    <optgroup key={g.group} label={g.group} className="bg-neutral-900">
+                      {g.items.map((t) => (
+                        <option key={t.label} value={TOPICS.findIndex((x) => x.label === t.label)} className="bg-neutral-900">
+                          {t.label} — {t.blurb}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </>
+            )}
+
             <div className="mt-6 text-xs font-semibold uppercase tracking-wide text-white/40">Interview Details</div>
             <div className="mt-2 grid grid-cols-2 gap-2">
               <div className="rounded-xl bg-white/5 p-3"><div className="text-[10px] uppercase tracking-wide text-white/40">Time</div><div className="mt-0.5 font-semibold">{durationMin} mins</div></div>
@@ -1646,10 +1778,10 @@ function InterviewRoomInner() {
           <div className="flex gap-1 rounded-xl bg-white/5 p-1 text-sm">
             <button onClick={() => setTab('chat')} className={`flex-1 rounded-lg px-3 py-1.5 ${tab === 'chat' ? 'bg-white/15 font-medium' : 'text-white/60'}`}>Interview</button>
             {coding && (
-              introComplete ? (
+              codingOpen ? (
                 <button onClick={() => setTab('code')} className={`flex-1 rounded-lg px-3 py-1.5 ${tab === 'code' ? 'bg-white/15 font-medium' : 'text-white/60'}`}>Coding {codeResult && <span className={codeResult.passed === codeResult.total ? 'text-emerald-400' : 'text-amber-400'}>· {codeResult.passed}/{codeResult.total}</span>}</button>
               ) : (
-                <button disabled title="Finish your introduction with Ally first" className="flex-1 cursor-not-allowed rounded-lg px-3 py-1.5 text-white/25">Coding 🔒</button>
+                <button disabled title={codingLockReason} className="flex-1 cursor-not-allowed rounded-lg px-3 py-1.5 text-white/25">Coding 🔒</button>
               )
             )}
           </div>
