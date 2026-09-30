@@ -9,6 +9,7 @@ import { EvidenceGraphService } from '../dig/evidence-graph.service';
 import { DecisionGraphService } from '../dig/decision-graph.service';
 import { COMPANY_STATE_KEYS } from '../consequences/consequence.service';
 import { rampedDelayMs } from '../pacing/session-pacing';
+import { stripSelfAddress } from '../agents/addressing';
 
 const TICK1_BASE_MS = 20_000;
 const TICK2_BASE_MS = 45_000;
@@ -143,7 +144,8 @@ export class HyrteWorkTickService {
             `spot in the company state below), "workItemType": one of ["document","reply","decision","approval",` +
             `"build","analysis","meeting_outcome"], "priority": one of ["low","medium","high","critical"], ` +
             '"dueInHours": int, "managerNote": string (only if true — 1 sentence, in your voice, telling the ' +
-            'candidate what you just assigned and why, as an FYI, not a request for permission).',
+            'candidate what you just assigned and why, as an FYI, not a request for permission. It is addressed ' +
+            'TO the candidate, so do not open it with your own name — that would be greeting yourself).',
         },
         {
           role: 'user',
@@ -190,7 +192,9 @@ export class HyrteWorkTickService {
     });
     this.gateway.broadcast(sessionId, { type: 'task:update', task: workItem });
 
-    const managerNote = result.managerNote?.trim() || `Heads up — I've asked ${target.name} to take a look at "${title}".`;
+    const managerNote =
+      stripSelfAddress(result.managerNote?.trim() || '', manager.name) ||
+      `Heads up — I've asked ${target.name} to take a look at "${title}".`;
     const created = await this.prisma.hyrteInboxMessage.create({
       data: { sessionId, fromStakeholderId: manager.id, subject: `FYI: ${title}`, body: managerNote, urgent: false },
     });

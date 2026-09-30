@@ -13,6 +13,7 @@ import { useHyrteStore } from '@/store/hyrte';
 import { deriveStakeholderStatus, STATUS_DOT, STATUS_LABEL } from '@/lib/hyrte-status';
 import { HyrteCalendarEvent, HyrteInboxMessage, HyrteMeetingMessage, HyrteStakeholder } from '@/lib/hyrte-types';
 import { PreMeetingBriefCard } from '@/components/hyrte/pre-meeting-brief';
+import { MeetingTranscript } from '@/components/hyrte/meeting-transcript';
 
 /** Part E2 — "Meetings: join screen + attendee rail with presence/mood as subtle avatar treatment (never numeric labels)."
  * Refinements doc §7 — now also a real live multi-stakeholder discussion the candidate can watch/join, plus
@@ -172,18 +173,7 @@ export default function HyrteMeetings({ params }: { params: Promise<{ id: string
                   <div className="mb-2 mt-4 text-[11px] font-semibold uppercase tracking-wide text-black/40 dark:text-white/40">
                     Discussion
                   </div>
-                  <div className="mb-3 max-h-80 space-y-2 overflow-y-auto rounded-lg border border-black/5 p-3 dark:border-white/10">
-                    {messages?.map((m) => (
-                      <div key={m.id} className="text-sm">
-                        <span className="font-medium">{m.fromStakeholder?.name ?? 'You'}</span>{' '}
-                        <span className="text-xs text-black/40 dark:text-white/40">
-                          {new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                        <p className="text-black/80 dark:text-white/80">{m.body}</p>
-                      </div>
-                    ))}
-                    {!messages?.length && <p className="text-sm text-black/50 dark:text-white/50">The discussion is just getting started…</p>}
-                  </div>
+                  <MeetingTranscript messages={messages ?? []} />
 
                   {e.notesGeneratedAt ? (
                     <div className="rounded-lg border border-brand-500/20 bg-brand-500/5 p-3">

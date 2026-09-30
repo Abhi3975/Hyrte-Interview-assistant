@@ -55,7 +55,18 @@ const CAPS = {
  * work-in-progress and transitioning to the reflection interview, not for
  * fresh demands landing with no time left to act on them.
  */
-export const EVENT_QUEUE_SIZE_BY_DIFFICULTY: Record<string, number> = { EASY: 4, MEDIUM: 6, HARD: 8, EXPERT: 10 };
+/**
+ * How many scheduled events a session generates.
+ *
+ * These used to be 4/6/8/10 against session lengths of 30/40/50/60 minutes,
+ * which works out to almost exactly the same arrivals-per-minute at every
+ * difficulty (0.19 / 0.20 / 0.21 / 0.21). Difficulty was changing how LONG the
+ * simulation ran and not how BUSY it felt — which is why EASY was still
+ * reported as too fast. Lowered at the easy end so the rate genuinely differs;
+ * see the density test in session-pacing.spec.ts, which asserts the property
+ * rather than these numbers so it cannot silently drift back.
+ */
+export const EVENT_QUEUE_SIZE_BY_DIFFICULTY: Record<string, number> = { EASY: 3, MEDIUM: 5, HARD: 8, EXPERT: 11 };
 /** Recruiter doc §3 "Warm-up Questions" — "every candidate gets 3-6 questions"; scaled by difficulty like every other difficulty-scaled count in this pipeline, was hardcoded at exactly 2 before this. */
 export const WARMUP_COUNT_BY_DIFFICULTY: Record<string, number> = { EASY: 3, MEDIUM: 4, HARD: 5, EXPERT: 6 };
 export const EVENT_QUEUE_MAX_OFFSET_SECONDS_BY_DIFFICULTY: Record<string, number> = {

@@ -37,6 +37,36 @@
  */
 export const PLANNED_DURATION_MINUTES: Record<string, number> = { EASY: 30, MEDIUM: 40, HARD: 50, EXPERT: 60 };
 
+/**
+ * How much breathing room each difficulty gets between inbound events.
+ *
+ * Founder-reported, 30 Sep, after the first pacing fix: "the current one is
+ * still too fast — this can be very hard, but we need easy/mid to be more
+ * realistic."
+ *
+ * The reason the first fix did not reach EASY is that the intensity bands
+ * below are identical FRACTIONS of the session for every difficulty, and only
+ * the total duration changed (EASY 30 min, EXPERT 60). So EASY packed exactly
+ * the same arc of events into half the time — it was denser than EXPERT, not
+ * gentler. Difficulty was making the simulation shorter rather than calmer,
+ * which is backwards from what the word means to a candidate.
+ *
+ * This multiplies every inter-event delay, so a higher number means fewer
+ * things arriving per minute. It is the knob difficulty should always have
+ * had: EXPERT is relentless, EASY gives you room to actually finish a thought.
+ */
+export const DIFFICULTY_PACE: Record<string, number> = {
+  EASY: 2.0,
+  MEDIUM: 1.45,
+  HARD: 1.0,
+  EXPERT: 0.8,
+};
+
+/** Unrecognised difficulty behaves like MEDIUM rather than like the harshest setting. */
+export function paceMultiplier(difficulty: string): number {
+  return DIFFICULTY_PACE[difficulty] ?? DIFFICULTY_PACE.MEDIUM;
+}
+
 export type SimulationPhase = 'ORIENTATION' | 'INVESTIGATE' | 'ROLE_TASK' | 'STAKEHOLDER' | 'UNEXPECTED' | 'FINAL';
 
 interface PacingBand {
@@ -184,15 +214,17 @@ export function rampedDelayMs(baseMs: number, session: { workspaceUnlockedAt?: D
   const elapsed = elapsedMs(session, now);
   const quietEnds = orientationEndMs(session.difficulty);
 
+  const pace = paceMultiplier(session.difficulty);
+
   if (elapsed < quietEnds) {
     // Hold until orientation is over, then apply the NEXT band's intensity to
     // the mechanic's own delay — so the first inbound after orientation is
     // still slow, not an instant burst at the stroke of the window closing.
     const nextIntensity = BANDS[1].intensity ?? 1;
-    return Math.round(quietEnds - elapsed + baseMs * nextIntensity);
+    return Math.round(quietEnds - elapsed + baseMs * nextIntensity * pace);
   }
   const intensity = bandAt(elapsed / planned).intensity ?? 1;
-  return Math.round(baseMs * intensity);
+  return Math.round(baseMs * intensity * pace);
 }
 
 /**

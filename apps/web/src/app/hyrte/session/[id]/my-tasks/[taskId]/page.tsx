@@ -125,6 +125,7 @@ export default function HyrteTaskWorkspace({ params }: { params: Promise<{ id: s
 
   const latestReview = task?.reviewFeedback?.[task.reviewFeedback.length - 1];
   const done = task?.state === 'COMPLETED';
+  const submissionCount = task?.submissionCount ?? 0;
   const metrics = useMemo(() => Object.entries(task?.resources.metrics ?? {}), [task?.resources.metrics]);
 
   return (
@@ -162,6 +163,31 @@ export default function HyrteTaskWorkspace({ params }: { params: Promise<{ id: s
                 </div>
               )}
             </div>
+
+            {/* Founder, 30 Sep: "the simulation should give a sense of achievement
+                when completing tasks — pressuring them is the point, but we still
+                need a better experience." Approval was previously indistinguishable
+                from a rejection except for a border colour and one word, after work
+                that can take twenty minutes. This marks the moment. */}
+            {done && latestReview?.verdict === 'approved' && (
+              <div className="card border border-emerald-500/30 bg-emerald-500/5">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+                      <path d="M20 6 9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </div>
+                  <div>
+                    <div className="font-semibold text-emerald-700 dark:text-emerald-300">Shipped — {task.title}</div>
+                    <p className="mt-0.5 text-sm text-black/70 dark:text-white/70">
+                      {latestReview.stakeholderName} signed this off
+                      {submissionCount > 1 ? ` after ${submissionCount} passes` : ''}. It is real work, done, and it
+                      goes into your evidence.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* A real colleague read this and responded — the Tasks appendix's
                 "Engineering agent reviews the PRD... the candidate can revise it." */}

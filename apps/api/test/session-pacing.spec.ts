@@ -8,7 +8,9 @@ import {
   plannedDurationMs,
   rampedDelayMs,
   scheduledEventDelayMs,
+  paceMultiplier,
 } from '../src/hyrte/pacing/session-pacing';
+import { EVENT_QUEUE_SIZE_BY_DIFFICULTY } from '../src/hyrte/generator/simulation-generator.service';
 
 /**
  * Refinements doc §19 + founder feedback ("simulation gradually open up hoga
@@ -144,5 +146,56 @@ describe('when meetings happen', () => {
   it('places a lone meeting early enough to actually be attended', () => {
     const only = meetingStartDelayMs(0, 1, 'MEDIUM');
     expect(only).toBeLessThan(plannedDurationMs('MEDIUM') * 0.5);
+  });
+});
+
+describe('difficulty actually changes how busy it feels', () => {
+  // Founder, 30 Sep, after the first pacing fix: "the current one is still too
+  // fast — this can be very hard, but easy/mid need to be more realistic."
+  //
+  // The reason the first fix missed EASY: the intensity bands are identical
+  // FRACTIONS of the session at every difficulty, and only total duration
+  // changed. EASY packed the same arc into half the time, so it was denser
+  // than EXPERT. Difficulty was making the session SHORTER rather than CALMER.
+  const LEVELS = ['EASY', 'MEDIUM', 'HARD', 'EXPERT'];
+
+  /** Scheduled arrivals per minute of the window they actually land in. */
+  const density = (d: string) => {
+    const windowMs = plannedDurationMs(d) * EVENT_QUEUE_END_FRACTION - orientationEndMs(d);
+    return EVENT_QUEUE_SIZE_BY_DIFFICULTY[d] / (windowMs / 60_000);
+  };
+
+  it('makes each harder level busier than the one below it', () => {
+    for (let i = 1; i < LEVELS.length; i++) {
+      expect(density(LEVELS[i])).toBeGreaterThan(density(LEVELS[i - 1]));
+    }
+  });
+
+  it('makes EASY meaningfully calmer than EXPERT, not marginally', () => {
+    // The old numbers differed by ~10%, which nobody can feel. A candidate
+    // choosing EASY should get a visibly different experience.
+    expect(density('EXPERT')).toBeGreaterThan(density('EASY') * 1.4);
+  });
+
+  it('leaves more room between reactive events on easier settings', () => {
+    // The other half of pace: stakeholder replies, escalations and chaos all
+    // route through rampedDelayMs.
+    //
+    // Compared at the same FRACTION through each session, not the same
+    // wall-clock minute. At a fixed minute the difficulties sit in different
+    // phase bands — twelve minutes is still INVESTIGATE on HARD but already
+    // ROLE_TASK on MEDIUM — so a fixed-minute comparison measures which band
+    // each happens to be in, not how the difficulty paces them.
+    const atHalfway = (d: string) => {
+      const half = plannedDurationMs(d) * 0.4;
+      return rampedDelayMs(60_000, { workspaceUnlockedAt: new Date(Date.now() - half), startedAt: new Date(), difficulty: d });
+    };
+    expect(atHalfway('EASY')).toBeGreaterThan(atHalfway('MEDIUM'));
+    expect(atHalfway('MEDIUM')).toBeGreaterThan(atHalfway('HARD'));
+    expect(atHalfway('HARD')).toBeGreaterThan(atHalfway('EXPERT'));
+  });
+
+  it('treats an unrecognised difficulty as MEDIUM, not as the harshest', () => {
+    expect(paceMultiplier('WHATEVER')).toBe(paceMultiplier('MEDIUM'));
   });
 });

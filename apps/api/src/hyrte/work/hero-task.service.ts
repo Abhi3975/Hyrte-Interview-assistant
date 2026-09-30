@@ -25,6 +25,13 @@ import { KnowledgeDiscoveryService } from '../knowledge/knowledge-discovery.serv
  * work back for revision rather than rubber-stamping it.
  */
 
+/**
+ * How many times a candidate can be sent away to revise before the reviewer
+ * has to accept. The Nth submission is accepted regardless — see the comment
+ * at the call site. Founder's framing: "after few tries 3-4".
+ */
+const MAX_REVISION_ROUNDS = 3;
+
 export interface BriefPayload {
   objective: string;
   context: string;
@@ -420,15 +427,35 @@ export class HyrteHeroTaskService {
     const body = this.renderDeliverable(deliverable, item.workspaceKind);
     const review = await this.reviewSubmission(session.role, session.companyName, item.title, template, body, reviewer, submissionCount);
 
+    // Founder-reported: the revision loop could run forever. "Revisions are
+    // good but do not make it an endless slop — after 3-4 tries, count it if
+    // the task is on point or close, with the right understanding."
+    //
+    // The prompt already asked for this ("this is their third pass; unless it
+    // is still seriously deficient, accept it") and asking was not enough —
+    // the same lesson this codebase keeps relearning. A candidate who has
+    // engaged with the feedback three times has shown what the task was
+    // measuring; a fourth rejection tests their patience, not their judgment.
+    const forcedAccept = review.verdict === 'revision_requested' && submissionCount >= MAX_REVISION_ROUNDS;
+    const finalReview = forcedAccept
+      ? {
+          verdict: 'approved' as const,
+          // Still carries the reviewer's real reservations — accepting the
+          // work is not the same as pretending it was flawless, and the
+          // report reads this feedback later.
+          notes: `${review.notes} That said, you've turned this around ${submissionCount} times and it covers what I needed — I'm signing it off.`,
+        }
+      : review;
+
     const feedback: ReviewEntry[] = [
       ...(((item.reviewFeedback as unknown as ReviewEntry[] | null) ?? [])),
-      { at: new Date().toISOString(), stakeholderId: reviewer?.id ?? null, stakeholderName: reviewer?.name ?? 'Your manager', verdict: review.verdict, notes: review.notes },
+      { at: new Date().toISOString(), stakeholderId: reviewer?.id ?? null, stakeholderName: reviewer?.name ?? 'Your manager', verdict: finalReview.verdict, notes: finalReview.notes },
     ];
 
     const history = [
       ...((Array.isArray(item.history) ? item.history : []) as unknown as { at: string; actor: string; action: string; note?: string }[]),
       { at: new Date().toISOString(), actor: 'You', action: 'submitted', note: `Submission ${submissionCount}` },
-      { at: new Date().toISOString(), actor: reviewer?.name ?? 'Your manager', action: review.verdict, note: review.notes },
+      { at: new Date().toISOString(), actor: reviewer?.name ?? 'Your manager', action: finalReview.verdict, note: finalReview.notes },
     ];
 
     const updated = await this.prisma.hyrteWorkItem.update({
@@ -436,7 +463,7 @@ export class HyrteHeroTaskService {
       data: {
         // Approved work is genuinely done; a revision request puts it back in
         // the candidate's hands rather than parking it in a review queue.
-        stage: review.verdict === 'approved' ? 'DONE' : 'IN_PROGRESS',
+        stage: finalReview.verdict === 'approved' ? 'DONE' : 'IN_PROGRESS',
         submissionCount,
         reviewFeedback: feedback as unknown as Prisma.InputJsonValue,
         history: history as unknown as Prisma.InputJsonValue,
