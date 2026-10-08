@@ -29,7 +29,10 @@ function LoginContent() {
   const searchParams = useSearchParams();
   const setSession = useAuthStore((s) => s.setSession);
 
-  const nextUrl = searchParams.get('next');
+  // Only same-site paths — `?next=https://evil.example` or `//evil.example`
+  // must not turn the login page into an open redirect.
+  const rawNext = searchParams.get('next');
+  const nextUrl = rawNext && rawNext.startsWith('/') && !rawNext.startsWith('//') && !rawNext.startsWith('/\\') ? rawNext : null;
 
   // Mode: 'PHONE_OTP' | 'EMAIL_PASSWORD'
   const [authMode, setAuthMode] = useState<'PHONE_OTP' | 'EMAIL_PASSWORD'>('PHONE_OTP');
@@ -187,41 +190,32 @@ function LoginContent() {
     }
   }
 
-  // Complete Name Registration (for new unknown number)
+  // Complete Name Registration (for new unknown number) — otpLogin created
+  // the account as "Candidate"; persist the real name so Ally and reports use it.
   async function handleSaveName(e: React.FormEvent) {
     e.preventDefault();
-    if (!fullName.trim()) {
+    const name = fullName.trim();
+    if (!name) {
       setError('Please enter your name');
       return;
     }
-    const currentUser = useAuthStore.getState().user;
-    if (currentUser) {
-      navigatePostLogin(currentUser);
-    } else {
-      router.push(nextUrl || '/candidate');
-    }
-  }
-
-  // Google OAuth Login
-  function handleGoogleLogin() {
-    // Redirect to Google Auth / Session API or demo session
+    setError('');
     setLoading(true);
-    api
-      .post<{ sent: boolean; devCode?: string }>('/auth/request-otp', { phone: '+15550001111', fullName: 'Google User' })
-      .then((res) => {
-        if (res.devCode) {
-          return api.post<AuthResponse>('/auth/verify-otp', { phone: '+15550001111', code: res.devCode });
-        }
-        throw new Error('Google OAuth popup disabled in demo mode');
-      })
-      .then((res) => {
-        setSession(res.user, res.accessToken, res.refreshToken);
-        navigatePostLogin(res.user);
-      })
-      .catch(() => {
-        setError('Google sign-in demo mode active — use Phone OTP below');
-      })
-      .finally(() => setLoading(false));
+    try {
+      await api.patch('/users/me', { fullName: name });
+      const { user, accessToken, refreshToken } = useAuthStore.getState();
+      if (user && accessToken && refreshToken) {
+        const renamed = { ...user, fullName: name };
+        setSession(renamed, accessToken, refreshToken);
+        navigatePostLogin(renamed);
+      } else {
+        router.push(nextUrl || '/candidate');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save your name');
+    } finally {
+      setLoading(false);
+    }
   }
 
   // Secondary Recruiter Login (Email + Password)
@@ -382,26 +376,6 @@ function LoginContent() {
                     {loading ? 'Sending code…' : 'Continue with Phone'}
                   </button>
 
-                  <div className="relative my-6 flex items-center justify-center">
-                    <div className="absolute inset-0 border-t border-slate-800" />
-                    <span className="relative bg-slate-950 px-3 text-xs uppercase text-slate-500">or</span>
-                  </div>
-
-                  {/* Continue with Google */}
-                  <button
-                    type="button"
-                    onClick={handleGoogleLogin}
-                    disabled={loading}
-                    className="flex w-full items-center justify-center gap-3 rounded-xl border border-slate-800 bg-slate-900/60 py-3 text-sm font-medium text-slate-200 hover:bg-slate-800 transition"
-                  >
-                    <svg className="h-4 w-4" viewBox="0 0 24 24">
-                      <path fill="#EA4335" d="M12 5c1.6 0 3 .6 4.1 1.6l3.1-3.1C17.3 1.7 14.8 1 12 1 7.5 1 3.7 3.6 1.9 7.3l3.7 2.9C6.5 7.3 9 5 12 5z" />
-                      <path fill="#4285F4" d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.5h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5 3.7-8.8z" />
-                      <path fill="#FBBC05" d="M5.6 14.8c-.2-.7-.4-1.5-.4-2.3s.2-1.6.4-2.3L1.9 7.3C.7 9.7 0 12.3 0 15s.7 5.3 1.9 7.7l3.7-2.9z" />
-                      <path fill="#34A853" d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3 0-5.5-2.3-6.4-5.2L1.9 16C3.7 19.7 7.5 23 12 23z" />
-                    </svg>
-                    Continue with Google
-                  </button>
                 </form>
               )}
 
@@ -484,9 +458,10 @@ function LoginContent() {
 
                   <button
                     type="submit"
-                    className="w-full rounded-xl bg-brand-600 py-3 text-sm font-semibold text-white shadow-lg shadow-brand-600/20 hover:bg-brand-500 transition"
+                    disabled={loading}
+                    className="w-full rounded-xl bg-brand-600 py-3 text-sm font-semibold text-white shadow-lg shadow-brand-600/20 hover:bg-brand-500 disabled:opacity-50 transition"
                   >
-                    Complete Profile & Continue →
+                    {loading ? 'Saving…' : 'Complete Profile & Continue →'}
                   </button>
                 </form>
               )}

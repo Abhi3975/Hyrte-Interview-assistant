@@ -13,9 +13,12 @@ interface OtpEntry {
 
 const TTL_MS = 10 * 60 * 1000;
 const RESEND_COOLDOWN_MS = 30_000;
+// Per-IP is deliberately much looser than per-number: a whole campus or
+// office on one Wi-Fi shares a public IP, and those candidates must not lock
+// each other out. Per-number is what actually stops SMS pumping.
 const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
-const RATE_LIMIT_MAX_PER_IDENTIFIER = 3; // 3 per 10 minutes per number
-const RATE_LIMIT_MAX_PER_IP = 3; // 3 per 10 minutes per IP
+const RATE_LIMIT_MAX_PER_IDENTIFIER = 5; // per phone/email, per window
+const RATE_LIMIT_MAX_PER_IP = 20; // per IP, per window
 
 /**
  * Passwordless phone/email OTP for the "Sign Up to Start" candidate lobby.

@@ -14,6 +14,12 @@ async function bootstrap(): Promise<void> {
     bufferLogs: true,
   });
 
+  // Behind CloudFront → ALB, the socket peer is the ALB, so without this
+  // req.ip is the same proxy address for every user and the per-IP OTP rate
+  // limit becomes a site-wide limit. Trust exactly those two hops (not `true`,
+  // which would let a client spoof req.ip via its own X-Forwarded-For).
+  app.getHttpAdapter().getInstance().set('trust proxy', Number(process.env.TRUST_PROXY_HOPS ?? 2));
+
   // ── Security hardening (OWASP baseline) ──
   app.use(helmet());
   app.enableCors({
