@@ -14,6 +14,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuthStore } from '@/store/auth';
+import { streamAudio, latencyDebugEnabled } from '@/lib/stream-audio';
 import { api } from '@/lib/api';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { MicIcon, SpeakerIcon, ShieldIcon, AlertIcon, CheckIcon, XIcon, CodeIcon } from '@/components/icons';
@@ -743,6 +744,7 @@ function InterviewRoomInner() {
     setVoiceState('speaking');
     try {
       const authToken = useAuthStore.getState().accessToken;
+      const ttsStartedAt = performance.now();
       const res = await fetch('/api/voice/speak', {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...(authToken ? { authorization: `Bearer ${authToken}` } : {}) },
@@ -750,13 +752,16 @@ function InterviewRoomInner() {
       });
       if (speakTokenRef.current !== token) return; // superseded while the network call was in flight
       if (!res.ok) throw new Error(`tts ${res.status}`);
-      const blob = await res.blob();
-      if (speakTokenRef.current !== token) return;
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
+      // Starts playing on the first chunk instead of after the whole clip.
+      const streamed = await streamAudio(res, () => speakTokenRef.current === token);
+      if (!streamed) return;
+      const { audio, release } = streamed;
       audioRef.current = audio;
-      audio.onended = () => { URL.revokeObjectURL(url); if (speakTokenRef.current === token) { lastSpeechAtRef.current = Date.now(); setVoiceState('listening'); } };
-      audio.onerror = () => { URL.revokeObjectURL(url); if (speakTokenRef.current === token) speakBrowser(clean, token, mood); };
+      if (latencyDebugEnabled()) {
+        audio.addEventListener('playing', () => console.info(`[ally-latency] tts request → first audio: ${Math.round(performance.now() - ttsStartedAt)}ms`), { once: true });
+      }
+      audio.onended = () => { release(); if (speakTokenRef.current === token) { lastSpeechAtRef.current = Date.now(); setVoiceState('listening'); } };
+      audio.onerror = () => { release(); if (speakTokenRef.current === token) speakBrowser(clean, token, mood); };
       await audio.play();
     } catch {
       if (speakTokenRef.current === token) speakBrowser(clean, token, mood);
@@ -1031,6 +1036,62 @@ function InterviewRoomInner() {
     return () => clearInterval(iv);
   }, [phase]);
 
+  // In-tab lockdown while live. Browser-reserved shortcuts (Cmd+T, Cmd+Tab,
+  // Cmd+W) can't be intercepted by any page — leaving via those is caught
+  // by the tab/fullscreen listeners above, which end a strict session.
+  // Everything a page CAN stop, it stops here.
+  useEffect(() => {
+    if (phase !== 'live') return;
+    const inEditable = (t: EventTarget | null) =>
+      t instanceof HTMLElement && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT' || t.isContentEditable);
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.ctrlKey || e.metaKey;
+      const devtools =
+        e.key === 'F12' ||
+        (mod && (e.shiftKey || e.altKey) && ['KeyI', 'KeyJ', 'KeyC'].includes(e.code));
+      const blocked = devtools || (mod && ['KeyU', 'KeyP', 'KeyS'].includes(e.code));
+      if (!blocked) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (devtools) bumpFlag('devtools', 10_000);
+    };
+    const onContext = (e: MouseEvent) => e.preventDefault();
+    // Copying the question out (to paste into an AI) is the real risk;
+    // copying inside their own answer/editor is fine.
+    const onCopy = (e: ClipboardEvent) => { if (!inEditable(e.target)) e.preventDefault(); };
+    const onUnload = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('keydown', onKey, true);
+    document.addEventListener('contextmenu', onContext);
+    document.addEventListener('copy', onCopy);
+    document.addEventListener('cut', onCopy);
+    window.addEventListener('beforeunload', onUnload);
+    return () => {
+      window.removeEventListener('keydown', onKey, true);
+      document.removeEventListener('contextmenu', onContext);
+      document.removeEventListener('copy', onCopy);
+      document.removeEventListener('cut', onCopy);
+      window.removeEventListener('beforeunload', onUnload);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
+
+  // One interview tab at a time. A live room answers any newly opened
+  // interview tab's ping, and that new tab refuses to run — so a second
+  // copy can't be used to read ahead or take the interview in parallel.
+  const livePhaseRef = useRef(false);
+  livePhaseRef.current = phase === 'live';
+  const [duplicateTab, setDuplicateTab] = useState(false);
+  useEffect(() => {
+    if (typeof BroadcastChannel === 'undefined') return;
+    const ch = new BroadcastChannel('hyrte-interview');
+    ch.onmessage = (e) => {
+      if (e.data === 'ping' && livePhaseRef.current) ch.postMessage('live');
+      else if (e.data === 'live' && !livePhaseRef.current) setDuplicateTab(true);
+    };
+    ch.postMessage('ping');
+    return () => ch.close();
+  }, []);
+
   const integrity = useMemo(() => {
     const p =
       flags.tabSwitch * 6 + flags.eyeShift * 3 + flags.multiFace * 12 + flags.aiAssist * 10 + flags.secondVoice * 8 + flags.screen * 10 +
@@ -1140,6 +1201,7 @@ function InterviewRoomInner() {
     if (shouldForceRoundAdvance) roundAdvanceConsumedRef.current = true;
     const idx = roundIndexRef.current;
     const nextRound = shouldForceRoundAdvance ? activeRoundSequence[idx + 1] : undefined;
+    const turnStartedAt = performance.now();
     try {
       const res = await api.post<{ text: string; hintLevel?: number; mood?: string; degraded?: boolean }>('/practice/interview/turn', {
         jobRole: topic.label, category: topic.category, difficulty, topic: topic.topic,
@@ -1156,6 +1218,7 @@ function InterviewRoomInner() {
         // state across turns (this endpoint is otherwise stateless).
         sessionId: sessionIdRef.current ?? undefined,
       });
+      if (latencyDebugEnabled()) console.info(`[ally-latency] interviewer turn (server + model): ${Math.round(performance.now() - turnStartedAt)}ms`);
       if (typeof res.hintLevel === 'number') behaviorRef.current.hints++;
       if (shouldForceRoundAdvance) {
         // Advance to the next round and restart its own timer, mirroring the
@@ -1270,19 +1333,30 @@ function InterviewRoomInner() {
       }
       // Require full-screen screen sharing — proctored exams monitor the whole
       // screen. Do this first while we still have the click gesture.
+      // A second monitor is a second screen the share can't see. Chromium
+      // exposes this as screen.isExtended; elsewhere it's undefined and we
+      // rely on the whole-screen share below.
+      if ((window.screen as any).isExtended === true) {
+        throw new Error('A second monitor is connected. Disconnect extra displays (or switch to a single display) and click Start again.');
+      }
       if ((navigator.mediaDevices as any).getDisplayMedia) {
+        let display: MediaStream;
         try {
-          const display = await (navigator.mediaDevices as any).getDisplayMedia({ video: { displaySurface: 'monitor' }, audio: false });
-          displayStreamRef.current = display;
-          const track = display.getVideoTracks()[0];
-          // Warn if they shared just a tab/window instead of the whole screen.
-          if (track && (track.getSettings?.().displaySurface && track.getSettings().displaySurface !== 'monitor')) {
-            bumpFlag('screen', 8000);
-          }
-          track?.addEventListener('ended', () => { if (!endedRef.current) bumpFlag('screen', 0); });
+          display = await (navigator.mediaDevices as any).getDisplayMedia({ video: { displaySurface: 'monitor' }, audio: false });
         } catch {
           throw new Error('Screen sharing is required for this proctored interview. Please click Start again and share your entire screen.');
         }
+        const track = display.getVideoTracks()[0];
+        // Refuse a tab/window share outright. This used to bumpFlag(), but
+        // that fires before the session exists, so it never reached the
+        // server — the candidate got a pass for sharing a single tab.
+        const surface = track?.getSettings?.().displaySurface;
+        if (surface && surface !== 'monitor') {
+          display.getTracks().forEach((t) => t.stop());
+          throw new Error('Please share your ENTIRE screen, not a single tab or window. Click Start again and pick "Entire screen".');
+        }
+        displayStreamRef.current = display;
+        track?.addEventListener('ended', () => { if (!endedRef.current) bumpFlag('screen', 0); });
       }
       // Go fullscreen and flag if they leave it.
       try { await (document.documentElement as any).requestFullscreen?.(); } catch {}
@@ -1415,6 +1489,17 @@ function InterviewRoomInner() {
   }
 
   if (!hydrated || !user) return <div className="flex min-h-screen items-center justify-center text-sm text-black/50 dark:text-white/50">Loading…</div>;
+
+  if (duplicateTab) {
+    return (
+      <div className="flex min-h-screen items-center justify-center px-6 text-center">
+        <div className="max-w-sm">
+          <div className="text-lg font-semibold">Interview already open in another tab</div>
+          <p className="mt-2 text-sm text-black/60 dark:text-white/60">Only one interview tab is allowed. Close this tab and return to the one you started in.</p>
+        </div>
+      </div>
+    );
+  }
 
   // ───────── SETUP ─────────
   if (phase === 'setup') {

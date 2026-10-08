@@ -9,6 +9,7 @@ import { useHyrteNav } from '@/lib/hyrte-nav';
 import { ActivityCenter } from '@/components/hyrte/activity-center';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
+import { streamAudio } from '@/lib/stream-audio';
 import { HyrteInterviewTurn } from '@/lib/hyrte-types';
 
 interface TranscriptResponse {
@@ -123,13 +124,13 @@ export default function HyrteInterview({ params }: { params: Promise<{ id: strin
       });
       if (speakTokenRef.current !== token) return; // superseded while the network call was in flight
       if (!res.ok) throw new Error(`tts ${res.status}`);
-      const blob = await res.blob();
-      if (speakTokenRef.current !== token) return;
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
+      // Starts playing on the first chunk instead of after the whole clip.
+      const streamed = await streamAudio(res, () => speakTokenRef.current === token);
+      if (!streamed) return;
+      const { audio, release } = streamed;
       audioRef.current = audio;
-      audio.onended = () => { URL.revokeObjectURL(url); if (speakTokenRef.current === token) setVoiceState(doneRef.current ? 'idle' : 'listening'); };
-      audio.onerror = () => { URL.revokeObjectURL(url); if (speakTokenRef.current === token) speakBrowser(clean, token); };
+      audio.onended = () => { release(); if (speakTokenRef.current === token) setVoiceState(doneRef.current ? 'idle' : 'listening'); };
+      audio.onerror = () => { release(); if (speakTokenRef.current === token) speakBrowser(clean, token); };
       await audio.play();
     } catch {
       if (speakTokenRef.current === token) speakBrowser(clean, token);

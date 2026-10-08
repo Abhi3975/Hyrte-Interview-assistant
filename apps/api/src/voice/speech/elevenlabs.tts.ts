@@ -16,6 +16,17 @@ const MOOD_VOICE_SETTINGS: Record<TTSMood, { stability: number; similarity_boost
 };
 
 /**
+ * Latency, not fidelity, is what an interviewer's voice is judged on — a
+ * second of dead air after every answer reads as the system lagging.
+ * `eleven_multilingual_v2` (the old default) is ElevenLabs' slowest model;
+ * Flash v2.5 is their low-latency one and still covers the same languages
+ * (incl. Hindi for the Hinglish mode). 64 kbps is plenty for speech and halves
+ * the bytes per second of audio vs. the old 128 kbps.
+ */
+const TTS_MODEL_ID = process.env.ELEVENLABS_MODEL_ID || 'eleven_flash_v2_5';
+const TTS_OUTPUT_FORMAT = process.env.ELEVENLABS_OUTPUT_FORMAT || 'mp3_44100_64';
+
+/**
  * ElevenLabs streaming TTS adapter.
  *
  * Streams synthesized audio back in chunks for low-latency playback — the
@@ -42,13 +53,13 @@ export class ElevenLabsTTS implements TTSProvider {
     const voiceId = opts.voiceId ?? this.defaultVoice;
 
     const res = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream?output_format=mp3_44100_128`,
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream?output_format=${TTS_OUTPUT_FORMAT}`,
       {
         method: 'POST',
         headers: { 'xi-api-key': this.apiKey, 'content-type': 'application/json' },
         body: JSON.stringify({
           text,
-          model_id: 'eleven_multilingual_v2',
+          model_id: TTS_MODEL_ID,
           voice_settings: MOOD_VOICE_SETTINGS[opts.mood ?? 'neutral'],
         }),
       },
