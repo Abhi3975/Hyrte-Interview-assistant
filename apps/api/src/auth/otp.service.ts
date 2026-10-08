@@ -12,13 +12,10 @@ interface OtpEntry {
 }
 
 const TTL_MS = 10 * 60 * 1000;
-// P1 — rate limiting + resend cooldown (per-identifier and per-IP), matching
-// the OTP store's own in-memory simplicity (no Redis — see the class comment
-// below for why that's a deliberate choice, not a shortcut).
 const RESEND_COOLDOWN_MS = 30_000;
-const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_MAX_PER_IDENTIFIER = 3; // per phone/email, per window
-const RATE_LIMIT_MAX_PER_IP = 10; // per IP, per window — covers many identifiers from one source
+const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
+const RATE_LIMIT_MAX_PER_IDENTIFIER = 3; // 3 per 10 minutes per number
+const RATE_LIMIT_MAX_PER_IP = 3; // 3 per 10 minutes per IP
 
 /**
  * Passwordless phone/email OTP for the "Sign Up to Start" candidate lobby.

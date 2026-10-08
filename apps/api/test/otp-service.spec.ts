@@ -33,13 +33,13 @@ describe('OtpService (P1 §2 — phone-primary OTP)', () => {
 
   it('enforces the per-IP rate limit independent of identifier', () => {
     const otp = new OtpService(fakeSms());
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 3; i++) {
       const id = `+9199000000${i.toString().padStart(2, '0')}`;
       expect(otp.checkRateLimit(id, '1.2.3.4').ok).toBe(true);
       otp.request('Cavan', id, undefined, id, '1.2.3.4');
     }
-    const eleventh = otp.checkRateLimit('+919900000099', '1.2.3.4');
-    expect(eleventh.ok).toBe(false);
-    if (!eleventh.ok) expect(eleventh.reason).toBe('too_many_requests_ip');
+    const fourth = otp.checkRateLimit('+919900000099', '1.2.3.4');
+    expect(fourth.ok).toBe(false);
+    if (!fourth.ok) expect(fourth.reason).toBe('too_many_requests_ip');
   });
 });
