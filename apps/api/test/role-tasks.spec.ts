@@ -17,7 +17,7 @@ describe('role tasks', () => {
     for (const role of ['Product Manager', 'Software Engineer', 'Data Analyst', 'Sales', 'Marketing', 'UX Designer', 'Unknown']) {
       const tasks = resolveRoleTasks(role);
       expect(tasks.length).toBeGreaterThanOrEqual(1);
-      expect(tasks.length).toBeLessThanOrEqual(3);
+      expect(tasks.length).toBeLessThanOrEqual(5);
     }
   });
 

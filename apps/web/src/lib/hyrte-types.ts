@@ -450,7 +450,19 @@ export function groupMetrics(metrics: { bucket: string; score: number; explanati
 // actual tools to DO it."
 
 export type HeroTaskState = 'ASSIGNED' | 'INVESTIGATING' | 'WORKING' | 'REVIEW' | 'REVISION' | 'COMPLETED';
-export type TaskWorkspaceKind = 'DELIVERABLE' | 'DECISION' | 'PRIORITIZATION';
+export type TaskWorkspaceKind =
+  | 'DELIVERABLE'
+  | 'DECISION'
+  | 'PRIORITIZATION'
+  | 'CODE_DEBUG'
+  | 'CODE_REVIEW'
+  | 'CODE_EDITOR'
+  | 'PERF_PROFILER'
+  | 'LEAD_QUALIFICATION'
+  | 'DISCOVERY_CALL'
+  | 'OBJECTION_HANDLER'
+  | 'FOLLOWUP_RECAP'
+  | 'DEAL_NEGOTIATION';
 
 export interface HeroTaskReview {
   at: string;
@@ -506,6 +518,14 @@ export interface HeroTaskWorkspace {
     items?: { id: string; label: string; evidence: string }[];
     placement?: Record<string, string>;
     rationale?: Record<string, string>;
+    codeSnippet?: string;
+    diffContent?: string;
+    logsContent?: string;
+    stackTrace?: string;
+    perfMetrics?: { latencyBefore: string; latencyAfter?: string; memoryBefore: string; memoryAfter?: string };
+    leadInfo?: { company: string; contact: string; title: string; revenue: string; employees: string; techStack: string[]; painSummary: string };
+    discoveryCall?: { prospectName: string; prospectRole: string; avatar: string; transcript: { speaker: string; text: string; time: string }[]; checklist: { id: string; label: string; done: boolean }[] };
+    negotiationData?: { targetAcv: number; minMargin: number; proposedDiscount: number; paymentTerms: string; contractLength: number };
   };
   reviewFeedback: HeroTaskReview[];
   resources: {

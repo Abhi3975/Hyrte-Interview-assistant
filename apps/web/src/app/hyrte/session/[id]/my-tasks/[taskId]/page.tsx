@@ -10,6 +10,18 @@ import { ActivityCenter } from '@/components/hyrte/activity-center';
 import { api, ApiError } from '@/lib/api';
 import { COMPANY_STATE_LABELS, HeroTaskWorkspace } from '@/lib/hyrte-types';
 
+import {
+  CodeDebugWorkspace,
+  CodeReviewWorkspace,
+  CodeEditorWorkspace,
+  PerfProfilerWorkspace,
+  LeadQualificationWorkspace,
+  DiscoveryCallWorkspace,
+  ObjectionHandlerWorkspace,
+  FollowupRecapWorkspace,
+  DealNegotiationWorkspace,
+} from '@/components/hyrte/role-workspaces';
+
 /** Long enough that typing isn't interrupted, short enough that nothing meaningful is ever lost. */
 const AUTOSAVE_DEBOUNCE_MS = 1200;
 
@@ -204,7 +216,25 @@ export default function HyrteTaskWorkspace({ params }: { params: Promise<{ id: s
               </div>
             )}
 
-            {task.workspaceKind === 'PRIORITIZATION' ? (
+            {task.workspaceKind === 'CODE_DEBUG' ? (
+              <CodeDebugWorkspace task={task} draft={draft} updateSection={updateSection} disabled={done} />
+            ) : task.workspaceKind === 'CODE_REVIEW' ? (
+              <CodeReviewWorkspace task={task} draft={draft} updateSection={updateSection} disabled={done} />
+            ) : task.workspaceKind === 'CODE_EDITOR' ? (
+              <CodeEditorWorkspace task={task} draft={draft} updateSection={updateSection} disabled={done} />
+            ) : task.workspaceKind === 'PERF_PROFILER' ? (
+              <PerfProfilerWorkspace task={task} draft={draft} updateSection={updateSection} disabled={done} />
+            ) : task.workspaceKind === 'LEAD_QUALIFICATION' ? (
+              <LeadQualificationWorkspace task={task} draft={draft} updateSection={updateSection} disabled={done} />
+            ) : task.workspaceKind === 'DISCOVERY_CALL' ? (
+              <DiscoveryCallWorkspace task={task} draft={draft} updateSection={updateSection} disabled={done} />
+            ) : task.workspaceKind === 'OBJECTION_HANDLER' ? (
+              <ObjectionHandlerWorkspace task={task} draft={draft} updateSection={updateSection} disabled={done} />
+            ) : task.workspaceKind === 'FOLLOWUP_RECAP' ? (
+              <FollowupRecapWorkspace task={task} draft={draft} updateSection={updateSection} disabled={done} />
+            ) : task.workspaceKind === 'DEAL_NEGOTIATION' ? (
+              <DealNegotiationWorkspace task={task} draft={draft} updateSection={updateSection} disabled={done} />
+            ) : task.workspaceKind === 'PRIORITIZATION' ? (
               <div className="card">
                 <h3 className="font-semibold">Rank the work</h3>
                 <p className="mt-1 text-sm text-black/55 dark:text-white/55">
